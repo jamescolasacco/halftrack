@@ -1387,6 +1387,7 @@ public:
        #else
         const bool editorTabKey = cmd;
        #endif
+        if (code == juce::KeyPress::tabKey && ! cmd && ! key.getModifiers().isAltDown() && renameOnward (shift)) return true;
         if (code == juce::KeyPress::tabKey && editorTabKey) { if (clipEditorShown()) stepEditorTab (shift ? -1 : 1); return true; }
         if (code == juce::KeyPress::tabKey && shift) { if (showPiano) closeClipView(); else openPianoRoll(); return true; }
         if (code == juce::KeyPress::tabKey) { if (showSession) showArrangementView(); else showSessionView(); return true; }
@@ -13163,6 +13164,33 @@ private:
                 for (const auto& clip : track->clips) { chosen.start = std::min (chosen.start, clip.start); chosen.end = std::max (chosen.end, clip.start + clip.length); }
             }
         timeSelection = chosen; canvas.repaint();
+    }
+    // Tab while a track's or group's name is being edited in the Arrangement keeps it and edits the next
+    // header's, Shift+Tab the one before's, as the reference's Tab does when renaming (its manual,
+    // section 42.5). Past the last header the editing ends.
+    bool renameOnward (bool backward)
+    {
+        const auto nameOf = [] (juce::Component& header, const char* name) -> juce::Label*
+        {
+            for (auto* child : header.getChildren()) if (child->getName() == name) return dynamic_cast<juce::Label*> (child);
+            return nullptr;
+        };
+        juce::Label* editing = nullptr;
+        juce::String id;
+        for (auto* child : canvas.getChildren())
+        {
+            if (auto* row = dynamic_cast<TrackRow*> (child)) { if (auto* label = nameOf (*row, "Track name"); label != nullptr && label->isBeingEdited()) { editing = label; id = row->getTrackId(); break; } }
+            else if (auto* header = dynamic_cast<GroupHeader*> (child)) { if (auto* label = nameOf (*header, "Group name"); label != nullptr && label->isBeingEdited()) { editing = label; id = header->getId(); break; } }
+        }
+        if (editing == nullptr) return false;
+        juce::StringArray order;
+        for (const auto& lane : lanes)
+            if (lane.automation < 0 && lane.take < 0 && lane.height > 0) order.add (lane.group ? state.groups[(size_t) lane.index].id : state.tracks[(size_t) lane.index].id);
+        const auto next = order.indexOf (id) + (backward ? -1 : 1);
+        editing->hideEditor (false);
+        refresh();
+        if (juce::isPositiveAndBelow (next, order.size())) renameHeader (order[next], true);
+        return true;
     }
     // Rename, for the clicked track or group: its name edits in place in the Arrangement, the header
     // editing it returned, and in a dialog from a Session title.
@@ -25354,6 +25382,30 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
                     secondName->hideEditor (true); secondName->setText ("Bass", juce::sendNotificationSync); refresh();
                     check (state.tracks[(size_t) indexOf (second)].name == "Bass", "which renames it");
                     session.undo(); refresh();
+                    {
+                        // Tab while renaming keeps the name and edits the next header's, Shift+Tab the one before's.
+                        const auto editorOf = [&] (const juce::String& id) -> juce::TextEditor*
+                        {
+                            for (auto* child : canvas.getChildren())
+                                if (auto* row = dynamic_cast<TrackRow*> (child); row != nullptr && row->getTrackId() == id)
+                                    for (auto* part : row->getChildren()) if (auto* label = dynamic_cast<juce::Label*> (part); label != nullptr && label->getName() == "Track name") return label->getCurrentTextEditor();
+                            return nullptr;
+                        };
+                        // The track lane before the second, whose name Tab then leaves for the second's.
+                        juce::String prior;
+                        for (const auto& lane : lanes)
+                            if (! lane.group && lane.automation < 0 && lane.take < 0 && lane.height > 0 && lane.index < indexOf (second)) prior = state.tracks[(size_t) lane.index].id;
+                        renameHeader (prior, true);
+                        if (auto* typing = editorOf (prior)) typing->setText ("Keys", false);
+                        check (prior.isNotEmpty() && handleKey (juce::KeyPress (juce::KeyPress::tabKey)) && trackInfo (prior) != nullptr && trackInfo (prior)->name == "Keys"
+                                   && editorOf (prior) == nullptr && editorOf (second) != nullptr && ! showSession,
+                               "Tab while renaming keeps the name and edits the next track's, as the reference's does, without switching views");
+                        check (handleKey (juce::KeyPress (juce::KeyPress::tabKey, juce::ModifierKeys::shiftModifier, 0)) && editorOf (prior) != nullptr && editorOf (second) == nullptr,
+                               "and Shift+Tab goes back to the track before");
+                        for (auto* child : canvas.getChildren()) for (auto* part : child->getChildren()) if (auto* label = dynamic_cast<juce::Label*> (part)) label->hideEditor (true);
+                        session.undo(); refresh();
+                        check (trackInfo (prior) != nullptr && trackInfo (prior)->name != "Keys", "undo returns its name");
+                    }
                     // In Automation Mode, a track with automation offers Clear All Envelopes.
                     {
                         const Session::AutomationLane lane { true, { { 0, -6 }, { 4, -12 } } };
