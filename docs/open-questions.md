@@ -214,7 +214,7 @@ Member tracks of a group are rendered through their group's mixer, and muted tra
 
 ### Crossfader defaults
 
-The crossfader uses the dipless curve (a side stays at 0 dB until the fader crosses the centre toward the other side) and is not selectable. Groups have no crossfade side. Crossfader moves are ordinary undoable edits and are not automatable yet. These are simplest-default choices pending reference measurement.
+The crossfader follows the reference's seven curves, Constant Power by default ([crossfader contract](research/crossfader-contract.md)); projects saved before the curve was kept take Constant Power. The reference's zeroing of gains at or below 0.00032 and its ramp on assignment changes are not followed, and its menu order is taken to be its table order. Groups have no crossfade side. Crossfader moves are ordinary undoable edits and are not automatable yet. These are simplest-default choices pending reference measurement.
 
 ### Time edit defaults
 

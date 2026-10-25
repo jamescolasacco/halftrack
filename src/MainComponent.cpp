@@ -5363,6 +5363,12 @@ private:
             crossfader.onDragStart = [this] { owner.session.beginEditGesture ("Crossfader"); };
             crossfader.onDragEnd = [this] { owner.session.endEditGesture(); };
             crossfader.onValueChange = [this] { owner.report (owner.session.setCrossfader ((float) crossfader.getValue())); };
+            // Its right-click menu chooses its curve, as the reference's does (its manual, section 18.5).
+            crossfader.onContextMenu = [this]
+            {
+                crossfaderMenu().showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&crossfader),
+                    [safe = juce::Component::SafePointer<MasterStrip> (this)] (int id) { if (safe != nullptr && id > 0) safe->chooseCrossfadeCurve (id); });
+            };
             addAndMakeVisible (crossfader);
             // Main Out, as the reference's Main track chooses the output it plays to.
             output.setName ("Main Out"); output.setTooltip ("Main Out: the audio output the Main track plays to.");
@@ -5459,6 +5465,15 @@ private:
             }
             g.setColour (line); g.drawRect (getLocalBounds());
         }
+        // The crossfader's curves, the project's ticked; an item's id is its curve's index plus one.
+        juce::PopupMenu crossfaderMenu() const
+        {
+            juce::PopupMenu menu;
+            for (int c = 0; c < Session::crossfadeCurveCount; ++c)
+                menu.addItem (c + 1, Session::crossfadeCurveName (static_cast<Session::CrossfadeCurve> (c)), true, owner.state.crossfadeCurve == static_cast<Session::CrossfadeCurve> (c));
+            return menu;
+        }
+        void chooseCrossfadeCurve (int id) { owner.report (owner.session.setCrossfadeCurve (static_cast<Session::CrossfadeCurve> (id - 1))); owner.refresh(); }
     private:
         Impl& owner;
         Sections sections;
@@ -25952,6 +25967,20 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         fader->setValue (1, juce::sendNotificationSync); refresh();
         bool assigned = false; for (const auto& track : state.tracks) assigned = assigned || track.crossfade == Session::CrossfadeAssign::a;
         check (assigned && std::abs (state.crossfader - 1) < 1e-6, "the A button and the crossfader edit the real crossfade");
+        if (auto* strip = dynamic_cast<MasterStrip*> (fader->getParentComponent()))
+        {
+            // Its right-click menu offers the reference's seven curves, the project's ticked.
+            const auto menu = strip->crossfaderMenu();
+            juce::StringArray names; int ticked = -1;
+            for (juce::PopupMenu::MenuItemIterator items (menu); items.next();) { names.add (items.getItem().text); if (items.getItem().isTicked) ticked = items.getItem().itemID; }
+            check (names == juce::StringArray { "Dipped", "Intermediate", "Constant Power", "Slow Fade", "Slow Cut", "Fast Cut", "Transition" } && ticked == 3,
+                   "the crossfader's right-click menu offers the reference's seven curves, Constant Power ticked");
+            strip->chooseCrossfadeCurve (1);
+            check (state.crossfadeCurve == Session::CrossfadeCurve::dipped, "choosing Dipped sets the project's curve");
+            session.undo(); refresh();
+            check (state.crossfadeCurve == Session::CrossfadeCurve::constantPower, "and undo returns to Constant Power");
+        }
+        else check (false, "the crossfader sits in the Main strip");
         auto* trackDelay = dynamic_cast<juce::Slider*> (findNamed (launcher, "Track delay"));
         check (trackDelay != nullptr && trackDelay->isVisible() && trackDelay->getTextFromValue (0) == "0.0 ms", "track strips show their delay in milliseconds");
         trackDelay->setValue (-12.5, juce::sendNotificationSync); refresh();

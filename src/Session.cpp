@@ -169,6 +169,7 @@ float legacyFaderPosition (float db) { return db > -100.0f ? std::exp ((db - 6.0
 float legacyFaderGain (float position) { return position > 0.0f ? std::pow (10.0f, (20.0f * std::log (position) + 6.0f) * (1.0f / 20.0f)) : 0.0f; }
 const juce::Identifier crossfadeProperty { "halftrackCrossfade" };
 const juce::Identifier crossfaderProperty { "halftrackCrossfader" };
+const juce::Identifier crossfadeCurveProperty { "halftrackCrossfadeCurve" };
 const juce::Identifier manualPanProperty { "halftrackManualPan" };
 const juce::Identifier automationArmProperty { "halftrackAutomationArm" };
 const juce::Identifier punchInProperty { "halftrackPunchIn" }, punchOutProperty { "halftrackPunchOut" };
@@ -918,8 +919,9 @@ public:
         split.store (panMode.get() != 0, std::memory_order_relaxed);
     }
     bool splitPan() const { return panMode.get() != 0; }
-    // The crossfade gain is set on the message thread and ramped across each block.
-    std::atomic<float> crossfade { 1.0f };
+    // The crossfade gain is set on the message thread and ramped across each block. Along the Transition
+    // curve the crossfade scales the fader position instead, before the volume law.
+    std::atomic<float> crossfade { 1.0f }, crossfadePosition { 1.0f };
     juce::CachedValue<int> panMode;
     juce::CachedValue<float> leftValue, rightValue;
     te::AutomatableParameter* leftSplit = nullptr;
@@ -957,7 +959,7 @@ public:
             if (right != nullptr) right[n] = (g[1] * l + g[3] * r) * fadeGain;
         }
         // Channels beyond a stereo pair take the volume alone.
-        const float volume = te::volumeFaderPositionToGain (volParam->getCurrentValue());
+        const float volume = te::volumeFaderPositionToGain (volParam->getCurrentValue() * crossfadePosition.load (std::memory_order_relaxed));
         for (int channel = 2; channel < channels; ++channel)
             buffer->applyGainRamp (channel, start, count, appliedVolume * appliedCrossfade, volume * fade);
         appliedVolume = volume; appliedCrossfade = fade;
@@ -972,7 +974,7 @@ private:
     void setTargets (bool immediately)
     {
         constexpr double quarterPi = 0.7853981633974483, halfPi = 1.5707963267948966, root2 = 1.4142135623730951;
-        const float volume = te::volumeFaderPositionToGain (volParam->getCurrentValue());
+        const float volume = te::volumeFaderPositionToGain (volParam->getCurrentValue() * crossfadePosition.load (std::memory_order_relaxed));
         const double c = panParam->getCurrentValue() * quarterPi + quarterPi;
         const double a = leftSplit->getCurrentValue() * quarterPi + quarterPi, b = rightSplit->getCurrentValue() * quarterPi + quarterPi;
         const std::array<float, 4> stereoTargets { volume * std::max ((float) (root2 * std::cos (c)), 1.0e-5f), 0.0f,
@@ -1275,9 +1277,15 @@ Result validateMasterVolume(const juce::ValueTree& state)
     }
     return Result::ok();
 }
-// Crossfade sides are 0 (none), 1 (A) or 2 (B); the crossfader is a finite -1..1 position.
+// Crossfade sides are 0 (none), 1 (A) or 2 (B); the crossfader is a finite -1..1 position, and its curve
+// one of the seven.
 Result validateCrossfade (const juce::ValueTree& state)
 {
+    if (state.hasProperty (crossfadeCurveProperty))
+    {
+        const auto text = state[crossfadeCurveProperty].toString().trim();
+        if (text.length() != 1 || text[0] < '0' || text[0] > '6') return Result::fail ("The project has an invalid crossfader curve.");
+    }
     if (state.hasProperty (crossfaderProperty))
     {
         const auto text = state[crossfaderProperty].toString().trim().toStdString(); char* end = nullptr;
@@ -4054,15 +4062,24 @@ struct Session::Impl
         edit->markAsChanged();
         owner.sendChangeMessage();
     }
-    // Each track mixer's crossfade gain from its side and the project crossfader.
+    // Each track mixer's crossfade gain from its side, the project crossfader and its curve.
+    Session::CrossfadeCurve crossfadeCurve() const
+    {
+        return static_cast<Session::CrossfadeCurve> (juce::jlimit (0, Session::crossfadeCurveCount - 1,
+            static_cast<int> (edit->state.getProperty (crossfadeCurveProperty, static_cast<int> (Session::CrossfadeCurve::constantPower)))));
+    }
     void refreshCrossfade()
     {
         const auto position = static_cast<float> (edit->state.getProperty (crossfaderProperty, 0.0f));
+        const auto curve = crossfadeCurve();
         for (auto* t : te::getAudioTracks (*edit))
             if (auto* mixer = dynamic_cast<TrackMixer*> (t->getVolumePlugin()))
             {
                 const auto side = static_cast<Session::CrossfadeAssign> (juce::jlimit (0, 2, static_cast<int> (t->state.getProperty (crossfadeProperty, 0))));
-                mixer->crossfade.store (Session::crossfadeGain (side, position), std::memory_order_relaxed);
+                const auto factor = Session::crossfadeGain (side, position, curve);
+                const bool scalesPosition = curve == Session::CrossfadeCurve::transition;
+                mixer->crossfade.store (scalesPosition ? 1.0f : factor, std::memory_order_relaxed);
+                mixer->crossfadePosition.store (scalesPosition ? factor : 1.0f, std::memory_order_relaxed);
             }
     }
     // Frozen tracks play their rendered audio, so their devices and clips cannot change until unfrozen.
@@ -7002,6 +7019,7 @@ Session::Snapshot Session::snapshot() const
     s.name = s.projectFile == File() ? "Untitled" : s.projectFile.getFileNameWithoutExtension();
     s.dirty = impl->explicitChanges || (! impl->pristineNewDocument && e.hasChangedSinceSaved());
     s.crossfader = static_cast<float> (e.state.getProperty (crossfaderProperty, 0.0f));
+    s.crossfadeCurve = impl->crossfadeCurve();
     s.playing = transport.isPlaying(); s.recording = transport.isRecording(); s.recordWaiting = impl->recordWaiting;
     s.sessionRecording = ! impl->slotRecordings.empty() || ! impl->overdubs.empty();
     s.looping = transport.looping;
@@ -13619,13 +13637,76 @@ Result Session::renameTrack (int index, const String& name)
     if (own == Impl::ownName (*t)) return Result::ok();
     impl->transaction ("Rename track"); t->setName (own); impl->changed(); return Result::ok();
 }
-float Session::crossfadeGain (CrossfadeAssign side, float position)
+namespace
 {
-    const auto x = juce::jlimit (-1.0f, 1.0f, std::isfinite (position) ? position : 0.0f);
-    const auto away = side == CrossfadeAssign::a ? x : side == CrossfadeAssign::b ? -x : 0.0f;
-    if (away <= 0) return 1.0f;
-    if (away >= 1) return 0.0f;
-    return std::cos (away * juce::MathConstants<float>::halfPi);
+// The reference's crossfader curves (static reading of Live 12.2.1 arm64: seven helpers at 0x10193d908
+// to 0x10193ddfc, sampled by 0x10193c13c and read by 0x10193cd14), in single precision with its
+// constants. Each gives the gain of a side whose fader position, seen from that side, is x: 1 at -1 and
+// 0 at +1.
+float crossfadeCurveAt (Session::CrossfadeCurve curve, float x)
+{
+    const auto bits = [] (std::uint32_t b) { float f; std::memcpy (&f, &b, sizeof f); return f; };
+    const float pi = bits (0x40490fdb), quarterPi = bits (0x3f490fdb), halfPi = bits (0x3fc90fdb);
+    using C = Session::CrossfadeCurve;
+    if (curve == C::transition) return x < -1 ? 1.0f : x > 1 ? 0.0f : x <= 0 ? 1.0f : 1.0f - x;
+    const float edge = curve == C::slowCut ? bits (0x3f70a3d7) : curve == C::fastCut ? bits (0x3f75c28f) : bits (0x3f733333);
+    if (x < -edge) return 1.0f;
+    if (x > edge) return 0.0f;
+    const float y = x / edge;
+    if (curve == C::fastCut) return y <= 0.9375f ? 1.0f : std::cos ((y - 0.9375f) * bits (0x41c90fdb));
+    if (curve == C::slowCut)
+    {
+        float base = y <= 0.5f ? 1.0f : std::cos ((y - 0.5f) * pi);
+        if (y >= 0.75f) base = (base * (std::cos (((y - 0.75f) * 4.0f) * pi) + 1.0f)) * 0.5f;
+        return base;
+    }
+    float base = 1;
+    switch (curve)
+    {
+        case C::dipped:       base = std::fma (bits (0xbe5413cc), std::cos (y * halfPi), std::cos ((y + 1.0f) * quarterPi)); break;
+        case C::intermediate: base = std::fma (-0.125f, std::cos (y * halfPi), std::cos ((y + 1.0f) * quarterPi)); break;
+        case C::constantPower: base = std::cos ((y + 1.0f) * quarterPi); break;
+        default:              base = y <= 0 ? 1.0f : std::cos (y * halfPi); break; // Slow Fade
+    }
+    // A shoulder past 0.55 takes each smoothly to silence.
+    const float a = bits (0x3f0ccccd), b = bits (0x3ee66666);
+    if (y >= a) base = (base * (std::cos (((y - a) / b) * pi) + 1.0f)) * 0.5f;
+    return base;
+}
+} // namespace
+
+juce::String Session::crossfadeCurveName (CrossfadeCurve curve)
+{
+    static const char* const names[] { "Dipped", "Intermediate", "Constant Power", "Slow Fade", "Slow Cut", "Fast Cut", "Transition" };
+    return names[juce::jlimit (0, crossfadeCurveCount - 1, static_cast<int> (curve))];
+}
+float Session::crossfadeGain (CrossfadeAssign side, float position, CrossfadeCurve curve)
+{
+    if (side == CrossfadeAssign::none) return 1.0f;
+    // Each curve sampled at 129 positions from -1 to +1, and two beyond, as the reference samples them.
+    static const auto tables = []
+    {
+        std::array<std::array<float, 131>, crossfadeCurveCount> t {};
+        for (int c = 0; c < crossfadeCurveCount; ++c)
+            for (int i = 0; i < 131; ++i)
+                t[(size_t) c][(size_t) i] = crossfadeCurveAt (static_cast<CrossfadeCurve> (c), std::fma ((float) i * (1.0f / 128.0f), 2.0f, -1.0f));
+        return t;
+    }();
+    const auto& table = tables[(size_t) juce::jlimit (0, crossfadeCurveCount - 1, static_cast<int> (curve))];
+    const auto x = std::isfinite (position) ? position : 0.0f;
+    const float u = side == CrossfadeAssign::a ? x : -x;
+    const float z = juce::jlimit (0.0f, 128.0f, 64.0f * (u + 1.0f));
+    const auto k = (size_t) z;
+    return std::fma (z - (float) k, table[k + 1] - table[k], table[k]);
+}
+Result Session::setCrossfadeCurve (CrossfadeCurve curve)
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    if (static_cast<int> (curve) < 0 || static_cast<int> (curve) >= crossfadeCurveCount) return Result::fail ("Unknown crossfader curve.");
+    if (impl->crossfadeCurve() == curve) return Result::ok();
+    impl->transaction ("Crossfader curve");
+    impl->edit->state.setProperty (crossfadeCurveProperty, static_cast<int> (curve), &impl->edit->getUndoManager());
+    impl->refreshCrossfade(); impl->changed(); return Result::ok();
 }
 Result Session::setTrackCrossfade (const String& trackId, CrossfadeAssign side)
 {

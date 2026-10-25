@@ -410,7 +410,7 @@ Takes leave the transport out of recording, so `Impl::anyRecording()` (Arrangeme
 
 ## Crossfader
 
-Tracks carry an undoable `halftrackCrossfade` side (0 none, 1 A, 2 B) and the edit an undoable `halftrackCrossfader` position (-1 to +1); both are validated on load. `Session::crossfadeGain` is the dipless law: a side keeps unity until the fader passes the centre toward the other side, then follows cos(πx/2) to silence. `Impl::refreshCrossfade` runs on every model change, project preparation and parameter refresh after undo, and stores each `TrackMixer`'s gain in an atomic. The mixer's owned callback ramps from the previous block's gain to the new one with its existing √2 normalization, so the callback stays allocation- and lock-free. The Session mixer shows A/B buttons per strip and a crossfader on the master strip.
+Tracks carry an undoable `halftrackCrossfade` side (0 none, 1 A, 2 B) and the edit an undoable `halftrackCrossfader` position (-1 to +1); both are validated on load, as is the edit's undoable `halftrackCrossfadeCurve` (0 to 6, Constant Power when absent). `Session::crossfadeGain` reads the reference's seven curves from tables sampled as it samples them ([crossfader contract](research/crossfader-contract.md)). `Impl::refreshCrossfade` runs on every model change, project preparation and parameter refresh after undo, and stores each `TrackMixer`'s gain, or for Transition its fader-position factor, in atomics. The mixer's owned callback ramps from the previous block's gain to the new one with its existing √2 normalization, so the callback stays allocation- and lock-free. The Session mixer shows A/B buttons per strip and a crossfader on the master strip.
 
 ## Stem export
 

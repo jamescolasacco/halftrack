@@ -56,8 +56,14 @@ public:
     // What Delete does in place of returning to the double-click value, for a control whose reset
     // does more.
     std::function<void()> onReset;
+    // A right-click's menu, in place of a drag, for a control that has one.
+    std::function<void()> onContextMenu;
 
-    void mouseDown (const juce::MouseEvent& e) override { last = dragged = e.position; juce::Slider::mouseDown (e); }
+    void mouseDown (const juce::MouseEvent& e) override
+    {
+        if (e.mods.isPopupMenu() && onContextMenu != nullptr) { onContextMenu(); return; }
+        last = dragged = e.position; juce::Slider::mouseDown (e);
+    }
     void mouseDrag (const juce::MouseEvent& e) override { juce::Slider::mouseDrag (scaled (e)); }
     void mouseUp (const juce::MouseEvent& e) override { juce::Slider::mouseUp (scaled (e)); }
 

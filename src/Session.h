@@ -45,6 +45,9 @@ public:
     enum class FollowAction { off, stop, replay, previous, next, first, last, cycle, any, other };
     // A track's side of the crossfader; unassigned tracks ignore it.
     enum class CrossfadeAssign { none, a, b };
+    // The crossfader's curves, the reference's seven in its context menu's order (its manual, section
+    // 18.5); Constant Power is its default.
+    enum class CrossfadeCurve { dipped, intermediate, constantPower, slowFade, slowCut, fastCut, transition };
     // Clip launch behaviour on press/release of its launch button.
     enum class LaunchMode { trigger, gate, toggle, repeat };
     // Per-clip launch grid; global follows the project setting.
@@ -666,6 +669,7 @@ public:
         float masterPeakL = 0, masterPeakR = 0, masterGainDb = 0;
         std::vector<PluginInfo> mainPlugins; // The Main's audio devices, in chain order.
         float crossfader = 0; // -1 is fully A, +1 fully B.
+        CrossfadeCurve crossfadeCurve = CrossfadeCurve::constantPower;
         AutomationLane masterVolumeAutomation;
         std::vector<TrackInfo> tracks;
         std::vector<GroupInfo> groups;
@@ -1407,8 +1411,15 @@ public:
     static constexpr double maximumTrackDelayMs = 1000;
     juce::Result setTrackDelay (const juce::String& trackId, double milliseconds);
     juce::Result setCrossfader (float position);
-    // Dipless crossfader law: a side keeps unity until the fader passes the centre toward the other side.
-    static float crossfadeGain (CrossfadeAssign, float position);
+    static constexpr int crossfadeCurveCount = 7;
+    static juce::String crossfadeCurveName (CrossfadeCurve);
+    // The project's crossfader curve, one undo step, kept with the project.
+    juce::Result setCrossfadeCurve (CrossfadeCurve);
+    // A side's crossfade factor at a fader position, along a curve, as the reference computes it (static
+    // reading of its code): its curve sampled into a table at 129 positions across the fader, read
+    // between them. Unity for an unassigned side. Transition's factor scales the side's fader position
+    // before its volume law; the others' scale its gain.
+    static float crossfadeGain (CrossfadeAssign, float position, CrossfadeCurve = CrossfadeCurve::constantPower);
     juce::Result setMasterVolumeAutomation (const AutomationLane&);
     juce::Result setTrackGain (int trackIndex, float decibels);
     juce::Result setTrackPan (int trackIndex, float pan);
