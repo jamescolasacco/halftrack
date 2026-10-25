@@ -960,7 +960,10 @@ public:
         const bool browserShown = showBrowser || mapping();
         // The detail view shows either the device chain or, for an open clip, its editor; View > Hide
         // Detail View hides it, as the reference's does.
+        // Full-Size Clip View gives the clip view the whole height, beside the browser.
+        const bool fullSizeClip = fullSizeClipView && showPiano && showDetail;
         const int detailHeight = ! showDetail ? 0
+                               : fullSizeClip ? area.getHeight()
                                : showPiano ? juce::jlimit (minimumClipViewHeight, juce::jmax (minimumClipViewHeight, area.getHeight() - 140),
                                                            juce::roundToInt (area.getHeight() * clipViewFraction))
                                            : deviceHeight;
@@ -968,7 +971,7 @@ public:
         // Full Height Browser the browser runs down beside it.
         const auto work = area;
         juce::Rectangle<int> detail;
-        const bool browserAbove = browserShown && ! session.preferences().fullHeightBrowser;
+        const bool browserAbove = browserShown && ! session.preferences().fullHeightBrowser && ! fullSizeClip;
         if (browserAbove) detail = area.removeFromBottom (detailHeight);
         browserBounds = browserShown ? area.removeFromLeft (juce::jlimit (minimumBrowserWidth, maximumBrowserWidth(), browserWidth)) : juce::Rectangle<int>();
         // The Info View sits under the browser, as in the reference, and without it keeps the corner
@@ -981,7 +984,7 @@ public:
         if (! browserAbove) detail = area.removeFromBottom (detailHeight);
         // Without the browser, the Info View keeps its corner beside the detail view, or below the view without either.
         if (showInfo && ! browserShown) info.setBounds ((showDetail ? detail : area.removeFromBottom (infoHeight)).removeFromLeft (infoCornerWidth).removeFromBottom (infoHeight).reduced (6, 4));
-        dividerBounds = showDetail ? detail.removeFromTop (dividerHeight) : juce::Rectangle<int>();
+        dividerBounds = showDetail && ! fullSizeClip ? detail.removeFromTop (dividerHeight) : juce::Rectangle<int>();
         deviceChain.setBounds (detail); deviceChain.setVisible (! showPiano && showDetail);
         auto browser = browserBounds.reduced (6, 6);
         {
@@ -1067,6 +1070,8 @@ public:
         canvas.resized();
         ruler.resized(); // Place controls using the final timeline width after window resizing.
         updateScroll();
+        if (fullSizeClip) for (auto* view : std::initializer_list<juce::Component*> { &launcher, &viewport, &ruler, &timeRuler, &overview, &horizontalScroll, &gridReadout, &arrangementMixer })
+            view->setVisible (false);
     }
 
     void mouseDown (const juce::MouseEvent& e) override
@@ -1089,6 +1094,7 @@ public:
         return showPiano ? juce::MouseCursor::UpDownResizeCursor : juce::MouseCursor::NormalCursor;
     }
     bool draggingDivider = false, draggingBrowserEdge = false;
+    bool fullSizeClipView = false; // View > Full-Size Clip View, while the clip view shows.
     // The browser's right edge drags to resize it, as the reference's does; the width lasts while the window is open.
     int browserWidth = defaultBrowserWidth;
     static constexpr int defaultBrowserWidth = 300, minimumBrowserWidth = 220;
@@ -8019,7 +8025,7 @@ private:
             if ((code == juce::KeyPress::rightKey || code == juce::KeyPress::leftKey) && ! key.getModifiers().isAnyModifierKeyDown() && stepRecord (code == juce::KeyPress::rightKey)) return true;
             if (clip != nullptr && key.getModifiers().isCommandDown())
             {
-                if ((code == 'E' || code == 'e') && !key.getModifiers().isShiftDown()) { noteCommand (NoteCommand::split); return true; }
+                if ((code == 'E' || code == 'e') && ! key.getModifiers().isShiftDown() && ! key.getModifiers().isAltDown()) { noteCommand (NoteCommand::split); return true; }
                 // Cmd+U quantizes with the Quantize tool's settings, and Shift+Cmd+U opens them, as the reference's keys do.
                 if (code == 'U' || code == 'u')
                 { if (key.getModifiers().isShiftDown()) openNoteTool (Session::NoteTool::quantize); else quantizeNotes(); return true; }
@@ -13693,7 +13699,7 @@ private:
                     menuMidiPrelisten, menuBrowserPreHear, menuLockEnvelopes,
                     menuArrangementInOut, menuArrangementVolume, menuArrangementTrackOptions, menuArrangementReturns, menuArrangementOverdub,
                     menuAddFolder, menuRemoveUnavailableProjects, menuClearRecentProjects, menuShowBackups, menuRevealBackups, menuSnapAutomation, menuSaveTemplate,
-                    menuQuantizeSettings, menuStartWithTap, menuDelayCompensation, menuFullHeightBrowser,
+                    menuQuantizeSettings, menuStartWithTap, menuDelayCompensation, menuFullHeightBrowser, menuFullSizeClip,
                     menuLastCommand, // New commands go before this.
                     menuSlice = 400, // Plus Session::SliceBy.
                     menuTimeFormat = 410, // Plus Session::TimeFormat.
@@ -13745,7 +13751,8 @@ private:
            #if JUCE_MAC
             { menuFullscreen, key (KeyPress::F11Key) },
            #endif
-            { 93, key ('1', cmd) }, { 94, key ('2', cmd) }, { 95, key ('3', cmd) }, { 96, key ('4', cmd) }, { 97, key ('5', cmd) }, { 13, key ('e', cmd | shift | alt) } };
+            { 93, key ('1', cmd) }, { 94, key ('2', cmd) }, { 95, key ('3', cmd) }, { 96, key ('4', cmd) }, { 97, key ('5', cmd) }, { 13, key ('e', cmd | shift | alt) },
+            { menuFullSizeClip, key ('e', cmd | alt) } };
         for (const auto& [id, press] : shortcuts)
         {
             if (menuKeys.getCommandForID (id) == nullptr)
@@ -14384,6 +14391,7 @@ private:
             popup.addSeparator();
             add (menuClipView, "Clip View", canShowClipView(), showPiano); add (menuDeviceView, "Device View", true, ! showPiano);
             add (menuToggleDetail, "Toggle Clip/Device View", canShowClipView());
+            add (menuFullSizeClip, "Full-Size Clip View", canShowClipView(), fullSizeClipView && showPiano && showDetail);
             add (menuDetailView, showDetail ? "Hide Detail View" : "Show Detail View");
             popup.addSeparator();
             add (menuBrowser, "Browser", ! mapping(), showBrowser || mapping()); add (menuGroovePool, "Groove Pool", true, groovePool != nullptr && groovePool->isShowing());
@@ -14508,6 +14516,12 @@ private:
             case menuAddFolder: addFolderToBrowser(); return;
             case menuSaveTemplate: saveTemplateDialog(); return;
             case menuDelayCompensation: session.setDelayCompensation (! session.delayCompensation()); refresh(); return;
+            case menuFullSizeClip:
+                // The clip view takes the whole height, as the reference's Toggle Full-Size Clip View does; it shows first if it was hidden.
+                if (! canShowClipView()) return;
+                if (showPiano && showDetail) fullSizeClipView = ! fullSizeClipView;
+                else { fullSizeClipView = true; showDetail = true; showClipView (true); }
+                resized(); repaint(); return;
             case menuFullHeightBrowser:
             {
                 auto preferences = session.preferences(); preferences.fullHeightBrowser = ! preferences.fullHeightBrowser;
@@ -21414,7 +21428,7 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         expect ("Playback", { "Play", "Continue Playback", "Play from Insert Marker", "Move Insert Marker to Playhead", "Playback Options >", "-", "Record in Arrangement", "Arm Record in Arrangement",
                               "Record in Session", "-", "Metronome", "Metronome Only While Recording", "-", "Back to Arrangement" });
         const juce::String folds = std::any_of (state.tracks.begin(), state.tracks.end(), [] (const auto& t) { return ! t.folded; }) ? "Fold All Tracks" : "Unfold All Tracks";
-        juce::StringArray view { "Fullscreen", "Zoom >", "-", "Info", "Undo History", "-", "Toggle Arrangement/Session View", "-", "Clip View", "Device View", "Toggle Clip/Device View", "Hide Detail View", "-",
+        juce::StringArray view { "Fullscreen", "Zoom >", "-", "Info", "Undo History", "-", "Toggle Arrangement/Session View", "-", "Clip View", "Device View", "Toggle Clip/Device View", "Full-Size Clip View", "Hide Detail View", "-",
                                  "Browser", "Groove Pool", "Full Height Browser", "-", "Search in Browser", "Show Similar Files", "-", "Plug-In Windows" };
        #if JUCE_MAC
         view.add ("Video Window");
@@ -21602,6 +21616,17 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
             check (entry ("Navigate", menuFocusClip)->isEnabled, "with a clip selected, Focus Clip View can act");
             menuItemSelected (menuFocusClip, 5);
             check (showPiano && editArea() == EditArea::notes, "Focus Clip View shows the clip's notes, where Edit's commands then act");
+            {
+                // Toggle Full-Size Clip View, Cmd/Ctrl+Option+E, as the reference's: the clip view takes the whole height.
+                const auto editorHigh = pianoRoll.getHeight();
+                check (entry ("View", menuFullSizeClip)->isEnabled && ! entry ("View", menuFullSizeClip)->isTicked
+                           && shortcut ("View", menuFullSizeClip, juce::KeyPress ('e', juce::ModifierKeys (cmd | alt), 0)), "View offers Full-Size Clip View on Cmd/Ctrl+Option+E");
+                check (handleKey (juce::KeyPress ('E', juce::ModifierKeys (cmd | alt), 0)) && fullSizeClipView && entry ("View", menuFullSizeClip)->isTicked
+                           && pianoRoll.getHeight() > editorHigh && ! viewport.isVisible() && ! launcher.isVisible() && pianoRoll.getY() < toolbarBounds.getBottom() + 40,
+                       "it gives the clip view the whole height, hiding the Arrangement");
+                check (handleKey (juce::KeyPress ('E', juce::ModifierKeys (cmd | alt), 0)) && ! fullSizeClipView && pianoRoll.getHeight() == editorHigh && viewport.isVisible(),
+                       "and again gives it back");
+            }
             session.undo(); selectedClip = -1; closeClipView(); refresh();
             showBrowser = false; resized();
             menuItemSelected (menuFocusBrowser, 5);

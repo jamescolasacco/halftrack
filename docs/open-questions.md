@@ -845,7 +845,7 @@ Open Recent Project ([menu contract](research/main-menu-contract.md)). Defaults 
 - **What joins the list.** A project opened, or saved under a new name, joins the top; Save a Copy does not. The list keeps ten, kept with the preferences, and a preferences reset keeps it. The reference's own limit was not read.
 - **Names.** Each entry shows its project's file name, with its folder in brackets when another entry has the same name.
 
-Window layout ([contract](research/window-layout-contract.md)). With Full Height Browser off, the Info View stays under the browser, above the detail view; where the reference puts it then was not read.
+Window layout ([contract](research/window-layout-contract.md)). With Full Height Browser off, the Info View stays under the browser, above the detail view; where the reference puts it then was not read. Full-Size Clip View keeps the browser beside the clip view and lasts while the window is open; the item's name follows the manual's shortcut list, and whether the reference keeps the browser or the setting was not read.
 
 Browser width. The browser's right edge drags to resize it, from 220 pixels to the smaller of 640 and half the window, starting at 300; the width lasts while the window is open. The reference's limits, and whether it keeps the width with the Set, were not read.
 
