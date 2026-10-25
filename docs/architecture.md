@@ -443,7 +443,14 @@ The meters are the engine tempo sequence's `TimeSigSetting`s, one per time signa
 
 ## MIDI note tools
 
-`src/NoteTools.*` holds each tool's field table and a pure `notetools::run` from notes to notes. `Session::applyNoteTool` validates the settings and every resulting note, then removes the chosen notes and adds the result in one transaction. The piano roll's `NoteToolPanel` edits a tool's settings and applies it to the selection. See the [note tool contract](research/midi-tools-contract.md).
+`src/NoteTools.*` holds each tool's field table and a pure `notetools::run` from notes to notes. `notetools::range` and `limited` give the ranges that narrow with other values. Rhythm, Shape, Stacks and Time Warp also take a `Session::NoteToolContext` (time range, clip scale, Drum Rack keys) from `Session::noteToolContext`. They use `notetools::ReferenceRandom`, a portable copy of libc++'s minstd and distributions. `src/NoteTools.cpp` is built without floating-point contraction, so only its explicit `std::fma` calls fuse.
+
+`Session::applyNoteTool` validates the settings and every resulting note in one transaction:
+
+- Quantize and Time Warp move the chosen notes in place.
+- The other tools remove the chosen notes (and, for Rhythm, its key's notes starting in the range) and add the result.
+
+The piano roll's `NoteToolPanel` edits a tool's settings, with Shape's contour, Stacks' chords and Time Warp's breakpoints, and applies it to the selection. See the [note tool contract](research/midi-tools-contract.md).
 
 ## Clip scales
 

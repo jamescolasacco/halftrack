@@ -10884,7 +10884,35 @@ Result Session::transformMidiNotes (const String& clipId, const juce::StringArra
     // Existing batch validation rejects the complete edit before changing any note.
     return updateMidiNotes (clipId, notes);
 }
-Result Session::applyNoteTool (const String& clipId, const juce::StringArray& ids, const NoteToolSettings& settings, juce::StringArray& resultIds, double gridBeats)
+std::optional<Session::NoteToolContext> Session::noteToolContext (const String& clipId, std::optional<std::pair<double, double>> timeRange) const
+{
+    auto* clip = impl->midiClip (clipId);
+    if (clip == nullptr) return std::nullopt;
+    // The editor's time selection, or else the clip's loop brace (the content it plays while unlooped), inside the clip.
+    const auto length = clip->getLengthInBeats().inBeats(), offset = clip->getOffsetInBeats().inBeats();
+    auto [from, to] = timeRange ? *timeRange
+                    : clip->isLooping() ? std::pair { clip->getLoopStartBeats().inBeats(), clip->getLoopStartBeats().inBeats() + clip->getLoopLengthBeats().inBeats() }
+                                        : std::pair { offset, offset + length };
+    if (! std::isfinite (from) || ! std::isfinite (to)) return std::nullopt;
+    from = std::max (0.0, from); to = std::min (length, to);
+    if (! (to - from >= 1.0 / 960)) return std::nullopt;
+    NoteToolContext context;
+    context.start = from; context.end = to;
+    if (const auto scale = clipScale (clip->state); scale.enabled) context.scale = scale;
+    if (auto* track = dynamic_cast<te::AudioTrack*> (clip->getClipTrack()))
+        if (auto* rack = dynamic_cast<NativeEffectPlugin*> (Impl::instrument (*track)); rack != nullptr && rack->getKind() == EffectKind::drumRack)
+        {
+            std::bitset<128> keys;
+            for (const auto& chain : rack->state)
+                if (! chain.hasType (racks::chainType)) continue;
+                else if (const auto note = racks::readChain (chain).receiveNote; note < 0) keys.set();
+                else if (note < 128) keys.set ((size_t) note);
+            context.drumKeys = keys;
+        }
+    return context;
+}
+Result Session::applyNoteTool (const String& clipId, const juce::StringArray& ids, const NoteToolSettings& settings, juce::StringArray& resultIds, double gridBeats,
+                               std::optional<std::pair<double, double>> timeRange)
 {
     if (! std::isfinite (gridBeats) || gridBeats < 1.0 / 960 || gridBeats > 16) return Result::fail ("The grid is outside its range.");
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
@@ -10905,13 +10933,20 @@ Result Session::applyNoteTool (const String& clipId, const juce::StringArray& id
     if (chosen.size() != requested.size()) return Result::fail ("A chosen note is missing or ambiguous.");
     if (chosen.empty() && ! notetools::generates (settings.tool)) return Result::fail ("Choose the notes to transform.");
     const auto length = clip->getLengthInBeats().inBeats();
-    const auto result = notetools::run (settings, chosen, length, gridBeats);
-    if (settings.tool == NoteTool::quantize)
+    notetools::Context context;
+    if (notetools::usesTimeRange (settings.tool))
     {
-        // Quantize moves the notes themselves, so they keep their identities, chance and expression.
+        const auto found = noteToolContext (clipId, timeRange);
+        if (! found) return Result::fail ("The time range holds nothing of the clip.");
+        context = *found;
+    }
+    const auto result = notetools::run (settings, chosen, length, gridBeats, context);
+    if (notetools::movesNotes (settings.tool))
+    {
+        // Quantize and Time Warp move the notes themselves, so they keep their identities, chance and expression.
         for (const auto& note : result)
             if (auto valid = impl->validateNote (*clip, note.pitch, note.startBeat, note.lengthBeats, note.velocity); valid.failed()) return valid;
-        impl->transaction ("Quantize");
+        impl->transaction (String (notetools::name (settings.tool)));
         auto* undo = &impl->edit->getUndoManager();
         std::map<String, const MidiNoteInfo*> moved;
         for (const auto& note : result) moved[note.id] = &note;
@@ -10925,13 +10960,25 @@ Result Session::applyNoteTool (const String& clipId, const juce::StringArray& id
         }
         impl->changed(); return Result::ok();
     }
-    if (result.size() > 16384 || clip->getSequence().getNumNotes() - (int) chosen.size() + (int) result.size() > 100000)
+    // A tool that passes the chosen notes through (Shape with no keys to play, say) changes nothing.
+    if (! result.empty() && result.size() == chosen.size() && std::all_of (result.begin(), result.end(), [&] (const MidiNoteInfo& n) { return requested.contains (n.id); }))
+    {
+        resultIds = ids;
+        return Result::ok();
+    }
+    // Rhythm also clears the notes of its key that start in the range, as the reference's does.
+    juce::Array<te::MidiNote*> cleared = originals;
+    if (settings.tool == NoteTool::rhythm)
+        for (auto* note : clip->getSequence().getNotes())
+            if (const auto start = note->getStartBeat().inBeats(); note->getNoteNumber() == (int) settings.values[7] && start >= context.start && start < context.end && ! cleared.contains (note))
+                cleared.add (note);
+    if (result.size() > 16384 || clip->getSequence().getNumNotes() - cleared.size() + (int) result.size() > 100000)
         return Result::fail ("The result has too many notes.");
     for (const auto& note : result)
         if (auto valid = impl->validateNote (*clip, note.pitch, note.startBeat, note.lengthBeats, note.velocity); valid.failed()) return valid;
     impl->transaction (String (notetools::name (settings.tool)));
     auto* undo = &impl->edit->getUndoManager();
-    for (auto* note : originals) clip->getSequence().removeNote (*note, undo);
+    for (auto* note : cleared) clip->getSequence().removeNote (*note, undo);
     resultIds.clear();
     for (const auto& value : result)
     {
@@ -10939,6 +10986,9 @@ Result Session::applyNoteTool (const String& clipId, const juce::StringArray& id
                                                  juce::jlimit (1, 127, juce::roundToInt (value.velocity * 127)), 0, undo);
         const auto id = juce::Uuid().toString();
         note->state.setProperty (midiNoteIDProperty, id, undo);
+        // Rhythm's notes of velocity 0 are muted; the generators set each note's release velocity too.
+        if (! value.active) note->setMute (true, undo);
+        if (value.releaseVelocity != 0) note->setNoteOffVelocity (juce::jlimit (0, 127, value.releaseVelocity), undo);
         resultIds.add (id);
     }
     impl->changed(); return Result::ok();

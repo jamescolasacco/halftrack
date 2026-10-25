@@ -10772,7 +10772,9 @@ private:
         }
     private:
     public:
-        // A note tool's settings, applied to the selected notes (or every note) each time Apply is pressed.
+        // A note tool's settings, applied each time Apply is pressed. Rhythm, Shape, Stacks and Time Warp work in the
+        // time selection or the clip's loop, with ranges that narrow as the reference's do; Shape's contour can be
+        // drawn, Stacks edits its chords and Time Warp its breakpoints.
         class NoteToolPanel final : public juce::Component
         {
         public:
@@ -10784,43 +10786,129 @@ private:
                 for (size_t i = 0; i < fields.size(); ++i)
                 {
                     const auto& f = fields[i];
-                    auto& label = labels[i]; label.setText (f.label, juce::dontSendNotification); label.setColour (juce::Label::textColourId, ink); addAndMakeVisible (label);
+                    if (f.ownEditor) continue;
+                    addRow (labels[i], f.label);
                     if (f.choices)
                     {
                         auto& box = choices[i]; box.setName (f.label); box.addItemList (juce::StringArray::fromTokens (f.choices, "|", ""), 1);
-                        box.setSelectedId ((int) settings.values[i] + 1, juce::dontSendNotification);
-                        box.onChange = [this, i] { settings.values[i] = choices[i].getSelectedId() - 1; remember(); };
+                        box.onChange = [this, i] { if (! updating) change (i, choices[i].getSelectedId() - 1); };
                         addAndMakeVisible (box);
                     }
                     else
                     {
-                        auto& slider = sliders[i]; slider.setName (f.label); slider.setSliderStyle (juce::Slider::LinearBar);
-                        slider.setRange (f.minimum, f.maximum, f.integer ? 1.0 : 0.0); slider.setValue (settings.values[i], juce::dontSendNotification);
-                        slider.setTextValueSuffix (f.unit); slider.setNumDecimalPlacesToDisplay (f.integer ? 0 : 3); slider.updateText();
-                        slider.setColour (juce::Slider::trackColourId, themes::colour (0xff59606a)); slider.setColour (juce::Slider::textBoxTextColourId, ink);
-                        slider.onValueChange = [this, i] { settings.values[i] = sliders[i].getValue(); remember(); };
-                        addAndMakeVisible (slider);
+                        style (sliders[i], f);
+                        sliders[i].onValueChange = [this, i] { if (! updating) change (i, sliders[i].getValue()); };
+                        addAndMakeVisible (sliders[i]);
                     }
+                    rows.push_back (i);
                 }
-                rows = (int) fields.size();
+                if (tool == Session::NoteTool::shape) { shapeView.panel = this; shapeView.setName ("Shape display"); addAndMakeVisible (shapeView); }
+                if (tool == Session::NoteTool::timeWarp)
+                {
+                    warpView.panel = this; warpView.setName ("Breakpoints display"); addAndMakeVisible (warpView);
+                    addRow (breakpointLabel, "Breakpoints");
+                    for (size_t k = 0; k < 3; ++k)
+                    {
+                        auto& button = breakpointButtons[k];
+                        button.setName ("Breakpoint " + juce::String ((int) k + 1)); button.setButtonText (juce::String ((int) k + 1));
+                        button.setColour (juce::TextButton::buttonOnColourId, orange.withAlpha (.75f));
+                        button.onClick = [this, k] { toggleBreakpoint (k); };
+                        addAndMakeVisible (button);
+                    }
+                    addRow (timeLabel, "Time"); addRow (speedLabel, "Speed");
+                    style (breakpointTime, fields[0]); breakpointTime.setName ("Breakpoint Time");
+                    style (breakpointSpeed, fields[1]); breakpointSpeed.setName ("Breakpoint Speed");
+                    breakpointTime.onValueChange = [this] { if (! updating) moveBreakpoint ((size_t) selectedBreakpoint, breakpointTime.getValue(), settings.values[(size_t) selectedBreakpoint * 3 + 1]); };
+                    breakpointSpeed.onValueChange = [this] { if (! updating) moveBreakpoint ((size_t) selectedBreakpoint, settings.values[(size_t) selectedBreakpoint * 3], breakpointSpeed.getValue()); };
+                    addAndMakeVisible (breakpointTime); addAndMakeVisible (breakpointSpeed);
+                }
+                if (tool == Session::NoteTool::stacks)
+                {
+                    addChord.setName ("Add Chord"); addChord.setButtonText ("+");
+                    addChord.onClick = [this] { if (settings.chords.size() < (size_t) Session::maximumStacksChords) { settings.chords.push_back (settings.chords.back()); selectedChord = (int) settings.chords.size() - 1; remember(); refresh(); } };
+                    deleteChord.setName ("Delete Chord"); deleteChord.setButtonText (juce::String::charToString (0x2212));
+                    deleteChord.onClick = [this]
+                    {
+                        if (settings.chords.size() < 2) return;
+                        settings.chords.erase (settings.chords.begin() + selectedChord);
+                        selectedChord = std::min (selectedChord, (int) settings.chords.size() - 1);
+                        remember(); refresh();
+                    };
+                    addAndMakeVisible (addChord); addAndMakeVisible (deleteChord);
+                    const char* names[] { "Chord", "Chord Root", "Chord Inversion", "Chord Duration", "Chord Offset" };
+                    const char* shown[] { "Chord", "Root", "Inversion", "Duration", "Offset" };
+                    for (size_t k = 0; k < 5; ++k) addRow (chordLabels[k], shown[k]);
+                    ruleBox.setName (names[0]); rootBox.setName (names[1]);
+                    ruleBox.onChange = [this] { if (! updating) editChord ([this] (auto& c) { c.rule = ruleBox.getSelectedId() - 1; }); };
+                    rootBox.onChange = [this]
+                    {
+                        if (updating) return;
+                        const auto [degree, octave] = notetools::stacksDegree (rootBox.getSelectedId() - 1, context);
+                        editChord ([degree, octave] (auto& c) { c.degree = degree; c.octave = octave; });
+                    };
+                    addAndMakeVisible (ruleBox); addAndMakeVisible (rootBox);
+                    const notetools::Field inversion { names[2], -3, 3, 0, true, "" }, duration { names[3], .125, 1.875, 1, false, "" }, offset { names[4], -.875, .875, 0, false, "" };
+                    style (inversionSlider, inversion); style (durationSlider, duration); style (offsetSlider, offset);
+                    for (auto* eighths : { &durationSlider, &offsetSlider })
+                    {
+                        eighths->setRange (eighths == &durationSlider ? .125 : -.875, eighths == &durationSlider ? 1.875 : .875, .125);
+                        eighths->textFromValueFunction = [] (double v) { return juce::String (juce::roundToInt (v * 8)) + "/8"; };
+                        eighths->valueFromTextFunction = [] (const juce::String& t) { return t.upToFirstOccurrenceOf ("/", false, false).getDoubleValue() / 8; };
+                        eighths->updateText();
+                    }
+                    inversionSlider.onValueChange = [this] { if (! updating) editChord ([this] (auto& c) { c.inversion = (int) inversionSlider.getValue(); }); };
+                    durationSlider.onValueChange = [this] { if (! updating) editChord ([this] (auto& c) { c.duration = durationSlider.getValue(); }); };
+                    offsetSlider.onValueChange = [this] { if (! updating) editChord ([this] (auto& c) { c.offset = offsetSlider.getValue(); }); };
+                    addAndMakeVisible (inversionSlider); addAndMakeVisible (durationSlider); addAndMakeVisible (offsetSlider);
+                }
                 apply.setName ("Apply note tool");
                 apply.setButtonText (notetools::generates (tool) ? "Generate" : "Transform");
                 apply.onClick = [this] { if (roll != nullptr) roll->applyNoteTool (settings); };
                 addAndMakeVisible (apply);
-                hint.setText (notetools::generates (tool) ? "Fills the clip, replacing any selected notes." : "Reshapes the selected notes, or every note when none is selected.",
+                hint.setText (tool == Session::NoteTool::euclidean || tool == Session::NoteTool::seed ? "Fills the clip, replacing any selected notes."
+                              : notetools::generates (tool) ? "Fills the time selection or the clip's loop, replacing any selected notes."
+                              : tool == Session::NoteTool::timeWarp ? "Warps the selected notes, or those starting in the time selection, across it or the clip's loop."
+                              : "Reshapes the selected notes, or those starting in the time selection, or every note.",
                               juce::dontSendNotification);
-                hint.setColour (juce::Label::textColourId, muted); hint.setFont (font (10.5f)); addAndMakeVisible (hint);
+                hint.setColour (juce::Label::textColourId, muted); hint.setFont (font (10.5f)); hint.setMinimumHorizontalScale (1.0f); addAndMakeVisible (hint);
+                context = r.toolContext(); grid = r.snapBeats();
+                wantedPattern = settings.values[1]; wantedPatterns = notetools::range (settings, 1, grid, context).second + 1;
+                refresh();
             }
-            static int heightFor (Session::NoteTool tool) { return 78 + 28 * (int) notetools::fields (tool).size(); }
+            static int heightFor (Session::NoteTool tool)
+            {
+                int rowCount = 0;
+                for (const auto& f : notetools::fields (tool)) rowCount += f.ownEditor ? 0 : 1;
+                const auto extra = tool == Session::NoteTool::shape ? 96 : tool == Session::NoteTool::timeWarp ? 96 + 3 * 28 : tool == Session::NoteTool::stacks ? 6 * 28 : 0;
+                return 92 + 28 * rowCount + extra;
+            }
             void resized() override
             {
                 auto area = getLocalBounds().reduced (12, 10);
-                for (int i = 0; i < rows; ++i)
+                // The labels take the width the longest needs, at least 90 pixels.
+                int labelWidth = 90;
+                for (auto* label : getChildren())
+                    if (auto* l = dynamic_cast<juce::Label*> (label); l != nullptr && l != &hint)
+                        labelWidth = std::max (labelWidth, juce::roundToInt (juce::GlyphArrangement::getStringWidth (l->getFont(), l->getText())) + 12);
+                labelWidth = std::min (labelWidth, area.getWidth() / 2);
+                const auto row = [&] (juce::Label& label) { auto r = area.removeFromTop (28).withTrimmedBottom (4); label.setBounds (r.removeFromLeft (labelWidth)); return r; };
+                if (settings.tool == Session::NoteTool::shape) { shapeView.setBounds (area.removeFromTop (90)); area.removeFromTop (6); }
+                if (settings.tool == Session::NoteTool::timeWarp)
                 {
-                    auto row = area.removeFromTop (28).withTrimmedBottom (4);
-                    labels[(size_t) i].setBounds (row.removeFromLeft (90));
-                    choices[(size_t) i].setBounds (row); sliders[(size_t) i].setBounds (row);
+                    warpView.setBounds (area.removeFromTop (90)); area.removeFromTop (6);
+                    auto toggles = row (breakpointLabel);
+                    for (auto& button : breakpointButtons) button.setBounds (toggles.removeFromLeft (32).withTrimmedRight (4));
+                    breakpointTime.setBounds (row (timeLabel)); breakpointSpeed.setBounds (row (speedLabel));
                 }
+                if (settings.tool == Session::NoteTool::stacks)
+                {
+                    auto strip = area.removeFromTop (28).withTrimmedBottom (4);
+                    deleteChord.setBounds (strip.removeFromRight (26)); strip.removeFromRight (4); addChord.setBounds (strip.removeFromRight (26)); strip.removeFromRight (8);
+                    for (auto& button : chordButtons) button->setBounds (strip.removeFromLeft (std::min (24, strip.getWidth())).withTrimmedRight (2));
+                    ruleBox.setBounds (row (chordLabels[0])); rootBox.setBounds (row (chordLabels[1])); inversionSlider.setBounds (row (chordLabels[2]));
+                    durationSlider.setBounds (row (chordLabels[3])); offsetSlider.setBounds (row (chordLabels[4]));
+                }
+                for (const auto i : rows) { const auto r = row (labels[i]); choices[i].setBounds (r); sliders[i].setBounds (r); }
                 area.removeFromTop (6);
                 auto buttons = area.removeFromBottom (26);
                 apply.setBounds (buttons.removeFromRight (110));
@@ -10828,15 +10916,321 @@ private:
             }
             Session::NoteToolSettings settings;
             juce::TextButton apply;
+            int selectedChord = 0, selectedBreakpoint = 0;
         private:
+            // Shape's contour: dragging across it draws the levels, which makes the shape User's.
+            struct ShapeView final : public juce::Component
+            {
+                NoteToolPanel* panel = nullptr;
+                int lastIndex = -1;
+                float lastLevel = 0;
+                juce::Rectangle<float> area() const { return getLocalBounds().toFloat().reduced (6); }
+                void paint (juce::Graphics& g) override
+                {
+                    g.setColour (background); g.fillRoundedRectangle (getLocalBounds().toFloat(), 3);
+                    const auto levels = panel->levelsShown();
+                    const auto a = area();
+                    juce::Path contour;
+                    for (size_t i = 0; i < levels.size(); ++i)
+                    {
+                        const juce::Point<float> p { a.getX() + a.getWidth() * (float) i / (float) (levels.size() - 1), a.getBottom() - a.getHeight() * levels[i] };
+                        if (i == 0) contour.startNewSubPath (p); else contour.lineTo (p);
+                    }
+                    // Purple while the clip's scale guides the keys.
+                    g.setColour (panel->context.scale ? themes::colour (0xffb48cff) : orange.get()); g.strokePath (contour, juce::PathStrokeType (1.5f));
+                }
+                void mouseDown (const juce::MouseEvent& e) override { lastIndex = -1; mouseDrag (e); }
+                void mouseDrag (const juce::MouseEvent& e) override
+                {
+                    const auto a = area();
+                    const auto index = juce::jlimit (0, 20, juce::roundToInt ((e.position.x - a.getX()) / a.getWidth() * 20));
+                    const auto level = juce::jlimit (0.0f, 1.0f, (a.getBottom() - e.position.y) / a.getHeight());
+                    panel->drawLevels (lastIndex < 0 ? index : lastIndex, lastIndex < 0 ? level : lastLevel, index, level);
+                    lastIndex = index; lastLevel = level;
+                }
+            };
+            // Time Warp's speed across the time range: a breakpoint is chosen by clicking it and moved by dragging.
+            struct WarpView final : public juce::Component
+            {
+                NoteToolPanel* panel = nullptr;
+                int dragged = -1;
+                juce::Rectangle<float> area() const { return getLocalBounds().toFloat().reduced (8); }
+                juce::Point<float> at (size_t k) const
+                {
+                    const auto a = area();
+                    const auto& v = panel->shown.values;
+                    return { a.getX() + a.getWidth() * (float) v[3 * k], a.getBottom() - a.getHeight() * (float) v[3 * k + 1] };
+                }
+                void paint (juce::Graphics& g) override
+                {
+                    g.setColour (background); g.fillRoundedRectangle (getLocalBounds().toFloat(), 3);
+                    const auto a = area();
+                    g.setColour (raised); g.drawHorizontalLine (juce::roundToInt (a.getCentreY()), a.getX(), a.getRight()); // Speed 1.
+                    std::vector<size_t> active;
+                    for (size_t k = 0; k < 3; ++k) if (panel->shown.values[3 * k + 2] > 0) active.push_back (k);
+                    if (! active.empty())
+                    {
+                        juce::Path speed;
+                        speed.startNewSubPath (a.getX(), at (active.front()).y);
+                        for (const auto k : active) speed.lineTo (at (k));
+                        speed.lineTo (a.getRight(), at (active.back()).y);
+                        g.setColour (orange); g.strokePath (speed, juce::PathStrokeType (1.5f));
+                    }
+                    for (const auto k : active)
+                    {
+                        const auto p = at (k);
+                        const auto size = (int) k == panel->selectedBreakpoint ? 9.0f : 7.0f;
+                        g.setColour ((int) k == panel->selectedBreakpoint ? ink.get() : orange.get());
+                        g.fillEllipse (juce::Rectangle<float> (size, size).withCentre (p));
+                    }
+                }
+                void mouseDown (const juce::MouseEvent& e) override
+                {
+                    dragged = -1;
+                    float nearest = 12;
+                    for (size_t k = 0; k < 3; ++k)
+                        if (panel->shown.values[3 * k + 2] > 0 && at (k).getDistanceFrom (e.position) < nearest) { nearest = at (k).getDistanceFrom (e.position); dragged = (int) k; }
+                    if (dragged >= 0) { panel->selectedBreakpoint = dragged; panel->refresh(); }
+                }
+                void mouseDrag (const juce::MouseEvent& e) override
+                {
+                    if (dragged < 0) return;
+                    const auto a = area();
+                    panel->moveBreakpoint ((size_t) dragged, (e.position.x - a.getX()) / a.getWidth(), (a.getBottom() - e.position.y) / a.getHeight());
+                }
+                void mouseUp (const juce::MouseEvent&) override { dragged = -1; }
+            };
+            void addRow (juce::Label& label, const juce::String& text)
+            { label.setText (text, juce::dontSendNotification); label.setColour (juce::Label::textColourId, ink); addAndMakeVisible (label); }
+            static void style (ValueSlider& slider, const notetools::Field& f)
+            {
+                slider.setName (f.label); slider.setSliderStyle (juce::Slider::LinearBar);
+                slider.setRange (f.minimum, f.maximum, f.integer ? 1.0 : 0.0);
+                slider.setTextValueSuffix (f.unit); slider.setNumDecimalPlacesToDisplay (f.integer ? 0 : 3);
+                if (f.display == notetools::Display::note)
+                {
+                    slider.textFromValueFunction = [] (double v) { return midimonitor::noteName (juce::roundToInt (v)); };
+                    slider.valueFromTextFunction = [] (const juce::String& t) { return (double) keyFromText (t); };
+                }
+                else if (f.display == notetools::Display::percent)
+                {
+                    slider.textFromValueFunction = [] (double v) { return juce::String (juce::roundToInt (v * 100)) + "%"; };
+                    slider.valueFromTextFunction = [] (const juce::String& t) { return t.getDoubleValue() / 100; };
+                }
+                else if (f.display == notetools::Display::speed)
+                {
+                    slider.textFromValueFunction = [] (double v) { return juce::String (notetools::timeWarpSpeed (v), 2) + "x"; };
+                    slider.valueFromTextFunction = [] (const juce::String& t) { return notetools::timeWarpValue (t.getDoubleValue()); };
+                }
+                slider.setColour (juce::Slider::trackColourId, themes::colour (0xff59606a)); slider.setColour (juce::Slider::textBoxTextColourId, ink);
+                slider.updateText();
+            }
+            // A key typed as its name (C3 is 60, C#3 or Db3 61) or its number.
+            static int keyFromText (const juce::String& text)
+            {
+                const auto t = text.trim().toUpperCase();
+                const auto letter = juce::String ("C D EF G A B").indexOfChar (t[0]);
+                if (letter < 0 || t[0] == ' ') return juce::jlimit (0, 127, t.getIntValue());
+                auto rest = t.substring (1);
+                int key = letter;
+                if (rest.startsWithChar ('#')) { ++key; rest = rest.substring (1); }
+                else if (rest.startsWithChar ('B')) { --key; rest = rest.substring (1); }
+                return juce::jlimit (0, 127, key + 12 * (rest.getIntValue() + 2));
+            }
+            // The key nearest to one, lower on ties, that the clip's scale or Drum Rack has, as the reference snaps its
+            // key controls.
+            int nearestKey (int key) const
+            {
+                const auto has = [this] (int k) { return (! context.drumKeys || context.drumKeys->test ((size_t) k)) && (! context.scale || Session::inScale (*context.scale, k)); };
+                for (int distance = 0; distance < 128; ++distance)
+                {
+                    if (key - distance >= 0 && has (key - distance)) return key - distance;
+                    if (key + distance <= 127 && has (key + distance)) return key + distance;
+                }
+                return key;
+            }
+            void change (size_t i, double value)
+            {
+                const auto tool = settings.tool;
+                if (tool == Session::NoteTool::rhythm && i == 1) { wantedPattern = value; wantedPatterns = notetools::range (settings, 1, grid, context).second + 1; }
+                if ((tool == Session::NoteTool::rhythm && i == 7) || (tool == Session::NoteTool::shape && (i == 4 || i == 5))) value = nearestKey ((int) value);
+                if (tool == Session::NoteTool::shape)
+                {
+                    // Raising the lowest key pushes the highest up, and lowering the highest pushes the lowest down.
+                    if (i == 4 && value > settings.values[5]) settings.values[5] = value;
+                    if (i == 5 && value < settings.values[4]) settings.values[4] = value;
+                    if (i == 0 && value != 0) settings.levels.clear();
+                }
+                settings.values[i] = value;
+                remember(); refresh();
+            }
+            // Rhythm's Pattern keeps its place among the patterns as Steps and Density change their number, as the
+            // reference's does from the value and range last chosen.
+            void remapPattern()
+            {
+                const auto count = notetools::range (settings, 1, grid, context).second + 1;
+                double value = 0;
+                if (count >= 2)
+                {
+                    value = wantedPatterns == count ? wantedPattern : (double) (float) std::fma (wantedPatterns >= 2 ? wantedPattern / (wantedPatterns - 1) : 0.0, count - 1, 0.0);
+                    value = std::floor (std::clamp (value, 0.0, count - 1) + 0.5);
+                }
+                settings.values[1] = value;
+            }
+            std::vector<float> levelsShown() const
+            {
+                if (shown.values[0] == 0 && shown.levels.size() == 21) return shown.levels;
+                const auto preset = notetools::shapeLevels ((int) shown.values[0]);
+                return { preset.begin(), preset.end() };
+            }
+            void drawLevels (int from, float fromLevel, int to, float toLevel)
+            {
+                if (settings.values[0] != 0 || settings.levels.size() != 21) settings.levels = levelsShown();
+                for (int i = std::min (from, to); i <= std::max (from, to); ++i)
+                    settings.levels[(size_t) i] = from == to ? toLevel : fromLevel + (toLevel - fromLevel) * (float) (i - from) / (float) (to - from);
+                settings.values[0] = 0;
+                remember(); refresh();
+            }
+            void toggleBreakpoint (size_t k)
+            {
+                auto& active = settings.values[3 * k + 2];
+                if (active > 0)
+                {
+                    int on = 0;
+                    for (size_t j = 0; j < 3; ++j) on += settings.values[3 * j + 2] > 0 ? 1 : 0;
+                    if (on <= 1) { refresh(); return; } // At least one breakpoint stays on.
+                    active = 0;
+                    if (selectedBreakpoint == (int) k)
+                        for (size_t j = 0; j < 3; ++j) if (settings.values[3 * j + 2] > 0) { selectedBreakpoint = (int) j; break; }
+                }
+                else
+                {
+                    active = 1;
+                    const auto [low, high] = notetools::range (settings, 3 * k, grid, context);
+                    settings.values[3 * k] = std::clamp (settings.values[3 * k], low, high);
+                    selectedBreakpoint = (int) k;
+                }
+                remember(); refresh();
+            }
+            void moveBreakpoint (size_t k, double time, double value)
+            {
+                const auto [low, high] = notetools::range (settings, 3 * k, grid, context);
+                settings.values[3 * k] = std::clamp (time, low, high);
+                settings.values[3 * k + 1] = std::clamp (value, 0.0, 1.0);
+                selectedBreakpoint = (int) k;
+                remember(); refresh();
+            }
+            template <typename Edit> void editChord (Edit edit)
+            {
+                if (settings.chords.empty()) return;
+                edit (settings.chords[(size_t) selectedChord]);
+                remember(); refresh();
+            }
+        public:
+            // Shows the values the tool will play with, in the ranges the time range, grid, scale and pads leave.
+            void refresh()
+            {
+                if (roll == nullptr) return;
+                context = roll->toolContext(); grid = roll->snapBeats();
+                if (settings.tool == Session::NoteTool::rhythm) remapPattern();
+                shown = notetools::limited (settings, grid, context);
+                const juce::ScopedValueSetter<bool> quiet (updating, true);
+                const auto fields = notetools::fields (settings.tool);
+                for (const auto i : rows)
+                {
+                    if (fields[i].choices) { choices[i].setSelectedId ((int) shown.values[i] + 1, juce::dontSendNotification); continue; }
+                    const auto [low, high] = notetools::range (settings, i, grid, context);
+                    sliders[i].setEnabled (high > low);
+                    sliders[i].setRange (low, high > low ? high : low + 1, fields[i].integer ? 1.0 : 0.0);
+                    sliders[i].setValue (shown.values[i], juce::dontSendNotification);
+                }
+                if (settings.tool == Session::NoteTool::rhythm) sliders[4].setEnabled (shown.values[3] == 1); // Repetitions count with Fit.
+                if (settings.tool == Session::NoteTool::shape) choices[0].setItemEnabled (1, shown.values[0] == 0); // User only while drawn.
+                if (settings.tool == Session::NoteTool::timeWarp)
+                {
+                    if (shown.values[(size_t) selectedBreakpoint * 3 + 2] <= 0)
+                        for (size_t j = 0; j < 3; ++j) if (shown.values[3 * j + 2] > 0) { selectedBreakpoint = (int) j; break; }
+                    for (size_t k = 0; k < 3; ++k) breakpointButtons[k].setToggleState (shown.values[3 * k + 2] > 0, juce::dontSendNotification);
+                    const auto k = (size_t) selectedBreakpoint;
+                    const auto [low, high] = notetools::range (settings, 3 * k, grid, context);
+                    breakpointTime.setRange (low, high > low ? high : low + 1e-6, 0); breakpointTime.setEnabled (high > low);
+                    breakpointTime.setValue (shown.values[3 * k], juce::dontSendNotification);
+                    breakpointSpeed.setValue (shown.values[3 * k + 1], juce::dontSendNotification);
+                    timeLabel.setText ("Time " + juce::String ((int) k + 1), juce::dontSendNotification);
+                    speedLabel.setText ("Speed " + juce::String ((int) k + 1), juce::dontSendNotification);
+                }
+                if (settings.tool == Session::NoteTool::stacks) refreshChords();
+                shapeView.repaint(); warpView.repaint();
+            }
+        private:
+            void refreshChords()
+            {
+                selectedChord = juce::jlimit (0, (int) shown.chords.size() - 1, selectedChord);
+                if (chordButtons.size() != shown.chords.size())
+                {
+                    chordButtons.clear();
+                    for (size_t k = 0; k < shown.chords.size(); ++k)
+                    {
+                        auto button = std::make_unique<juce::TextButton> (juce::String ((int) k + 1));
+                        button->setName ("Chord " + juce::String ((int) k + 1));
+                        button->setColour (juce::TextButton::buttonOnColourId, orange.withAlpha (.75f));
+                        button->onClick = [this, k] { selectedChord = (int) k; refresh(); };
+                        addAndMakeVisible (*button);
+                        chordButtons.push_back (std::move (button));
+                    }
+                    resized();
+                }
+                for (size_t k = 0; k < chordButtons.size(); ++k) chordButtons[k]->setToggleState ((int) k == selectedChord, juce::dontSendNotification);
+                addChord.setEnabled (shown.chords.size() < (size_t) Session::maximumStacksChords); deleteChord.setEnabled (shown.chords.size() > 1);
+                const auto& chord = shown.chords[(size_t) selectedChord];
+                // Each rule named by the keys it plays from this chord's root.
+                ruleBox.clear (juce::dontSendNotification);
+                const auto& rules = notetools::stacksRules ((int) notetools::scaleSteps (context.scale).size());
+                for (size_t r = 0; r < rules.size(); ++r)
+                {
+                    auto plain = chord; plain.rule = (int) r; plain.inversion = 0;
+                    juce::StringArray keys;
+                    for (const auto key : notetools::stacksPitches (plain, context)) keys.add (midimonitor::noteName (key).retainCharacters ("ABCDEFG#"));
+                    ruleBox.addItem (juce::String ((int) r + 1) + "   " + keys.joinIntoString (" "), (int) r + 1);
+                }
+                ruleBox.setSelectedId (chord.rule + 1, juce::dontSendNotification);
+                // The roots there are: each degree in each octave, or the pads of a Drum Rack.
+                rootBox.clear (juce::dontSendNotification);
+                std::set<int> roots;
+                if (context.drumKeys) { for (int key = 0; key < 128; ++key) if (context.drumKeys->test ((size_t) key)) roots.insert (nearestKey (key)); }
+                else
+                    for (int octave = -2; octave <= 8; ++octave)
+                        for (int degree = 0; degree < (int) notetools::scaleSteps (context.scale).size(); ++degree)
+                            if (const auto key = notetools::stacksRoot ({ 0, degree, octave }, context); key >= 0 && key <= 127) roots.insert (key);
+                for (const auto key : roots) rootBox.addItem (midimonitor::noteName (key), key + 1);
+                rootBox.setSelectedId (notetools::stacksRoot (chord, context) + 1, juce::dontSendNotification);
+                const auto most = (double) rules[(size_t) chord.rule].size() - 1;
+                inversionSlider.setRange (-most, most, 1); inversionSlider.setValue (chord.inversion, juce::dontSendNotification);
+                durationSlider.setValue (chord.duration, juce::dontSendNotification); offsetSlider.setValue (chord.offset, juce::dontSendNotification);
+            }
             // The tool keeps its settings for the next time, as Edit > Quantize uses Quantize's.
             void remember() { if (roll != nullptr) roll->toolSettings[(int) settings.tool] = settings; }
             juce::Component::SafePointer<PianoRoll> roll;
-            std::array<juce::Label, 8> labels;
-            std::array<juce::ComboBox, 8> choices;
-            std::array<ValueSlider, 8> sliders;
+            notetools::Context context;
+            double grid = .25;
+            Session::NoteToolSettings shown;
+            bool updating = false;
+            double wantedPattern = 0, wantedPatterns = 1;
+            std::array<juce::Label, 16> labels;
+            std::array<juce::ComboBox, 16> choices;
+            std::array<ValueSlider, 16> sliders;
+            std::vector<size_t> rows;
+            ShapeView shapeView;
+            WarpView warpView;
+            juce::Label breakpointLabel, timeLabel, speedLabel;
+            std::array<juce::TextButton, 3> breakpointButtons;
+            ValueSlider breakpointTime, breakpointSpeed;
+            std::vector<std::unique_ptr<juce::TextButton>> chordButtons;
+            juce::TextButton addChord, deleteChord;
+            std::array<juce::Label, 5> chordLabels;
+            juce::ComboBox ruleBox, rootBox;
+            ValueSlider inversionSlider, durationSlider, offsetSlider;
             juce::Label hint;
-            int rows = 0;
         };
         // Each tool's settings as last chosen, or its defaults.
         std::map<int, Session::NoteToolSettings> toolSettings;
@@ -10846,6 +11240,13 @@ private:
         {
             const auto found = toolSettings.find ((int) tool);
             return found != toolSettings.end() ? found->second : notetools::defaults (tool);
+        }
+        // Where Rhythm, Shape, Stacks and Time Warp work in the edited clip: the time selection, or its loop.
+        notetools::Context toolContext() const
+        {
+            const auto* clip = owner.currentMidiClip();
+            if (clip == nullptr) return {};
+            return owner.session.noteToolContext (clip->id, timeRange).value_or (notetools::Context {});
         }
         // Edit > Quantize, as the reference's: the Quantize tool's settings, applied to the selected notes or every note.
         void quantizeNotes() { applyNoteTool (toolSettingsFor (Session::NoteTool::quantize)); }
@@ -10858,17 +11259,22 @@ private:
             { initial.values[0] = clip->scale.root; initial.values[1] = clip->scale.mode; }
             owner.showDialog (juce::String (notetools::name (tool)), std::make_unique<NoteToolPanel> (*this, initial), 340, NoteToolPanel::heightFor (tool));
         }
-        void applyNoteTool (const Session::NoteToolSettings& settings)
+        void applyNoteTool (Session::NoteToolSettings settings)
         {
             const auto* clip = owner.currentMidiClip(); if (! clip) return;
             currentTool = settings.tool;
             endGesture();
             const bool generator = notetools::generates (settings.tool);
+            // The selected notes; with none, a transformation takes those starting in the time selection, or every note.
             juce::StringArray ids;
             for (const auto& note : clip->notes)
-                if (selectedNoteIds.empty() ? ! generator : selectedNoteIds.contains (note.id)) ids.add (note.id);
+                if (! selectedNoteIds.empty() ? selectedNoteIds.contains (note.id)
+                                              : ! generator && (! timeRange || (note.startBeat >= timeRange->first && note.startBeat < timeRange->second)))
+                    ids.add (note.id);
+            // A new seed each time, as the reference draws one whenever a tool is applied.
+            settings.seed = (std::uint32_t) juce::Random::getSystemRandom().nextInt();
             juce::StringArray created;
-            const auto result = owner.session.applyNoteTool (clip->id, ids, settings, created, snapBeats());
+            const auto result = owner.session.applyNoteTool (clip->id, ids, settings, created, snapBeats(), timeRange);
             owner.report (result); owner.refresh();
             if (result.wasOk())
             {
@@ -20239,6 +20645,94 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         pianoRoll.keyPressed (undo);
         check (currentMidiClip()->notes.size() == before.size(), "one undo restores them");
         if (auto* window = panel->findParentComponentOfClass<juce::DialogWindow>()) delete window;
+    }
+    {
+        // Rhythm, Shape, Stacks and Time Warp, after the reference's tools, open with their own controls and work in
+        // the time selection or the clip's loop.
+        const auto toolPanel = [&] (Session::NoteTool tool) -> juce::Component*
+        {
+            pianoRoll.openNoteTool (tool);
+            for (int w = 0; w < juce::TopLevelWindow::getNumTopLevelWindows(); ++w)
+                if (auto* window = juce::TopLevelWindow::getTopLevelWindow (w))
+                    if (auto* found = findNamed (*window, "Note tool " + juce::String (notetools::name (tool)))) return found;
+            return nullptr;
+        };
+        // With HALFTRACK_TEST_UI_SNAPSHOT_DIRECTORY set, each panel's picture is kept for review; closing it first.
+        const auto closePanel = [] (juce::Component* panel)
+        {
+            if (const auto* configured = std::getenv ("HALFTRACK_TEST_UI_SNAPSHOT_DIRECTORY"))
+                if (const juce::File directory (juce::String::fromUTF8 (configured)); directory.createDirectory().wasOk())
+                {
+                    juce::PNGImageFormat png;
+                    const auto output = directory.getChildFile (panel->getName().replaceCharacter (' ', '-').toLowerCase() + ".png");
+                    if (auto stream = output.createOutputStream(); stream && stream->setPosition (0) && stream->truncate().wasOk()
+                        && png.writeImageToStream (panel->createComponentSnapshot (panel->getLocalBounds(), true, 1.0f), *stream))
+                        std::cout << "UI SNAPSHOT " << output.getFullPathName() << std::endl;
+                }
+            if (auto* window = panel->findParentComponentOfClass<juce::DialogWindow>()) delete window;
+        };
+        const auto applyPanel = [&] (juce::Component& panel) { dynamic_cast<juce::Button*> (findNamed (panel, "Apply note tool"))->onClick(); refresh(); };
+        const auto ids = [&]
+        {
+            std::set<juce::String> result;
+            for (const auto& note : currentMidiClip()->notes) result.insert (note.id);
+            return result;
+        };
+        pianoRoll.keyPressed (juce::KeyPress (juce::KeyPress::escapeKey));
+        const auto before = currentMidiClip()->notes;
+        auto* rhythm = toolPanel (Session::NoteTool::rhythm);
+        auto* steps = rhythm != nullptr ? dynamic_cast<juce::Slider*> (findNamed (*rhythm, "Steps")) : nullptr;
+        auto* repetitions = rhythm != nullptr ? dynamic_cast<juce::Slider*> (findNamed (*rhythm, "Repetitions")) : nullptr;
+        check (steps != nullptr && repetitions != nullptr && steps->getValue() == 8 && ! repetitions->isEnabled(), "Generate > Rhythm opens with 8 steps, Repetitions waiting for Fit");
+        dynamic_cast<juce::ComboBox*> (findNamed (*rhythm, "Step Duration"))->setSelectedId (2, juce::sendNotificationSync);
+        check (repetitions->isEnabled() && steps->getMaximum() == 16, "Fit allows Repetitions and 16 steps");
+        applyPanel (*rhythm);
+        check (currentMidiClip()->notes.size() > before.size() && pianoRoll.hasSelectedNote(), "Apply fills the clip's loop with the rhythm and selects it");
+        pianoRoll.keyPressed (undo);
+        check (ids().size() == before.size(), "one undo removes it");
+        closePanel (rhythm);
+        pianoRoll.keyPressed (juce::KeyPress (juce::KeyPress::escapeKey));
+        auto* stacks = toolPanel (Session::NoteTool::stacks);
+        check (stacks != nullptr && findNamed (*stacks, "Chord 1") != nullptr && findNamed (*stacks, "Chord 2") == nullptr, "Generate > Stacks opens with one chord");
+        dynamic_cast<juce::Button*> (findNamed (*stacks, "Add Chord"))->onClick();
+        auto* second = dynamic_cast<juce::Button*> (findNamed (*stacks, "Chord 2"));
+        check (second != nullptr && second->getToggleState(), "+ adds a chord after it, selected");
+        dynamic_cast<juce::ComboBox*> (findNamed (*stacks, "Chord Root"))->setSelectedId (67 + 1, juce::sendNotificationSync);
+        applyPanel (*stacks);
+        std::multiset<int> added;
+        for (const auto& note : currentMidiClip()->notes)
+            if (std::none_of (before.begin(), before.end(), [&] (const auto& old) { return old.id == note.id; })) added.insert (note.pitch);
+        check (added == std::multiset<int> { 60, 64, 67, 67, 71, 74 }, "Apply plays C major and then, its root set to G3, G major");
+        pianoRoll.keyPressed (undo);
+        dynamic_cast<juce::Button*> (findNamed (*stacks, "Delete Chord"))->onClick();
+        check (findNamed (*stacks, "Chord 2") == nullptr && ids().size() == before.size(), "- deletes the selected chord");
+        closePanel (stacks);
+        auto* shape = toolPanel (Session::NoteTool::shape);
+        auto* display = shape != nullptr ? findNamed (*shape, "Shape display") : nullptr;
+        auto* presets = shape != nullptr ? dynamic_cast<juce::ComboBox*> (findNamed (*shape, "Shape")) : nullptr;
+        check (display != nullptr && presets != nullptr && presets->getText() == "Up" && ! presets->isItemEnabled (1), "Generate > Shape opens on Up, User waiting for a drawn shape");
+        const auto middle = display->getLocalBounds().getCentre().toFloat();
+        display->mouseDown (event (middle, middle)); display->mouseDrag (event (middle.translated (40, -20), middle, true)); display->mouseUp (event (middle.translated (40, -20), middle, true));
+        check (presets->getText() == "User" && presets->isItemEnabled (1), "drawing on its display makes the shape User's");
+        closePanel (shape);
+        pianoRoll.keyPressed (juce::KeyPress ('a', juce::ModifierKeys (juce::ModifierKeys::commandModifier), 0));
+        const auto unwarped = ids();
+        auto* warp = toolPanel (Session::NoteTool::timeWarp);
+        auto* middleBreakpoint = warp != nullptr ? dynamic_cast<juce::Button*> (findNamed (*warp, "Breakpoint 2")) : nullptr;
+        check (middleBreakpoint != nullptr && ! middleBreakpoint->getToggleState() && dynamic_cast<juce::Button*> (findNamed (*warp, "Breakpoint 1"))->getToggleState()
+                   && findNamed (*warp, "Breakpoints display") != nullptr, "Transform > Time Warp opens with its first and last breakpoints on");
+        middleBreakpoint->onClick();
+        check (middleBreakpoint->getToggleState(), "a breakpoint's button turns it on");
+        dynamic_cast<juce::Slider*> (findNamed (*warp, "Breakpoint Speed"))->setValue (.9, juce::sendNotificationSync);
+        applyPanel (*warp);
+        bool moved = false;
+        for (const auto& note : currentMidiClip()->notes)
+            for (const auto& old : before) moved = moved || (old.id == note.id && std::abs (old.startBeat - note.startBeat) > 1e-6);
+        check (ids() == unwarped && moved, "Apply warps the selected notes, keeping them");
+        pianoRoll.keyPressed (undo);
+        closePanel (warp);
+        for (const auto tool : { Session::NoteTool::rhythm, Session::NoteTool::shape, Session::NoteTool::stacks, Session::NoteTool::timeWarp }) pianoRoll.toolSettings.erase ((int) tool);
+        pianoRoll.keyPressed (juce::KeyPress (juce::KeyPress::escapeKey));
     }
     {
         // The Scale switch and menus set the clip's scale; Fit to Scale opens with it.

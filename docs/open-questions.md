@@ -259,7 +259,7 @@ Beats are quarter notes at every meter, so the tempo counts quarter notes and 6/
 
 ### MIDI note tool defaults
 
-The note tools use Halftrack's own algorithms and parameter sets (for example, Strum keeps each note's end, and Connect interpolates passing-note pitches linearly). They apply on demand rather than previewing live. Generators add notes across the whole clip and replace only chosen notes. These are simplest-default choices pending reference measurement.
+The note tools other than Rhythm, Shape, Stacks, Time Warp and Quantize use Halftrack's own algorithms and parameter sets (for example, Strum keeps each note's end, and Connect interpolates passing-note pitches linearly). They apply on demand rather than previewing live. Euclidean and Seed add notes across the whole clip and replace only chosen notes. These are simplest-default choices pending reference measurement.
 
 ### Timeline navigation defaults
 
@@ -469,6 +469,18 @@ These are simplest defaults pending a comparison with the reference:
 - **Clicks** snap the marker to the grid, unless Alt is held.
 - **Scrubbing.** The reference's manual gives the scrub area's click, quantized jumps and hold looping, but not their details. Halftrack's defaults: the clicked time rounds down to the launch grid; a jump while playing lands keeping time; without quantization a held scrub does not loop; dragging scrubs on; a scrub moves the insert marker; with Permanent Scrub Areas off a plain click places the insert marker, and Shift then scrubs instead of drawing a loop. Jumps are timed from the message thread rather than in the engine, whose scheduled jumps cannot be withdrawn.
 - **The beat-time ruler.** Dragging the bar numbers keeps the pressed time under the pointer, and zooms 1% a pixel, down zooming in, as Halftrack's overview does. The reference's rate and scroll direction were not read.
+
+### Rhythm, Shape, Stacks and Time Warp
+
+The static reading of the reference's binary left these open, and Halftrack takes the simplest reasonable default for each (see the [MIDI tools contract](research/midi-tools-contract.md#rhythm-shape-stacks-and-time-warp-2026-10-25)):
+
+- **Rhythm's clearing.** Rhythm clears the notes of its key that *start* in the range; the reference's rule (start or overlap) was not decoded.
+- **Rhythm's Pattern.** Pattern shows its index from 0, as the binary stores it; the reference's display, and whether it counts from 1, live in its encrypted resources.
+- **Transformations in a time selection.** With a time selection and no notes selected, transformations take the notes starting in it.
+- **Time Warp's breakpoints.** All three breakpoints can move and be turned off, at least one staying on, and their times read as a percentage of the range (the reference shows bars and beats). Whether its window lets the first and last move was not determined.
+- **Stacks' chord bank.** It is Halftrack's own, with rules for scales of 5, 7 and 12 notes. The reference's bank file is not copied, and chord banks cannot be loaded.
+- **Overlapping notes.** Generated notes do not otherwise replace the existing notes they overlap; the reference's manual says generated notes replace the notes they overlap, and its merge works "per key".
+- **The interface.** The tools open as windows applied with a button, not the reference's Clip View panels with Auto Apply.
 
 ### Missing media matching
 

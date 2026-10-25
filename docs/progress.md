@@ -2921,3 +2921,15 @@ Engine, UI and root areas. As the reference's manual describes (chapter 13), Con
 ## Samples onto take lanes — 2026-10-25
 
 Engine and UI areas. As the reference's manual describes (section 21.4), sounds dropped onto a take lane from the Finder or the browser now go into it, several one after another, or with Cmd one to a lane, new lanes made as needed (`Session::importAudioToTakeLane`, one undo step) ([take lanes contract](research/take-lanes-contract.md#samples-onto-lanes-2026-10-25)). Checked in the take lanes and UI suites.
+
+## Rhythm, Shape, Stacks and Time Warp — 2026-10-25
+
+Engine, UI and root areas. A research agent read the reference's four native MIDI Tools statically from its binary, and Halftrack now computes them with its arithmetic step by step: its beat-time rounding, fused multiply-adds and libc++ random draws, reproduced so every platform draws the same ([MIDI tools contract](research/midi-tools-contract.md#rhythm-shape-stacks-and-time-warp-2026-10-25)).
+
+- **Rhythm, Shape and Stacks** are generators in the time selection or the clip's loop brace (`Session::noteToolContext`). Rhythm's ranges narrow as the reference's do and it clears its key in the range. Shape follows a preset or a drawn contour. Stacks plays one to 16 chords from Halftrack's own chord bank.
+- **Time Warp** moves the chosen notes through a speed curve, keeping them.
+- **Scale and pads.** The tools play the clip's scale while it is on, and a Drum Rack's pads.
+- **Settings.** `NoteToolSettings` now holds 16 values, chords, drawn levels and a seed; the interface draws a new seed each time it applies a tool.
+- **Selection.** With nothing selected, transformations take the notes starting in the time selection.
+- **Build.** CMakeLists builds `src/NoteTools.cpp` without floating-point contraction.
+- **Tests.** The midi-tools suite compares the four tools with the research model's output bit for bit and checks their Session merges; the UI suite drives each window.

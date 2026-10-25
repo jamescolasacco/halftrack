@@ -2,6 +2,7 @@
 #include "Session.h"
 #include <cmath>
 #include <iostream>
+#include <set>
 #include <stdexcept>
 
 // Note tools. Each tool's result is computed by hand for small inputs and compared note by
@@ -34,6 +35,29 @@ std::vector<Note> run (Tool tool, std::initializer_list<std::pair<int, double>> 
 { return notetools::run (settings (tool, values), notes, clip); }
 void expect (const std::vector<Note>& actual, const std::vector<Note>& expected, const juce::String& text)
 { check (same (actual, expected), text + " (" + describe (actual) + ")"); }
+// A note the research model of the reference's tools printed: start and length to the last bit, velocity (and release
+// velocity) and key.
+struct Exact { double start, length; int velocity, pitch; };
+bool exactly (const std::vector<Note>& actual, const std::vector<Exact>& expected)
+{
+    if (actual.size() != expected.size()) return false;
+    for (size_t i = 0; i < actual.size(); ++i)
+        if (actual[i].startBeat != expected[i].start || actual[i].lengthBeats != expected[i].length || actual[i].pitch != expected[i].pitch
+            || juce::roundToInt (actual[i].velocity * 127) != expected[i].velocity || actual[i].releaseVelocity != expected[i].velocity) return false;
+    return true;
+}
+juce::String describeExactly (const std::vector<Note>& notes)
+{
+    juce::String s;
+    for (const auto& n : notes) s << n.pitch << "@" << juce::String (n.startBeat, 17) << "+" << juce::String (n.lengthBeats, 17) << "v" << juce::roundToInt (n.velocity * 127) << " ";
+    return s.trim();
+}
+void expectExactly (const std::vector<Note>& actual, const std::vector<Exact>& expected, const juce::String& text)
+{ check (exactly (actual, expected), text + " (" + describeExactly (actual) + ")"); }
+notetools::Context range (double start, double end) { notetools::Context c; c.start = start; c.end = end; return c; }
+// A tool run in a time range, with a seed for its random draws.
+std::vector<Note> runIn (Session::NoteToolSettings s, const std::vector<Note>& notes, notetools::Context c, std::uint32_t seed = 1, double grid = .25, double clip = 16)
+{ s.seed = seed; return notetools::run (s, notes, clip, grid, c); }
 }
 
 int runMidiToolTests (const juce::File& artifacts)
@@ -120,6 +144,160 @@ int runMidiToolTests (const juce::File& artifacts)
             check (keeps.size() == 1 && keeps[0].id == "kept" && keeps[0].chance == .5f, "a quantized note keeps its identity and properties");
         }
 
+        {
+            // The reference's random draws (static reading): libc++'s minstd_rand and uniform_int_distribution.
+            notetools::ReferenceRandom random (12345);
+            std::vector<long long> draws;
+            for (int i = 0; i < 5; ++i) draws.push_back (random.uniform (1, 100));
+            check (notetools::ReferenceRandom (1).next() == 48271 && draws == std::vector<long long> { 87, 21, 83, 86, 94 },
+                   "the random draws are the reference's: minstd from seed 1, and 1 to 100 five times from seed 12345 as the model draws");
+            const auto patterns = notetools::rhythmPatterns (8, 4);
+            check (patterns.size() == 35 && notetools::rhythmPatterns (16, 4).size() == 455 && notetools::rhythmPatterns (16, 8).size() == 6435
+                       && notetools::rhythmPatterns (5, 3).size() == 6 && patterns[0] == 0b1111 && patterns[14] == 0b01010101,
+                   "Rhythm's patterns are each mask whose first step is a hit, in order: the default, the 14th of 8 steps with 4 hits, every other step");
+        }
+        {
+            // Shape's presets, as the model computed them (to four places).
+            const auto levelsAre = [] (int preset, std::initializer_list<double> expected)
+            {
+                const auto levels = notetools::shapeLevels (preset);
+                size_t i = 0;
+                for (const auto e : expected) if (std::abs (levels[i++] - e) > 6e-5) return false;
+                return i == 21;
+            };
+            check (levelsAre (1, { .5, .5, .5, .5, .5, .5, .5, .5, .5, .5, .5, .5, .5, .5, .5, .5, .5, .5, .5, .5, .5 })
+                       && levelsAre (2, { 0, .05, .1, .15, .2, .25, .3, .35, .4, .45, .5, .55, .6, .65, .7, .75, .8, .85, .9, .95, 1 })
+                       && levelsAre (4, { 0, .1, .2, .3, .4, .5, .6, .7, .8, .9, 1, .9, .8, .7, .6, .5, .4, .3, .2, .1, 0 })
+                       && levelsAre (5, { 1, .9, .8, .7, .6, .5, .4, .3, .2, .1, 0, .1, .2, .3, .4, .5, .6, .7, .8, .9, 1 })
+                       && levelsAre (6, { 0, .1495, .296, .4365, .568, .6875, .792, .8785, .944, .9855, 1, .9855, .944, .8785, .792, .6875, .568, .4365, .296, .1495, 0 })
+                       && levelsAre (7, { 1, .8505, .704, .5635, .432, .3125, .208, .1215, .056, .0145, 0, .0145, .056, .1215, .208, .3125, .432, .5635, .704, .8505, 1 })
+                       && levelsAre (8, { 0, .1733, .3367, .48, .5933, .6667, .6867, .66, .6067, .5467, .5, .4533, .3933, .34, .3133, .3333, .4067, .52, .6633, .8267, 1 })
+                       && levelsAre (9, { 1, .8267, .6633, .52, .4067, .3333, .3133, .34, .3933, .4533, .5, .5467, .6067, .66, .6867, .6667, .5933, .48, .3367, .1733, 0 }),
+                   "Shape's presets are the reference's lines and curves");
+        }
+        {
+            // Rhythm, against the research model's output to the last bit.
+            const auto rhythm = [&] (std::initializer_list<std::pair<int, double>> values, std::uint32_t seed, notetools::Context c = range (0, 4), double grid = .25)
+            { return runIn (settings (Tool::rhythm, values), {}, c, seed, grid); };
+            expectExactly (rhythm ({ { 1, 0 } }, 1), { { 0, .5, 127, 36 }, { .5, .5, 100, 36 }, { 1, .5, 100, 36 }, { 1.5, .5, 100, 36 } },
+                           "Rhythm's first pattern of 8 eighths fills a bar's first half, its first note accented, as the model's");
+            expectExactly (rhythm ({ { 0, 16 }, { 1, 7 }, { 2, 5 }, { 3, 9 }, { 5, .5 }, { 6, 2 }, { 10, 3 }, { 11, 1 } }, 987654),
+                           { { .5, .125, 100, 36 }, { .625, .125, 127, 36 }, { .75, .125, 100, 36 }, { .875, .125, 100, 36 }, { 1.25, .25, 127, 36 },
+                             { 1.5, .25, 100, 36 }, { 2, .125, 100, 36 }, { 2.125, .125, 127, 36 } },
+                           "16 sixteenths with 5 hits, split by chance, shifted two steps, accenting every third note from the second, as the model's");
+            expectExactly (rhythm ({}, 1), { { 0, .5, 127, 36 }, { 1, .5, 100, 36 }, { 2, .5, 100, 36 }, { 3, .5, 100, 36 } },
+                           "by default every other eighth of a bar plays C1, accenting every fourth note");
+            const auto muted = rhythm ({ { 8, 0 }, { 10, 0 } }, 1);
+            check (muted.size() == 4 && std::all_of (muted.begin(), muted.end(), [] (const Note& n) { return ! n.active && juce::roundToInt (n.velocity * 127) == 1; }),
+                   "a velocity of 0 gives muted notes of velocity 1, with no accents at an Accent Frequency of 0");
+            const auto fit = rhythm ({ { 3, 1 }, { 4, 2 } }, 1);
+            check (fit.size() == 8 && fit.back().startBeat == 3.5 && fit.back().lengthBeats == .25, "Fit fits Steps times Repetitions steps into the range");
+            auto wide = settings (Tool::rhythm, { { 0, 16 }, { 10, 9 }, { 11, 7 } });
+            check (notetools::range (wide, 0, .25, range (0, 2)) == std::pair { 1.0, 4.0 } && notetools::range (wide, 1, .25, range (0, 2)) == std::pair { 0.0, 0.0 }
+                       && notetools::range (wide, 10, .25, range (0, 2)) == std::pair { 0.0, 4.0 },
+                   "two beats of eighths leave room for 4 steps, one pattern of 4 hits and accents up to every fourth");
+            const auto narrowed = notetools::limited (wide, .25, range (0, 2));
+            check (narrowed.values[0] == 4 && narrowed.values[2] == 4 && narrowed.values[1] == 0 && narrowed.values[10] == 4 && narrowed.values[11] == 3
+                       && notetools::limited (wide, .25, range (0, 16)).values[0] == 16,
+                   "the steps, hits, pattern and accents narrow to fit, and widen again with the range");
+        }
+        {
+            // Shape, against the model.
+            const auto up = settings (Tool::shape, {});
+            expectExactly (runIn (up, {}, range (0, 4), 5),
+                           { { 0, .25, 64, 60 }, { .25, .25, 64, 62 }, { .5, .25, 64, 63 }, { .75, .25, 64, 65 }, { 1, .25, 64, 66 }, { 1.25, .25, 64, 68 },
+                             { 1.5, .25, 64, 70 }, { 1.75, .25, 64, 71 }, { 2, .25, 64, 73 }, { 2.25, .25, 64, 74 }, { 2.5, .25, 64, 76 }, { 2.75, .25, 64, 78 },
+                             { 3, .25, 64, 79 }, { 3.25, .25, 64, 81 }, { 3.5, .25, 64, 82 }, { 3.75, .25, 64, 84 } },
+                           "Shape's Up climbs from C3 to C5 on the grid's sixteenths, as the model's");
+            expectExactly (runIn (settings (Tool::shape, { { 2, .5 }, { 3, .75 }, { 6, 1 } }), {}, range (0, 4), 5),
+                           { { 0, .25, 64, 63 }, { .25, .75, 64, 62 }, { 1, 1.25, 64, 68 }, { 2.75, .25, 64, 70 }, { 3, .25, 64, 73 }, { 3.75, .25, 64, 74 } },
+                           "with Tie, Density and Jitter its notes tie, rest and stray from the shape, as the model's");
+            check (same (runIn (up, {}, range (0, 4), 9), runIn (up, {}, range (0, 4), 9)) && ! same (runIn (settings (Tool::shape, { { 6, 1 } }), {}, range (0, 4), 9),
+                                                                                                      runIn (settings (Tool::shape, { { 6, 1 } }), {}, range (0, 4), 10)),
+                   "a seed repeats its draws, and another jitters differently");
+            auto scaled = range (0, 4); scaled.scale = Session::ScaleSettings { true, 0, 9 };
+            const auto pentatonic = runIn (up, {}, scaled, 5);
+            check (! pentatonic.empty() && std::all_of (pentatonic.begin(), pentatonic.end(), [] (const Note& n) { return Session::inScale ({ true, 0, 9 }, n.pitch); }),
+                   "with the clip's scale on it plays only the scale's keys");
+            auto drawn = settings (Tool::shape, { { 0, 0 } });
+            check (! notetools::valid (drawn), "a drawn shape needs its levels");
+            drawn.levels.assign (21, 1.0f);
+            const auto top = runIn (drawn, {}, range (0, 1), 5);
+            check (notetools::valid (drawn) && top.size() == 4 && std::all_of (top.begin(), top.end(), [] (const Note& n) { return n.pitch == 84; }), "a drawn shape at the top plays the highest key");
+            const std::vector<Note> kept { note (50, 0, 1) };
+            auto none = settings (Tool::shape, { { 4, 61 }, { 5, 61 } });
+            auto major = range (0, 4); major.scale = Session::ScaleSettings { true, 0, 0 };
+            check (same (runIn (none, kept, major, 5), kept), "with no key of the scale in its range it passes the notes through");
+            check (! notetools::valid (settings (Tool::shape, { { 4, 70 }, { 5, 60 } })) && ! notetools::valid ([] { auto s = notetools::defaults (Tool::strum); s.levels.assign (21, 0); return s; }()),
+                   "the lowest key may not pass the highest, and only Shape draws levels");
+        }
+        {
+            // Stacks, with Halftrack's own chord bank.
+            auto stacks = notetools::defaults (Tool::stacks);
+            check (notetools::valid (stacks) && stacks.chords.size() == 1 && notetools::stacksRules (12).size() == 16 && notetools::stacksRules (6) == notetools::stacksRules (7),
+                   "Stacks starts with one chord; the bank has 16 rules a scale size, scales of other sizes taking the 7-note rules");
+            expectExactly (runIn (stacks, {}, range (0, 4)), { { 0, 4, 64, 60 }, { 0, 4, 64, 64 }, { 0, 4, 64, 67 } }, "its first chord is C major at C3 across the range");
+            stacks.chords = { { 0, 0, 3, 0, 1, 0 }, { 2, 4, 3, 1, .5, .25 }, { 8, 5, 3, -1, 1.875, -.875 } };
+            auto cMajor = range (0, 8); cMajor.scale = Session::ScaleSettings { true, 0, 0 };
+            constexpr double slot = 8.0 / 3;
+            expectExactly (runIn (stacks, {}, cMajor),
+                           { { 0, slot, 64, 60 }, { 0, slot, 64, 64 }, { 0, slot, 64, 67 }, { 3, 5, 64, 67 }, { 3, 5, 64, 69 }, { 3, 5, 64, 72 }, { 3, 5, 64, 76 },
+                             { 10.0 / 3, 4.0 / 3, 64, 72 }, { 10.0 / 3, 4.0 / 3, 64, 74 }, { 10.0 / 3, 4.0 / 3, 64, 79 } },
+                           "in C major, three chords share the range, each sized and placed in eighths: a triad, an inverted sus4 and an Am7 inverted down");
+            check (notetools::stacksDegree (64, cMajor) == std::pair { 2, 3 } && notetools::stacksDegree (61, cMajor) == std::pair { 0, 3 }
+                       && notetools::stacksRoot ({ 0, 2, 3 }, cMajor) == 64 && notetools::stacksRoot ({ 0, 2, 3 }, range (0, 4)) == 62,
+                   "a root key is a degree and octave of the scale, snapping down to the scale");
+            auto aMinor = range (0, 4); aMinor.scale = Session::ScaleSettings { true, 9, 1 };
+            check (notetools::stacksDegree (72, aMinor) == std::pair { 2, 3 } && notetools::stacksRoot ({ 0, 2, 3 }, aMinor) == 72, "in A minor too");
+            auto pads = range (0, 4); pads.drumKeys = std::bitset<128> {};
+            for (int key = 36; key < 44; ++key) pads.drumKeys->set ((size_t) key);
+            stacks.chords = { { 0, 0, 1, 2, 1, 0 } };
+            expectExactly (runIn (stacks, {}, pads), { { 0, 4, 64, 36 }, { 0, 4, 64, 40 }, { 0, 4, 64, 43 } }, "on a Drum Rack a chord counts pads from its root's, without inversions");
+            auto many = notetools::defaults (Tool::stacks);
+            many.chords.assign (17, {});
+            check (! notetools::valid (many) && ! notetools::valid ([] { auto s = notetools::defaults (Tool::stacks); s.chords.clear(); return s; }()), "Stacks holds one to 16 chords");
+        }
+        {
+            // Time Warp, against the model: eight notes half a beat apart, warped across four beats.
+            std::vector<Note> line;
+            for (int i = 0; i < 8; ++i) { auto n = note (60, i * .5, .25); n.id = juce::String (i); line.push_back (n); }
+            const auto warped = [&] (std::initializer_list<std::pair<int, double>> values) { return runIn (settings (Tool::timeWarp, values), line, range (0, 4)); };
+            const auto at = [] (const std::vector<Note>& notes, std::initializer_list<std::pair<double, double>> expected)
+            {
+                if (notes.size() != expected.size()) return false;
+                size_t i = 0;
+                for (const auto& [start, length] : expected) { if (notes[i].startBeat != start || notes[i].lengthBeats != length || notes[i].id != juce::String ((int) i)) return false; ++i; }
+                return true;
+            };
+            check (at (warped ({}), { { 0, .25 }, { .5, .25 }, { 1, .25 }, { 1.5, .25 }, { 2, .25 }, { 2.5, .25 }, { 3, .25 }, { 3.5, .25 } }), "at speed 1 Time Warp changes nothing");
+            const auto faster = warped ({ { 7, 1 } });
+            check (at (faster, { { 0, 0.42027035464535467 }, { 0.8162163357475858, 0.37162160755910756 }, { 1.5351351773226773, 0.32297286047286045 },
+                                 { 2.156756784881785, 0.27432437354312356 }, { 2.6810811584249086, 0.22567562645687644 }, { 3.108108037795538, 0.17702713952713953 },
+                                 { 3.4378379433066932, 0.12837839244089244 }, { 3.670270354645355, 0.07972964535464536 } }),
+                   "speeding up to 10x, preserving the range, moves and shortens the notes as the model's, each keeping its identity (" + describeExactly (faster) + ")");
+            const auto loose = warped ({ { 7, 1 }, { 10, 0 } });
+            check (at (loose, { { 0, 0.24296875 }, { 0.471875, 0.21484375 }, { 0.8875, 0.18671875 }, { 1.246875, 0.15859375 }, { 1.55, 0.13046875 },
+                                { 1.796875, 0.10234375 }, { 1.9875, 0.07421875 }, { 2.121875, 0.04609375 } }),
+                   "without Preserve Time Range the notes gather early, as the model's (" + describeExactly (loose) + ")");
+            const auto middle = warped ({ { 1, .75 }, { 4, .25 }, { 5, 1 }, { 7, .75 } });
+            check (at (middle, { { 0, 0.13479020979020978 }, { 0.29459316724941725, 0.18481544497169497 }, { 0.689237065018315, 0.24507315601065602 },
+                                 { 1.2248610764235763, 0.33602829462204464 }, { 1.942395104895105, 0.38150573384948383 }, { 2.6599291333666333, 0.2905508553946054 },
+                                 { 3.195553404928405, 0.20982819264069263 }, { 3.5901970425407925, 0.15980295745920747 } }),
+                   "a slow middle breakpoint between fast ends spreads the middle, as the model's (" + describeExactly (middle) + ")");
+            const auto snapped = warped ({ { 7, 1 }, { 11, 1 } });
+            check (std::all_of (snapped.begin(), snapped.end(), [] (const Note& n) { return std::abs (n.startBeat * 4 - std::round (n.startBeat * 4)) < 1e-12; }),
+                   "Quantize puts the warped starts on the grid");
+            const auto kept = warped ({ { 7, 1 }, { 9, 0 } });
+            check (kept.size() == 8 && std::all_of (kept.begin(), kept.end(), [] (const Note& n) { return n.lengthBeats == .25; }), "without Include Note End the lengths stay");
+            check (notetools::timeWarpSpeed (0) == 0.09999999999999999 && notetools::timeWarpSpeed (.5) == 1 && std::abs (notetools::timeWarpSpeed (1) - 10) < 1e-12
+                       && std::abs (notetools::timeWarpValue (notetools::timeWarpSpeed (.3)) - .3) < 1e-12 && std::abs (notetools::timeWarpSpeed (notetools::timeWarpValue (4)) - 4) < 1e-12,
+                   "a breakpoint's value maps to speeds of 0.1 to 10, and back");
+            check (! notetools::valid (settings (Tool::timeWarp, { { 2, 0 }, { 8, 0 } })) && ! notetools::valid (settings (Tool::timeWarp, { { 0, .6 }, { 5, 1 } })),
+                   "Time Warp needs a breakpoint on, and its breakpoints in time order");
+            check (notetools::range (settings (Tool::timeWarp, { { 5, 1 }, { 3, .25 }, { 6, .75 } }), 3, .25, range (0, 4)) == std::pair { 0.0, .75 },
+                   "a breakpoint moves between the breakpoints on either side");
+        }
+
         // Applying a tool in a clip.
         Session s (false);
         ok (s.addMidiTrack ("Keys"), "add a MIDI track");
@@ -195,6 +373,68 @@ int runMidiToolTests (const juce::File& artifacts)
         const auto broken = root.getChildFile ("Broken.halftrack"); check (xml->writeTo (broken), "write an unknown scale mode");
         const auto loaded = s.loadProject (broken);
         check (loaded.failed() && loaded.getErrorMessage().contains ("clip scale") && scaleNow() == aMinor, "an unknown scale rejects the load and keeps the open project");
+        {
+            // Rhythm, Shape, Stacks and Time Warp in a clip: the time range, Rhythm's clearing, the clip's scale and a
+            // Drum Rack's pads.
+            ok (s.addMidiTrack ("Tools"), "add another MIDI track");
+            const auto toolsTrack = s.snapshot().tracks.back().id;
+            ok (s.addMidiClip (toolsTrack, 0, 8), "an eight-beat clip");
+            const auto toolClip = s.snapshot().tracks.back().clips[0].id;
+            const auto toolNotes = [&] { const auto snapshot = s.snapshot(); return snapshot.tracks.back().clips[0].notes; };
+            juce::StringArray placed;
+            ok (s.addMidiNotes (toolClip, { note (36, 1, .25), note (36, 5, .25), note (60, 0, 1) }, placed), "C1 inside and outside a bar, and C3");
+            ok (s.applyNoteTool (toolClip, {}, notetools::defaults (Tool::rhythm), result, .25, std::pair { 0.0, 4.0 }), "generate Rhythm's default in the first bar");
+            auto now = toolNotes();
+            const auto count = [&] (int pitch, double from, double to)
+            { return std::count_if (now.begin(), now.end(), [&] (const Note& n) { return n.pitch == pitch && n.startBeat >= from && n.startBeat < to; }); };
+            check (result.size() == 4 && count (36, 0, 4) == 4 && count (36, 4, 8) == 1 && count (60, 0, 8) == 1 && s.undoDescription().containsIgnoreCase ("rhythm"),
+                   "Rhythm clears the notes of its key starting in the range and adds its own, as one step");
+            const auto accented = std::find_if (now.begin(), now.end(), [] (const Note& n) { return n.pitch == 36 && n.startBeat == 0; });
+            check (accented != now.end() && juce::roundToInt (accented->velocity * 127) == 127 && accented->releaseVelocity == 127, "its accented note has velocity and release velocity 127");
+            s.undo();
+            check (toolNotes().size() == 3, "one undo restores the notes");
+            check (s.noteToolContext (toolClip)->start == 0 && s.noteToolContext (toolClip)->end == 8 && ! s.noteToolContext (toolClip, std::pair { 9.0, 12.0 }),
+                   "the range is the clip's loop brace when nothing is selected, and a range past the clip holds nothing");
+            const auto c3 = placed[2];
+            ok (s.applyNoteTool (toolClip, { c3 }, notetools::defaults (Tool::stacks), result), "Stacks over the chosen C3, across the clip's loop");
+            now = toolNotes();
+            check (result.size() == 3 && now.size() == 5 && count (60, 0, 8) == 1 && count (64, 0, 8) == 1 && count (67, 0, 8) == 1
+                       && std::all_of (now.begin(), now.end(), [&] (const Note& n) { return n.pitch < 60 || (n.startBeat == 0 && n.lengthBeats == 8 && n.releaseVelocity == 64); }),
+                   "a generator replaces the chosen notes, its chord lasting the clip's eight beats");
+            s.undo();
+            ok (s.setClipScale (toolClip, { true, 9, 1 }), "give the clip A minor");
+            ok (s.applyNoteTool (toolClip, {}, notetools::defaults (Tool::stacks), result, .25, std::pair { 2.0, 6.0 }), "Stacks in a selection, with the scale on");
+            now = toolNotes();
+            check (count (69, 2, 3) == 1 && count (72, 2, 3) == 1 && count (76, 2, 3) == 1, "its chord is A minor's triad on A3, in the selection");
+            s.undo(); s.undo();
+            ok (s.applyNoteTool (toolClip, placed, settings (Tool::timeWarp, { { 7, 1 } }), result, .25, std::pair { 0.0, 8.0 }), "Time Warp the three notes");
+            now = toolNotes();
+            const auto byId = [&] (const juce::String& id) { return *std::find_if (now.begin(), now.end(), [&] (const Note& n) { return n.id == id; }); };
+            check (std::set<juce::String> (result.begin(), result.end()) == std::set<juce::String> (placed.begin(), placed.end()) && now.size() == 3
+                       && byId (placed[0]).startBeat != 1 && byId (placed[2]).startBeat == 0 && std::abs (byId (placed[1]).startBeat + byId (placed[1]).lengthBeats - 5.25) < 1e-6
+                       && s.undoDescription().containsIgnoreCase ("time warp"),
+                   "Time Warp moves the notes themselves, keeping their identities, the latest ending where it did, as one step");
+            s.undo();
+            check (s.applyNoteTool (toolClip, {}, settings (Tool::timeWarp, {}), result).failed(), "Time Warp needs notes");
+            check (s.applyNoteTool (toolClip, {}, notetools::defaults (Tool::rhythm), result, .25, std::pair { 4.0, 4.0 }).failed() && toolNotes().size() == 3,
+                   "an empty time range is refused, changing nothing");
+            ok (s.setTrackInstrument (toolsTrack, Session::EffectKind::drumRack), "give the track a Drum Rack");
+            const auto rackId = s.snapshot().tracks.back().instrument.id;
+            for (const auto key : { 38, 42 })
+            {
+                juce::String chainId;
+                ok (s.addRackChain (rackId, "Pad", chainId), "add a pad");
+                Session::RackChainSettings pad; pad.name = "Pad"; pad.receiveNote = key;
+                ok (s.setRackChainSettings (chainId, pad), "on key " + juce::String (key));
+            }
+            const auto drums = s.noteToolContext (toolClip);
+            check (drums && drums->drumKeys && drums->drumKeys->count() == 2 && drums->drumKeys->test (38) && drums->drumKeys->test (42), "a Drum Rack's pads are the keys the tools play");
+            ok (s.applyNoteTool (toolClip, {}, settings (Tool::shape, { { 4, 30 }, { 5, 50 } }), result, .25, std::pair { 0.0, 4.0 }), "Shape over the pads");
+            now = toolNotes();
+            check (result.size() == 16 && std::all_of (now.begin(), now.end(), [&] (const Note& n) { return ! result.contains (n.id) || n.pitch == 38 || n.pitch == 42; }),
+                   "Shape plays only the keys that have pads");
+            s.undo();
+        }
         std::cout << "Note tools passed." << std::endl; return 0;
     }
     catch (const std::exception& e) { std::cerr << "FAIL note tools: " << e.what() << std::endl; return 1; }

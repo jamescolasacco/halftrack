@@ -2,6 +2,7 @@
 
 #include <juce_audio_utils/juce_audio_utils.h>
 #include <array>
+#include <bitset>
 #include <cstdint>
 #include <memory>
 #include <optional>
@@ -227,12 +228,28 @@ public:
     enum class NoteTransform { quantizeStarts, quantizeEnds, reverse, invertPitch, legato, halfTime, doubleTime, fixedLength };
     // Note tools after the reference's transformation and generative tools; settings follow each
     // tool's field table in NoteTools.h. Appended tools keep their value; never reorder.
-    enum class NoteTool { strum, chop, span, recombine, velocityShaper, arpeggiate, ornament, connect, euclidean, seed, fitToScale, quantize };
-    static constexpr int noteToolCount = 12;
+    enum class NoteTool { strum, chop, span, recombine, velocityShaper, arpeggiate, ornament, connect, euclidean, seed, fitToScale, quantize,
+                          rhythm, shape, stacks, timeWarp };
+    static constexpr int noteToolCount = 16;
+    // A Stacks chord, as the reference's (static reading; see the MIDI tools contract): a rule of the chord bank, its
+    // root as a degree of the clip's scale (or of the chromatic scale) and an octave from -2 to 8, an inversion, and
+    // its length and place in eighths of its share of the time range.
+    struct StacksChord
+    {
+        int rule = 0, degree = 0, octave = 3, inversion = 0;
+        double duration = 1, offset = 0;
+        bool operator== (const StacksChord&) const = default;
+    };
+    static constexpr int maximumStacksChords = 16;
     struct NoteToolSettings
     {
         NoteTool tool = NoteTool::strum;
-        std::array<double, 8> values {};
+        std::array<double, 16> values {};
+        std::vector<StacksChord> chords; // Stacks' chords, in order.
+        std::vector<float> levels;       // Shape's drawn contour, 21 levels from 0 to 1, while its preset is User.
+        // Rhythm's and Shape's random draws, as the reference seeds them; the interface draws a new seed each time
+        // it applies them.
+        std::uint32_t seed = 1;
         bool operator== (const NoteToolSettings&) const = default;
     };
     // MPE, after the reference's: a note's own pitch bend in semitones (-48 to 48), slide (CC 74)
@@ -284,6 +301,15 @@ public:
     };
     static const char* scaleModeName (int mode) noexcept;
     static uint16_t scaleIntervals (int mode) noexcept; // Bit n set when the scale holds n semitones above its root.
+    // Where Rhythm, Shape, Stacks and Time Warp work in a MIDI clip, as the reference's tools see it (static reading):
+    // the time range in content beats, the clip's scale while its Scale Mode is on, and the keys a Drum Rack on its
+    // track has pads for (every key for a chain receiving All Notes).
+    struct NoteToolContext
+    {
+        double start = 0, end = 4;
+        std::optional<ScaleSettings> scale;
+        std::optional<std::bitset<128>> drumKeys;
+    };
     static bool inScale (const ScaleSettings&, int pitch) noexcept; // Every pitch is in a disabled scale.
     static int fitToScale (const ScaleSettings&, int pitch) noexcept; // The nearest scale pitch; ties go down.
     // The groove pool. A groove is a pattern of note timings and velocities measured against its Base
@@ -1046,11 +1072,18 @@ public:
     juce::Result ungroupMidiNotes (const juce::String& clipId, const juce::StringArray& noteIds);
     juce::Result transformMidiNotes (const juce::String& clipId, const juce::StringArray& noteIds, NoteTransform, double gridBeats);
     // Applies a note tool in one undo step. A transformation replaces the chosen notes with its
-    // result; a generator (Euclidean, Seed) fills the clip, replacing any chosen notes. Quantize moves
-    // the chosen notes themselves, keeping their identities and properties; its Current Grid is
-    // `gridBeats`, the editor's grid.
+    // result; a generator replaces any chosen notes with its own, Euclidean and Seed filling the clip.
+    // Quantize and Time Warp move the chosen notes themselves, keeping their identities and properties.
+    // Current Grid (Grid for Rhythm and Shape) is `gridBeats`, the editor's grid.
+    // Rhythm, Shape, Stacks and Time Warp work in a time range, as the reference's tools do: `timeRange`, the
+    // editor's time selection in content beats, or else the clip's loop brace whether or not the loop is on, inside
+    // the clip. They play the clip's scale while its Scale Mode is on, and on a Drum Rack the keys it has pads for.
+    // Rhythm also clears the notes of its key that start in the range.
     juce::Result applyNoteTool (const juce::String& clipId, const juce::StringArray& noteIds, const NoteToolSettings&, juce::StringArray& resultIds,
-                                double gridBeats = 0.25);
+                                double gridBeats = 0.25, std::optional<std::pair<double, double>> timeRange = std::nullopt);
+    // The context those tools have in a MIDI clip for `timeRange` (or its loop brace); nothing for an unknown clip
+    // or a range with nothing of the clip in it.
+    std::optional<NoteToolContext> noteToolContext (const juce::String& clipId, std::optional<std::pair<double, double>> timeRange = std::nullopt) const;
     juce::Result removeMidiNote (const juce::String& clipId, const juce::String& noteId);
     // Replaces one controller lane of a MIDI clip in one undo step; no points removes the lane.
     juce::Result setMidiControllerLane (const juce::String& clipId, int controller, const std::vector<ControllerPoint>& points);
