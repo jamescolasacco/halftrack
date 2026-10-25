@@ -1291,6 +1291,9 @@ public:
             if (code == 'L') { session.setLoop (! state.looping, state.loopStart, state.loopEnd); refresh(); return true; }
             // After a click on a header, Duplicate, Cut, Copy and Paste act on the selected tracks, as the reference's headers do.
             if (code == 'D' && ! shift && ! key.getModifiers().isAltDown() && headerFocus) { duplicateSelectedHeaders(); return true; }
+            // With a take lane selected, Cmd+D duplicates it, as the reference's key does (its manual, section 42.17).
+            if (code == 'D' && ! shift && ! key.getModifiers().isAltDown() && ! showSession && ! showPiano && takeSelection.laneId.isNotEmpty())
+            { juce::String copy; report (session.duplicateTakeLane (takeSelection.laneId, copy)); refresh(); resized(); return true; }
             if ((code == 'C' || code == 'X' || code == 'V') && ! shift && ! key.getModifiers().isAltDown() && headerFocus) { trackClipboardCommand ((char) code); return true; }
             if (! shift && ! showSession && ! showPiano && timeSelection.active() && (code == 'E' || code == 'D' || code == 'C' || code == 'X'))
             { selectionCommand (code == 'E' ? 76 : code == 'D' ? 77 : code == 'C' ? 81 : 82); return true; }
@@ -20564,6 +20567,15 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
             drawMode = false; session.undo(); refresh();
         }
         timeSelection = {};
+        {
+            // With a lane selected, Cmd+D duplicates it.
+            takeSelection = { state.tracks[(size_t) t].takeLanes[0].id, .1, .1 };
+            const auto lanesBefore = state.tracks[(size_t) t].takeLanes.size();
+            check (handleKey (juce::KeyPress ('D', juce::ModifierKeys (juce::ModifierKeys::commandModifier), 0)) && state.tracks[(size_t) t].takeLanes.size() == lanesBefore + 1
+                       && state.tracks[(size_t) t].takeLanes[1].name == state.tracks[(size_t) t].takeLanes[0].name,
+                   "with a take lane selected, Cmd+D duplicates it below, as the reference's key does");
+            session.undo(); refresh(); takeSelection = {};
+        }
         check (handleKey (juce::KeyPress ('T', juce::ModifierKeys::shiftModifier | juce::ModifierKeys::altModifier, 0)) && state.tracks[(size_t) t].takeLanes.size() == 3,
                "Shift+Option+T inserts a take lane");
         check (session.removeTrack (t).wasOk(), "remove the take track"); refresh();

@@ -127,6 +127,14 @@ int runTakeLanesTests (const juce::File& artifacts)
         check (track().takeLanes.size() == 2, "it is gone");
         s.undo(); check (track().takeLanes.size() == 3 && track().takeLanes[2].name == "Keeper", "undo returns it with its name");
         s.undo(); s.undo(); check (track().takeLanes.size() == 2, "and undoes the insert");
+        juce::String copy;
+        ok (s.duplicateTakeLane (track().takeLanes[0].id, copy), "duplicate Take 1");
+        check (track().takeLanes.size() == 3 && track().takeLanes[1].id == copy && track().takeLanes[1].name == track().takeLanes[0].name
+                   && track().takeLanes[1].clips.size() == track().takeLanes[0].clips.size() && track().takeLanes[1].clips[0].id != track().takeLanes[0].clips[0].id
+                   && track().takeLanes[1].clips[0].file == track().takeLanes[0].clips[0].file && std::abs (track().takeLanes[1].clips[0].start - track().takeLanes[0].clips[0].start) < 1e-9,
+               "the copy sits below Take 1 with its name and its takes, under fresh identities, at the same times and from the same audio");
+        check (s.duplicateTakeLane ("missing", copy).failed(), "an unknown lane is refused");
+        s.undo(); check (track().takeLanes.size() == 2, "one undo removes the copy");
         // Delete Unused Take Lanes: a lane is in use while the main lane plays something from it.
         check (s.unusedTakeLanes ({ trackId }).isEmpty(), "both takes are in use: Take 2's pass plays in the main lane, with Take 1's comp and later pass");
         ok (s.insertTakeLane (trackId, added), "insert an empty lane");

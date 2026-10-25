@@ -8867,6 +8867,26 @@ Result Session::insertTakeLane (const String& trackId, String& laneId)
     for (auto* other : impl->linkedTracks (*track)) impl->newTakeLane (*other);
     impl->changed(); return Result::ok();
 }
+Result Session::duplicateTakeLane (const String& laneId, String& copyId)
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    auto [track, lane] = impl->takeLane (laneId);
+    if (track == nullptr) return Result::fail ("Take lane not found.");
+    const int position = lane.getParent().indexOf (lane);
+    std::vector<juce::ValueTree> lanes { lane };
+    for (auto* other : impl->linkedTracks (*track)) if (auto linked = impl->laneAt (*other, position); linked.isValid()) lanes.push_back (linked);
+    impl->transaction ("Duplicate take lane");
+    for (auto& l : lanes)
+    {
+        juce::ValueTree copy (takeLaneType);
+        copy.setProperty (te::IDs::id, juce::Uuid().toString(), nullptr);
+        copy.setProperty (te::IDs::name, l[te::IDs::name], nullptr);
+        for (auto clip : l) copy.appendChild (impl->freshClipCopy (clip), nullptr);
+        l.getParent().addChild (copy, l.getParent().indexOf (l) + 1, &impl->edit->getUndoManager());
+        if (l == lane) copyId = copy[te::IDs::id].toString();
+    }
+    impl->changed(); return Result::ok();
+}
 Result Session::removeTakeLane (const String& laneId)
 {
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");

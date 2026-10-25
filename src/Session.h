@@ -867,6 +867,9 @@ public:
     // cycling replaces it with the next or previous lane holding material in the range.
     juce::Result insertTakeLane (const juce::String& trackId, juce::String& laneId);
     juce::Result removeTakeLane (const juce::String& laneId);
+    // Duplicate Take Lane: a copy of a lane and its takes, with fresh identities, just below it and keeping
+    // its name, the linked tracks' lanes at its place copied with it. One undo step.
+    juce::Result duplicateTakeLane (const juce::String& laneId, juce::String& copyId);
     // Deletes take lanes, with the lanes at their places on linked tracks, as one undo step, as the
     // reference's Delete All Take Lanes does for the selected tracks.
     juce::Result removeTakeLanes (const juce::StringArray& laneIds);
