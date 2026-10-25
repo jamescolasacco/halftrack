@@ -1,4 +1,5 @@
 #include "MainComponent.h"
+#include "ValueControls.h"
 #include "Theme.h"
 #include "AudioClipEditor.h"
 #include "AutomationEditor.h"
@@ -1207,6 +1208,7 @@ public:
         if (mappedKey (key)) return true;
         if (computerKeyboardKey (key)) return true;
         if (const auto repeat = latchKey (key)) return *repeat;
+        if (valueKey (key)) return true;
         const auto code = key.getKeyCode();
         const auto cmd = key.getModifiers().isCommandDown();
         const auto shift = key.getModifiers().isShiftDown();
@@ -2126,6 +2128,7 @@ private:
         void mouseDown (const juce::MouseEvent& e) override
         {
             auto* c = e.originalComponent;
+            owner.valueClicked (c);
             if (c == &owner.launcher)
             {
                 owner.headerFocus = owner.launcher.titlePressed();
@@ -2143,6 +2146,106 @@ private:
         static bool within (const juce::Component* c, const juce::Component& area) { return c != nullptr && (c == &area || area.isParentOf (c)); }
         Impl& owner;
     } headerFocusWatcher { *this };
+    // The knob or fader clicked last takes the reference's value keys until a click elsewhere (its
+    // manual, section 42.6, Adjusting Values): Up and Down step it, Delete returns it to its default,
+    // and typing a digit, a minus sign or a point starts entering a value in a field over it.
+    juce::Component::SafePointer<juce::Slider> valueControl;
+    juce::TextEditor valueEntry { "Value entry" };
+    juce::Component::SafePointer<juce::Slider> enteringValue;
+    juce::Component::SafePointer<juce::Component> focusBeforeEntry;
+    void valueClicked (juce::Component* c)
+    {
+        if (c != nullptr && (c == &valueEntry || valueEntry.isParentOf (c))) return;
+        endValueEntry (true);
+        auto* slider = dynamic_cast<juce::Slider*> (c);
+        if (slider == nullptr && c != nullptr) slider = c->findParentComponentOfClass<juce::Slider>();
+        valueControl = slider;
+    }
+    // Whether a component shows in the window: it and everything it sits in, up to this, are visible.
+    bool shownHere (const juce::Component* c) const
+    {
+        for (; c != nullptr && c != this; c = c->getParentComponent()) if (! c->isVisible()) return false;
+        return c == this;
+    }
+    bool valueKey (const juce::KeyPress& key)
+    {
+        auto* slider = valueControl.getComponent();
+        const auto mods = key.getModifiers();
+        if (slider == nullptr || ! slider->isEnabled() || ! shownHere (slider) || mods.isCommandDown() || mods.isCtrlDown() || mods.isAltDown()) return false;
+        const auto code = key.getKeyCode();
+        if (code == juce::KeyPress::deleteKey || code == juce::KeyPress::backspaceKey)
+        {
+            if (mods.isShiftDown()) return false;
+            if (auto* valueSlider = dynamic_cast<ValueSlider*> (slider); valueSlider != nullptr && valueSlider->onReset) valueSlider->onReset();
+            else if (slider->isDoubleClickReturnEnabled()) setValueByKey (*slider, slider->getDoubleClickReturnValue());
+            return true;
+        }
+        if (code == juce::KeyPress::upKey || code == juce::KeyPress::downKey)
+        {
+            setValueByKey (*slider, steppedValue (*slider, code == juce::KeyPress::upKey ? 1 : -1, mods.isShiftDown()));
+            return true;
+        }
+        const auto typed = key.getTextCharacter();
+        if (juce::CharacterFunctions::isDigit (typed) || typed == '-' || typed == '.')
+        {
+            startValueEntry (*slider, juce::String::charToString (typed));
+            return true;
+        }
+        return false;
+    }
+    // A value set from the keys as one gesture, so it is one undo step as a drag is.
+    static void setValueByKey (juce::Slider& slider, double value)
+    {
+        const juce::Slider::ScopedDragNotification gesture (slider);
+        slider.setValue (value, juce::sendNotificationSync);
+    }
+    // A value a step up or down: a semitone, or an octave with Shift, for a value in semitones; its own
+    // step for one with at most 200 of them; otherwise a hundredth of its travel, or with Shift a
+    // thousandth, and at least one step. The reference's steps are unmeasured.
+    static double steppedValue (juce::Slider& slider, int direction, bool shift)
+    {
+        const auto value = slider.getValue();
+        if (const auto* valueSlider = dynamic_cast<const ValueSlider*> (&slider); valueSlider != nullptr && valueSlider->semitones)
+            return value + direction * (shift ? 12.0 : 1.0);
+        const auto& range = slider.getNormalisableRange();
+        if (range.interval > 0 && (range.end - range.start) / range.interval <= 200) return value + direction * range.interval;
+        auto next = slider.proportionOfLengthToValue (juce::jlimit (0.0, 1.0, slider.valueToProportionOfLength (value) + direction * (shift ? 0.001 : 0.01)));
+        if (range.interval > 0 && std::abs (next - value) < range.interval) next = value + direction * range.interval;
+        return next;
+    }
+    void startValueEntry (juce::Slider& slider, const juce::String& typed)
+    {
+        if (enteringValue == nullptr) focusBeforeEntry = juce::Component::getCurrentlyFocusedComponent();
+        enteringValue = &slider;
+        if (valueEntry.getParentComponent() == nullptr)
+        {
+            addChildComponent (valueEntry);
+            valueEntry.setFont (font (11.0f)); valueEntry.setJustification (juce::Justification::centred);
+            valueEntry.setColour (juce::TextEditor::outlineColourId, orange); valueEntry.setColour (juce::TextEditor::focusedOutlineColourId, orange);
+            valueEntry.onReturnKey = [this] { endValueEntry (true); };
+            valueEntry.onEscapeKey = [this] { endValueEntry (false); };
+            valueEntry.onFocusLost = [this] { endValueEntry (true); };
+        }
+        const auto area = getLocalArea (&slider, slider.getLocalBounds());
+        valueEntry.setBounds (area.withSizeKeepingCentre (std::max (area.getWidth(), 56), 18).constrainedWithin (getLocalBounds()));
+        valueEntry.setText (typed, false); valueEntry.moveCaretToEnd();
+        valueEntry.setVisible (true); valueEntry.toFront (false);
+        if (isShowing()) valueEntry.grabKeyboardFocus();
+    }
+    // Return, or a click elsewhere, sets the value typed, read as the control reads its own text box;
+    // Escape leaves it.
+    void endValueEntry (bool confirm)
+    {
+        auto* slider = enteringValue.getComponent();
+        if (slider == nullptr && ! valueEntry.isVisible()) return;
+        enteringValue = nullptr;
+        valueEntry.setVisible (false);
+        const auto text = valueEntry.getText().trim();
+        if (confirm && slider != nullptr && slider->isEnabled() && text.containsAnyOf ("0123456789"))
+            setValueByKey (*slider, slider->getValueFromText (text));
+        if (auto* before = focusBeforeEntry.getComponent(); before != nullptr && before->isShowing()) before->grabKeyboardFocus();
+        focusBeforeEntry = nullptr;
+    }
     // What the headers' Delete and Duplicate act on: the selected group, or the selected tracks.
     juce::StringArray headerSelection() const
     {
@@ -2604,6 +2707,8 @@ private:
             pan.onDragStart = [this] { owner.session.beginEditGesture ("Track pan"); };
             pan.onDragEnd = [this] { owner.session.endEditGesture(); };
             pan.onValueChange = [this] { owner.report (owner.session.setTrackPan (index, (float) pan.getValue())); };
+            gain.onReset = [this] { resetControl ("volume"); };
+            pan.onReset = [this] { resetControl ("pan"); };
             // In Split Stereo pan mode two sliders pan the left and right channels in place of the pan.
             for (auto* split : { &leftSplit, &rightSplit })
             {
@@ -2618,6 +2723,7 @@ private:
                 split->onDragStart = [this, right] { owner.session.beginEditGesture (right ? "Right split pan" : "Left split pan"); };
                 split->onDragEnd = [this] { owner.session.endEditGesture(); };
                 split->onValueChange = [this, split, right] { owner.report (owner.session.setTrackSplitPan (index, right, (float) split->getValue())); };
+                split->onReset = [this, right] { resetControl (right ? "rightsplit" : "leftsplit"); };
             }
             for (auto* label : { &leftLabel, &rightLabel })
             { addChildComponent (*label); label->setFont (font (9.5f)); label->setJustificationType (juce::Justification::centred); label->setColour (juce::Label::textColourId, muted); }
@@ -2893,7 +2999,7 @@ private:
                 sendReturnIds = ids; sends.clear();
                 for (int i = 0; i < ids.size(); ++i)
                 {
-                    auto knob = std::make_unique<juce::Slider> (juce::Slider::RotaryHorizontalVerticalDrag, juce::Slider::NoTextBox);
+                    auto knob = std::make_unique<ValueSlider> (juce::Slider::RotaryHorizontalVerticalDrag, juce::Slider::NoTextBox);
                     knob->setName ("Send " + juce::String::charToString ((juce::juce_wchar) ('A' + i)));
                     knob->setNormalisableRange (Session::levelRange (true));
                     knob->setRotaryParameters (juce::MathConstants<float>::pi * 1.25f, juce::MathConstants<float>::pi * 2.75f, true);
@@ -2902,6 +3008,7 @@ private:
                     knob->onDragEnd = [this] { owner.session.endEditGesture(); };
                     knob->onValueChange = [this, i]
                     { owner.report (owner.session.setTrackSendGain (index, sendReturnIds[i], (float) sends[(size_t) i]->getValue())); };
+                    knob->onReset = [this, i] { resetControl ("send:" + sendReturnIds[i]); };
                     addAndMakeVisible (*knob); sends.push_back (std::move (knob));
                 }
                 resized();
@@ -3043,7 +3150,9 @@ private:
             if (std::exchange (headerDrag, false)) owner.dropTracks();
             else if (collapse) { owner.multiSelectedTracks.clear(); owner.selectTrack (index); }
         }
-        // Double-clicking a mixer control resets it, and the controls linked to it (see Session::resetTrackControl).
+        // Double-clicking a mixer control, or Delete after clicking it, resets it and the controls linked to
+        // it (see Session::resetTrackControl).
+        void resetControl (const juce::String& control) { owner.report (owner.session.resetTrackControl (index, control)); owner.refresh(); }
         void mouseDoubleClick (const juce::MouseEvent& e) override
         {
             juce::String control;
@@ -3052,7 +3161,7 @@ private:
             else if (e.originalComponent == &leftSplit) control = "leftsplit";
             else if (e.originalComponent == &rightSplit) control = "rightsplit";
             else for (size_t i = 0; i < sends.size(); ++i) if (e.originalComponent == sends[i].get()) control = "send:" + sendReturnIds[(int) i];
-            if (control.isNotEmpty()) { owner.report (owner.session.resetTrackControl (index, control)); owner.refresh(); }
+            if (control.isNotEmpty()) resetControl (control);
         }
         void mouseDown (const juce::MouseEvent& e) override
         {
@@ -3093,7 +3202,7 @@ private:
         juce::Label name;
         LinkIndicator link;
         juce::TextButton mute { "M" }, solo { "S" }, arm { "R" };
-        juce::Slider gain, pan, delay, leftSplit, rightSplit;
+        ValueSlider gain, pan, delay, leftSplit, rightSplit;
         juce::Label leftLabel { {}, "L" }, rightLabel { {}, "R" };
         bool splitPan = false;
         // The pan, or in Split Stereo mode the split pans, as the section showing them is shown.
@@ -3117,7 +3226,7 @@ private:
         std::vector<Impl::OutputChoice> outputChoiceList; // The Audio To choices, in the chooser's order.
         juce::String outputSignature;
         static constexpr int firstSourceItem = 1000;
-        std::vector<std::unique_ptr<juce::Slider>> sends;
+        std::vector<std::unique_ptr<ValueSlider>> sends;
         std::unique_ptr<juce::TextButton> sideA, sideB;
         Session::MixerSections laidOut;
         juce::Rectangle<int> meterBounds() const { return { 66, gain.getY() + 4, 10, juce::jmax (10, gain.getBottom() - 20 - gain.getY()) }; }
@@ -3295,7 +3404,7 @@ private:
                 sendReturnIds = ids; sends.clear();
                 for (int i = 0; i < ids.size(); ++i)
                 {
-                    auto knob = std::make_unique<juce::Slider> (juce::Slider::RotaryHorizontalVerticalDrag, juce::Slider::NoTextBox);
+                    auto knob = std::make_unique<ValueSlider> (juce::Slider::RotaryHorizontalVerticalDrag, juce::Slider::NoTextBox);
                     knob->setName ("Group send " + juce::String::charToString ((juce::juce_wchar) ('A' + i)));
                     knob->setNormalisableRange (Session::levelRange (true));
                     knob->setRotaryParameters (juce::MathConstants<float>::pi * 1.25f, juce::MathConstants<float>::pi * 2.75f, true);
@@ -3412,9 +3521,9 @@ private:
         juce::String outputSignature;
         Session::MixerSections laidOut;
         juce::Label name;
-        juce::Slider gain, pan, leftSplit, rightSplit;
+        ValueSlider gain, pan, leftSplit, rightSplit;
         bool splitPan = false, dragArmed = false, headerDrag = false;
-        std::vector<std::unique_ptr<juce::Slider>> sends;
+        std::vector<std::unique_ptr<ValueSlider>> sends;
         juce::StringArray sendReturnIds;
         juce::TextButton automationLane { "+" };
         AutomationChoosers choosers { owner, *this };
@@ -5217,10 +5326,10 @@ private:
     private:
         Impl& owner;
         Sections sections;
-        juce::Slider gain, crossfader;
+        ValueSlider gain, crossfader;
         juce::ComboBox output, cueOutput; juce::StringArray outputNames, cueOutputNames;
         juce::TextButton soloCue { "Solo" };
-        juce::Slider cueVolume;
+        ValueSlider cueVolume;
         Session::MixerSections laidOut;
         float peakL = 0, peakR = 0;
         ChildMouseEvents childMouse { *this }; // A click anywhere on the strip shows the Main's chain.
@@ -6328,7 +6437,7 @@ private:
         Session::ClipInfo clip;
         juce::ComboBox mode, grid;
         juce::TextButton legato { "Legato" }, follow { "Follow Action..." };
-        juce::Slider velocity;
+        ValueSlider velocity;
         void apply()
         {
             const Session::LaunchSettings settings { static_cast<Session::LaunchMode> (mode.getSelectedId() - 1),
@@ -6687,7 +6796,7 @@ private:
             Session::GrooveInfo groove;
             juce::Label name;
             juce::ComboBox base;
-            juce::Slider quantize, timing, random, velocity;
+            ValueSlider quantize, timing, random, velocity;
             juce::TextButton remove { "X" };
             void apply (const Session::GrooveInfo& g) { pool.owner.report (pool.owner.session.setGroove (id, g)); pool.owner.refresh(); }
         };
@@ -6704,7 +6813,7 @@ private:
         juce::OwnedArray<Row> rows;
         juce::StringArray rowIds;
         juce::Rectangle<int> header;
-        juce::Slider amount;
+        ValueSlider amount;
         juce::TextButton add { "Add Groove..." };
         juce::Label empty;
     };
@@ -6898,7 +7007,7 @@ private:
             const bool forKey;
             Session::MidiMapping mapping;
             Session::KeyMapping keyMapping;
-            juce::Slider minimum, maximum;
+            ValueSlider minimum, maximum;
             juce::TextButton remove { "X" };
         };
         Impl& owner;
@@ -7214,6 +7323,7 @@ private:
             };
             knob (transpose, "Clip transpose", -48, 48, [] (auto& a, double v) { a.transposeSemitones = (int) v; });
             transpose.textFromValueFunction = [] (double v) { return (v > 0 ? "+" : "") + juce::String ((int) v) + " st"; };
+            transpose.semitones = true;
             transpose.setTooltip ("Transpose: semitones, keeping the clip's speed (warped clips in a stretching mode)");
             knob (detune, "Clip detune", -50, 50, [] (auto& a, double v) { a.detuneCents = (float) v; });
             detune.textFromValueFunction = [] (double v) { return juce::String ((int) v) + " ct"; };
@@ -7513,11 +7623,11 @@ private:
         juce::String transientsFor;
         juce::TextButton warp { "WARP" }, halve { ":2" }, twice { "*2" }, reverse { "Reverse" };
         juce::ComboBox mode, transientLoop;
-        juce::Slider transientEnvelope, grainSize, flux, formants, transpose, detune;
+        ValueSlider transientEnvelope, grainSize, flux, formants, transpose, detune;
         Session::WarpMode laidOutMode = Session::WarpMode::off;
         bool laidOutFolded = false;
         juce::Label bpm;
-        juce::Slider gain;
+        ValueSlider gain;
         LaunchBox launch { owner };
         LoopBox loopBox { owner };
         bool gesture = false;
@@ -9106,7 +9216,7 @@ private:
             owner.report (owner.session.setClipScale (clip->id, { scaleButton.getToggleState(), scaleRoot.getSelectedId() - 1, scaleMode.getSelectedId() - 1 }));
             owner.refresh();
         }
-        juce::Slider velocity;
+        ValueSlider velocity;
         juce::ScrollBar horizontal { false }, vertical { true };
         juce::String loadedClip, selectedNoteId, dragClipId;
         Session::MidiNoteInfo original;
@@ -9660,7 +9770,7 @@ private:
             juce::Component::SafePointer<PianoRoll> roll;
             std::array<juce::Label, 8> labels;
             std::array<juce::ComboBox, 8> choices;
-            std::array<juce::Slider, 8> sliders;
+            std::array<ValueSlider, 8> sliders;
             juce::Label hint;
             int rows = 0;
         };
@@ -9970,7 +10080,7 @@ private:
                 knob.onDragEnd = [this] { if (gesture) owner.session.endEditGesture(); gesture = false; };
                 knob.onValueChange = [this, i] { change ((size_t) i, (float) knobs[(size_t) i].getValue()); };
             }
-            knobs[0].setName ("Pad tune"); knobs[0].setRange (-48, 48, .01); knobs[0].setDoubleClickReturnValue (true, 0);
+            knobs[0].setName ("Pad tune"); knobs[0].setRange (-48, 48, .01); knobs[0].setDoubleClickReturnValue (true, 0); knobs[0].semitones = true;
             knobs[0].textFromValueFunction = [] (double v) { return juce::String (v, 2) + " st"; };
             knobs[1].setName ("Pad length"); knobs[1].setRange (.01, 1, .001); knobs[1].setDoubleClickReturnValue (true, 1);
             knobs[1].textFromValueFunction = [] (double v) { return juce::String (v * 100, 1) + "%"; };
@@ -10061,7 +10171,7 @@ private:
         Session::PluginInfo plugin;
         int& selected = owner.selectedDrumPad;
         bool gesture = false;
-        std::array<juce::Slider, 4> knobs;
+        std::array<ValueSlider, 4> knobs;
         juce::ComboBox choke;
         juce::TextButton clear { "Clear" };
         HotSwapButton swap;
@@ -10215,7 +10325,7 @@ private:
         juce::String nativeEditorId;
         SampleView sample { owner };
         DrumPanel drumPads { owner };
-        std::array<juce::Slider, 8> controls;
+        std::array<ValueSlider, 8> controls;
         static constexpr const char* names[] { "Cutoff", "Resonance", "Attack", "Decay", "Sustain", "Release", "Level", "Pulse width" };
         void changeParameter (int index, float value)
         {
@@ -10272,7 +10382,7 @@ private:
             Impl& owner;
             juce::String sourceId;
             juce::Label label;
-            juce::Slider level;
+            ValueSlider level;
             bool gesture = false;
         };
     public:
@@ -10455,7 +10565,7 @@ private:
         }
         static constexpr int rows = 4, controlWidth = 148, sidechainWidth = 128;
     private:
-        struct Control { int parameter = 0; juce::Slider slider; juce::Label label; };
+        struct Control { int parameter = 0; ValueSlider slider; juce::Label label; };
         int left() const { return hasSidechain ? sidechainWidth : 0; }
         int columns() const { return ((int) controls.size() + rows - 1) / rows; }
         void showConfigureMenu()
@@ -10745,7 +10855,7 @@ private:
         Impl& owner;
         juce::TextButton addButton { "+ Device" }, manageButton { "Manage..." }, automationButton { "Automation" };
         SynthPanel synthPanel;
-        juce::Slider masterGain;
+        ValueSlider masterGain;
         std::optional<uint64_t> masterGestureGeneration;
         uint64_t masterProjectGeneration = 0;
         juce::Viewport chainView;
@@ -10821,7 +10931,7 @@ private:
     juce::File similarFile;
     similarity::FolderIndex::Status shownSimilar;
     double similarShownAt = 0;
-    juce::Slider previewVolume;
+    ValueSlider previewVolume;
     BrowserCategories browserCategories { *this };
     juce::Viewport browserSidebar; // Scrolls the sidebar when its rows outgrow the browser.
     Canvas canvas;
@@ -23043,6 +23153,11 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
                    "Complex Pro shows Formants at 100");
             transposeKnob->setValue (7, juce::sendNotificationSync); refresh();
             check (state.tracks[0].clips[0].audio.transposeSemitones == 7 && transposeKnob->isEnabled(), "the Transpose knob transposes the warped clip");
+            valueClicked (transposeKnob);
+            check (handleKey (juce::KeyPress (juce::KeyPress::upKey)) && state.tracks[0].clips[0].audio.transposeSemitones == 8
+                       && handleKey (juce::KeyPress (juce::KeyPress::upKey, juce::ModifierKeys::shiftModifier, 0)) && state.tracks[0].clips[0].audio.transposeSemitones == 20,
+                   "after a click on the Transpose knob, Up steps it a semitone and Shift+Up an octave, as the reference's keys do");
+            session.undo(); session.undo(); refresh(); valueClicked (nullptr);
             warpMode->setSelectedId (4, juce::sendNotificationSync); refresh();
             check (state.tracks[0].clips[0].audio.transposeSemitones == 0 && ! transposeKnob->isEnabled(), "Re-Pitch clears and disables it");
             for (int step = 0; step < 7; ++step) session.undo();
@@ -25114,6 +25229,93 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
                 check (session.setSessionWidth (state.tracks[(size_t) scaled].id, 0).wasOk(), "and back"); refresh();
                 check (launcher.widthOf (0) == LauncherGrid::columnWidth && launcher.columnX (1) == nextX, "and the columns are back where they were");
             }
+        }
+        {
+            // Knobs and faders take the reference's value gestures (its manual, section 42.6): Shift drags at a
+            // tenth of the rate, and the control clicked last takes Up and Down, Delete and typed values.
+            const auto stepsAtStart = session.undoSteps().size();
+            int track = -1;
+            for (int i = 0; i < (int) state.tracks.size() && track < 0; ++i) if (! state.tracks[(size_t) i].isReturn && launcher.columnOf (i) >= 0) track = i;
+            const auto stripOf = [&]() -> TrackRow*
+            {
+                for (int i = 0; i < launcher.getNumChildComponents(); ++i) if (auto* area = launcher.getChildComponent (i))
+                    for (int k = 0; k < area->getNumChildComponents(); ++k)
+                        if (auto* row = dynamic_cast<TrackRow*> (area->getChildComponent (k)); row != nullptr && track >= 0 && row->getTrackId() == state.tracks[(size_t) track].id) return row;
+                return nullptr;
+            };
+            auto* pan = stripOf() != nullptr ? dynamic_cast<ValueSlider*> (findNamed (*stripOf(), "Track pan")) : nullptr;
+            auto* volume = stripOf() != nullptr ? dynamic_cast<ValueSlider*> (findNamed (*stripOf(), "Track volume")) : nullptr;
+            check (pan != nullptr && volume != nullptr && shownHere (pan) && shownHere (volume), "the Session mixer's strip has its pan knob and volume fader");
+            if (pan != nullptr && volume != nullptr)
+            {
+                const auto panOf = [&] { return state.tracks[(size_t) track].pan; };
+                const auto gainOf = [&] { return state.tracks[(size_t) track].gainDb; };
+                const auto now = juce::Time::getCurrentTime();
+                const auto click = [&] (juce::Component& c, juce::Point<float> at, juce::ModifierKeys mods)
+                { return juce::MouseEvent (juce::Desktop::getInstance().getMainMouseSource(), at, mods, 1.0f, 0, 0, 0, 0, &c, &c, now, at, now, 1, false); };
+                // A drag up from a control's centre, through the window as a click on it would go.
+                const auto drag = [&] (juce::Slider& slider, float up, bool shift)
+                {
+                    const auto from = slider.getLocalBounds().getCentre().toFloat();
+                    const juce::ModifierKeys mods (juce::ModifierKeys::leftButtonModifier | (shift ? juce::ModifierKeys::shiftModifier : 0));
+                    const auto at = [&] (float y, bool dragged)
+                    { return juce::MouseEvent (juce::Desktop::getInstance().getMainMouseSource(), { from.x, y }, mods, 1.0f, 0, 0, 0, 0, &slider, &slider, now, from, now, 1, dragged); };
+                    headerFocusWatcher.mouseDown (at (from.y, false));
+                    slider.mouseDown (at (from.y, false)); slider.mouseDrag (at (from.y - up, true)); slider.mouseUp (at (from.y - up, true));
+                    refresh();
+                };
+                // A key as the window takes it; the Session's change reaches the view afterwards.
+                const auto press = [&] (const juce::KeyPress& key) { const bool handled = handleKey (key); refresh(); return handled; };
+                report (session.setTrackPan (track, 0)); refresh();
+                drag (*pan, 50, false);
+                const auto full = panOf(), expected = (float) (2.0 * 50 / pan->getMouseDragSensitivity());
+                report (session.setTrackPan (track, 0)); refresh();
+                drag (*pan, 50, true);
+                check (std::abs (full - expected) < .011f && std::abs (panOf() - expected / 10) < .011f && expected > .1f,
+                       "dragging the pan knob up pans it along, and with Shift held a tenth as far, for finer resolution");
+                // A fader that jumps to the click still moves at a tenth of the rate from there with Shift.
+                drag (*volume, 0, false);
+                const auto clicked = volume->valueToProportionOfLength (volume->getValue());
+                drag (*volume, 10, false);
+                const auto moved = volume->valueToProportionOfLength (volume->getValue()) - clicked;
+                drag (*volume, 10, true);
+                const auto fine = volume->valueToProportionOfLength (volume->getValue()) - clicked;
+                check (moved > .05 && clicked + moved < .99 && std::abs (fine - moved / 10) < moved / 20, "the volume fader, from where it is clicked, moves a tenth as far with Shift");
+                check (valueControl == volume, "the control clicked last takes the value keys");
+                report (session.setTrackPan (track, .3f)); refresh();
+                headerFocusWatcher.mouseDown (click (*pan, pan->getLocalBounds().getCentre().toFloat(), juce::ModifierKeys (juce::ModifierKeys::leftButtonModifier)));
+                auto steps = session.undoSteps().size();
+                check (valueControl == pan && press (juce::KeyPress (juce::KeyPress::deleteKey)) && std::abs (panOf()) < 1e-4 && session.undoSteps().size() == steps + 1,
+                       "after a click on the pan knob, Delete returns it to the centre, one undo step");
+                check (press (juce::KeyPress (juce::KeyPress::upKey)) && std::abs (panOf() - .01f) < 1e-4 && session.undoSteps().size() == steps + 2,
+                       "Up pans it one step right, one undo step");
+                check (press (juce::KeyPress (juce::KeyPress::downKey)) && press (juce::KeyPress (juce::KeyPress::downKey)) && std::abs (panOf() + .01f) < 1e-4,
+                       "and Down a step left each time");
+                headerFocusWatcher.mouseDown (click (*volume, volume->getLocalBounds().getCentre().toFloat(), juce::ModifierKeys (juce::ModifierKeys::leftButtonModifier)));
+                report (session.setTrackGain (track, -6)); refresh();
+                const auto up = volume->proportionOfLengthToValue (volume->valueToProportionOfLength (-6) + .01);
+                check (press (juce::KeyPress (juce::KeyPress::upKey)) && std::abs (gainOf() - (float) up) < .051f && gainOf() > -6,
+                       "Up raises the volume fader a hundredth of its travel");
+                const auto beforeFine = volume->valueToProportionOfLength (gainOf());
+                check (press (juce::KeyPress (juce::KeyPress::upKey, juce::ModifierKeys::shiftModifier, 0)) && volume->valueToProportionOfLength (gainOf()) - beforeFine < .005
+                           && gainOf() > (float) up, "and Shift+Up by a finer step");
+                steps = session.undoSteps().size();
+                check (press (juce::KeyPress ('-', juce::ModifierKeys(), '-')) && valueEntry.isVisible() && valueEntry.getText() == "-" && std::abs (gainOf() - (float) up) < 1,
+                       "typing a minus sign starts entering a value in a field over the fader");
+                valueEntry.insertTextAtCaret ("12"); valueEntry.onReturnKey(); refresh();
+                check (! valueEntry.isVisible() && std::abs (gainOf() + 12) < .01f && session.undoSteps().size() == steps + 1, "Return sets the volume typed, -12 dB, one undo step");
+                check (press (juce::KeyPress ('3', juce::ModifierKeys(), '3')) && valueEntry.isVisible(), "a digit starts another");
+                valueEntry.onEscapeKey(); refresh();
+                check (! valueEntry.isVisible() && std::abs (gainOf() + 12) < .01f, "and Escape leaves the volume as it was");
+                check (press (juce::KeyPress ('3', juce::ModifierKeys(), '3')) && valueEntry.isVisible(), "a value being typed");
+                headerFocusWatcher.mouseDown (click (launcher, { 5.0f, 5.0f }, juce::ModifierKeys (juce::ModifierKeys::leftButtonModifier))); refresh();
+                check (! valueEntry.isVisible() && std::abs (gainOf() - 3) < .01f && valueControl == nullptr, "is set by a click elsewhere, which also ends the value keys");
+                const auto beforeKey = gainOf();
+                press (juce::KeyPress (juce::KeyPress::upKey));
+                check (std::abs (gainOf() - beforeKey) < 1e-4, "so Up no longer moves the fader");
+            }
+            while (session.undoSteps().size() > stepsAtStart) session.undo();
+            refresh();
         }
         // The Arrangement's mixer, as the reference's View > Mixer shows it at the bottom of the Arrangement,
         // with sections of its own and the returns as the Arrangement shows them.

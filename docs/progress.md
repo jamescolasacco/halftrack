@@ -2757,3 +2757,7 @@ Engine and UI areas. Notes now expose their note-off velocity (`MidiNoteInfo::re
 ## Select on Launch — 2026-10-24
 
 Engine and UI areas. The Record page's Launch section gains the reference's Select on Launch and Select Next Scene on Launch, both on. A clip or scene launched from a mapped control is selected, and a scene launched with Enter or a mapped control moves the selection to the next scene, so repeated launches step through the scenes. The engine reports the last mapped launch in its snapshot (`Snapshot::remoteLaunch`) for the window to follow ([preferences contract](research/preferences-contract.md)). Checked in the preferences and UI suites.
+
+## Value controls — 2026-10-24
+
+UI and root areas. Every knob and fader is now a `ValueSlider` (`src/ValueControls.h`) and takes the reference's value gestures (manual section 42.6): with Shift a drag moves at a tenth of its rate, and the control clicked last takes the value keys until a click elsewhere. Up and Down step it, by the octave with Shift for values in semitones. Delete returns it to its default, and a track's mixer controls reset with the controls linked to them, as double-clicking them does. Typing a value opens a field over it, which Return sets and Escape leaves. Each change from the keys is one undo step ([contract](research/value-controls-contract.md)). Checked in the UI suite. The number fields are still edited as text.

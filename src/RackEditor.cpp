@@ -1,4 +1,5 @@
 #include "RackEditor.h"
+#include "ValueControls.h"
 #include "Theme.h"
 #include "NativeEffects.h"
 #include "Racks.h"
@@ -86,7 +87,7 @@ public:
     const juce::String chainId;
     juce::TextButton active { "" }, solo { "S" };
     juce::Label name;
-    juce::Slider volume, pan;
+    ValueSlider volume, pan;
 private:
     void change (const std::function<void (Session::RackChainSettings&)>& edit);
     void soloClicked();
@@ -149,7 +150,7 @@ public:
     }
     int xOf (int value) const { const auto a = area(); return a.getX() + juce::roundToInt ((value - minimum()) * a.getWidth() / (double) span()); }
     juce::TextButton keyButton { "Key" }, velocityButton { "Vel" }, selectButton { "Chain" };
-    juce::Slider selector;
+    ValueSlider selector;
 private:
     static constexpr int rowHeight = 16;
     juce::Rectangle<int> area() const { return getLocalBounds().withTrimmedTop (36).reduced (3, 0); }
@@ -221,7 +222,7 @@ public:
     void paint (juce::Graphics& g) override;
     juce::ComboBox receive, play, choke;
     juce::TextButton mute { "Mute" }, solo { "Solo" }, addReturn { "+ Return" };
-    std::array<juce::Slider, Session::maximumRackReturns> sends;
+    std::array<ValueSlider, Session::maximumRackReturns> sends;
 private:
     void change (const std::function<void (Session::RackChainSettings&)>&);
     RackEditor& owner;
@@ -241,7 +242,7 @@ public:
     struct Target { juce::String id; int parameter; juce::String label; float minimum, maximum; };
     juce::ComboBox macro, target;
     juce::TextButton add { "Map" };
-    juce::OwnedArray<juce::Slider> minimums, maximums;
+    juce::OwnedArray<ValueSlider> minimums, maximums;
     juce::OwnedArray<juce::TextButton> removes;
     std::vector<Target> targets;
 private:
@@ -545,7 +546,7 @@ public:
     juce::String selectedChain;
     int selectedPad = 36;
     bool drum = false, available = false, macroGesture = false;
-    std::array<juce::Slider, Session::rackMacroCount> macros;
+    std::array<ValueSlider, Session::rackMacroCount> macros;
     std::array<juce::Label, Session::rackMacroCount> macroLabels;
     juce::TextButton fewer { "-" }, more { "+" }, map { "Map" }, addChain { "+ Chain" }, addDevice { "+" };
     juce::Viewport chainView, deviceView;
@@ -935,7 +936,7 @@ void MappingList::sync (const Session::PluginInfo& rack)
             }();
             for (auto* list : { &minimums, &maximums })
             {
-                auto* s = list->add (new juce::Slider());
+                auto* s = list->add (new ValueSlider());
                 const bool isMinimum = list == &minimums;
                 s->setName ((isMinimum ? "Mapping minimum " : "Mapping maximum ") + juce::String ((int) i + 1));
                 s->setSliderStyle (juce::Slider::LinearBar); s->setRange (range.first, range.second, 0);

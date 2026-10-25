@@ -267,6 +267,8 @@ Draw Mode is window state (`Impl::drawMode`), not saved with the project. The pi
 
 ## Browser index
 
+`ValueSlider` (in `src/ValueControls.h`) is every knob and fader in the interface: a `juce::Slider` that drags at a tenth of its rate with Shift. `MainComponent::Impl` remembers the slider clicked last and gives it the value keys (`valueKey`): arrow steps, Delete to its default or its `onReset`, and typed values in a field over it, each as one drag gesture. See the [value controls contract](research/value-controls-contract.md).
+
 `themes` (in `src/Theme.*`) maps every interface colour, authored for Dark, into the current theme. Named palette colours are `themes::Colour` values that resolve when used; literal colours go through `themes::colour`. `themes::apply` recolours the colours components set on themselves, keeping their Dark originals. `MainComponent` sets the saved theme before building its components, and `Impl::applyInterfaceLook` follows the preferences' theme and zoom. See the [themes contract](research/themes-contract.md).
 
 `scripts/evidence_report.py` ties the capability ledger to the tests: [docs/evidence-map.md](evidence-map.md) names each PARTIAL row's suites, the script checks the map against the ledger and CMakeLists.txt, and in CI it turns CTest's JUnit output into per-row evidence. See the [regression evidence contract](research/regression-evidence-contract.md).

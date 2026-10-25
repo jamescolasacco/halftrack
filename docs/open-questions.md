@@ -904,3 +904,9 @@ Warp defaults ([warp contract](research/warp-contract.md#defaults-not-yet-the-re
 
 - **Default warp mode and Auto-Warp.** The reference's are Beats and on; Halftrack keeps Complex and off until its Beats plays a slowed constant clip without silences between segments and a constant level without overshoot. Which transient loop mode the reference's Beats uses by default was not read.
 
+Value controls ([contract](research/value-controls-contract.md)). Defaults where the reference was not read:
+
+- **Fine drag.** With Shift a drag moves at a tenth of its usual rate. The reference's ratio is unmeasured, as is its usual rate: Halftrack's knobs keep taking 250 pixels for their whole travel, and its faders still jump to the click.
+- **Arrow steps.** Up and Down move a semitone value a semitone (an octave with Shift), a value with at most 200 steps one step, and any other value a hundredth of its travel (a thousandth with Shift), at least one step. Left and Right stay with the views.
+- **Typed values.** Typing starts with a digit, a minus sign or a point, in a field over the control. Return or a click elsewhere sets the value, read as the control reads its own text box, and Escape leaves it.
+- **The control clicked last.** It takes the keys until a click elsewhere in the window, and Halftrack draws no mark on it. On a control without a default, Delete does nothing and does not reach the view.

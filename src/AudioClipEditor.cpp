@@ -1,4 +1,5 @@
 #include "AudioClipEditor.h"
+#include "ValueControls.h"
 #include "Theme.h"
 #include <array>
 #include <cmath>
@@ -210,7 +211,7 @@ private:
     void showResult(const juce::Result& r){error.setText(r.failed()?r.getErrorMessage():juce::String(),juce::dontSendNotification);}
     void finishGesture(){if(dragging){dragging=false;session.endEditGesture();}}
     void changeListenerCallback(juce::ChangeBroadcaster*) override {sync();}
-    Session& session;juce::String clipId;std::array<juce::Slider,3>sliders;std::array<juce::Label,3>labels,rangeLabels;
+    Session& session;juce::String clipId;std::array<ValueSlider,3>sliders;std::array<juce::Label,3>labels,rangeLabels;
     std::array<juce::ComboBox,2>curves;std::array<juce::ToggleButton,2>defaults;std::array<juce::TextEditor,3>range;juce::TextButton apply{"Apply range"};juce::ToggleButton reverse;juce::Label error;
     juce::LookAndFeel_V4 look;
     bool dragging=false,rangeDirty=false;

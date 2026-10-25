@@ -1,4 +1,5 @@
 #include "NativeEffects.h"
+#include "ValueControls.h"
 #include "Theme.h"
 #include "Racks.h"
 #include "Tuner.h"
@@ -95,6 +96,7 @@ public:
                 const bool percent = effectShowsPercent (spec);
                 if (showAutomation) control.addMouseListener (this, false);
                 control.setTextValueSuffix (percent ? juce::String() : unit); control.setDoubleClickReturnValue (true, spec.initial);
+                control.semitones = unit.trim() == "st";
                 if (percent)
                 {
                     control.textFromValueFunction = [] (double v) { return juce::String (v*100, 1) + "%"; };
@@ -575,7 +577,7 @@ private:
     Session::EffectKind kind;
     juce::LookAndFeel_V4 look;
     static constexpr size_t maximumControls = std::tuple_size_v<decltype (Session::EffectSettings::values)>;
-    std::array<juce::Slider, maximumControls> sliders;
+    std::array<ValueSlider, maximumControls> sliders;
     std::array<juce::ComboBox, maximumControls> choices;
     std::array<juce::Label, maximumControls> labels;
     juce::Label error, tunerNote, tunerDetail, spectrumPeak, monitorChord, monitorNotes;

@@ -1,4 +1,5 @@
 #include "UtilityEditor.h"
+#include "ValueControls.h"
 #include "Theme.h"
 #include "Racks.h"
 #include <array>
@@ -153,7 +154,7 @@ private:
     Session& session;
     juce::String pluginId;
     juce::ComboBox channels, stereoMode;
-    std::array<juce::Slider, 5> sliders;
+    std::array<ValueSlider, 5> sliders;
     std::array<juce::ToggleButton, 7> toggles;
     juce::Label error;
     bool dragging = false;
