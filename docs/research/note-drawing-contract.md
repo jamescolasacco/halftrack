@@ -47,16 +47,17 @@ The reference's manual ([Editing MIDI](https://www.ableton.com/en/live-manual/12
 Halftrack:
 
 - **Chop.** With notes selected, Cmd+E (or Edit > Split, or the note menu's Chop Notes on Grid) divides each into equal parts, as many as whole grid steps it lasts (at least one, at most 128, none shorter than a 960th of a beat), and selects the parts. While Cmd stays held, Up and Down change every note's parts by one, and with Shift double or halve them. It is one undo step, which letting Cmd go or any other edit ends. Notes with per-note expression are refused, as Split refuses them; chopping from the menu notes too short to divide reports it.
+- **Chopping by dragging** (manual sections 10.5.8.2 and 42.12, Cmd+E drag and E with Option): while a chop is under way, a Cmd-drag up or down in the editor changes every note's parts, one for every 10 pixels; holding E with Option, a drag over a selected note chops the selected notes, from one part, the same way, one undo step that the release ends. With Shift the parts double or halve every 10 pixels.
 - **Split.** With no notes selected, Cmd+E splits every note crossing the insert marker, or the edges of a timespan when there is one, as before. Holding E, a drag draws a line, and on release every note whose row the line crosses is split where it crosses that row's middle; a drag along a single row splits the note there where the drag ends. With Cmd held at the release the splits fall on the grid. Each is one undo step.
-- **Not followed.** The reference's parts for a note that is not a whole number of grid steps, its limits, and the E with Option drag that changes the chop's parts were not read; Halftrack's defaults are in [open questions](../open-questions.md).
+- **Not followed.** The reference's parts for a note that is not a whole number of grid steps, its limits, and its drag's pixels per part were not read; Halftrack's defaults are in [open questions](../open-questions.md).
 
-The UI suite chops a four-beat note into grid-long parts that stay selected, leaving another note whole, adds a part with Cmd+Up, halves the parts with Cmd+Shift+Down, and checks one Chop step that one undo reverses; then, holding E, splits two notes with a line drawn across them and one note with a drag along it.
+The UI suite chops a four-beat note into grid-long parts that stay selected, leaving another note whole, adds a part with Cmd+Up, halves the parts with Cmd+Shift+Down, adds two with a 20-pixel Cmd-drag up, and checks one Chop step that one undo reverses; then, holding E, splits two notes with a line drawn across them and one note with a drag along it, and with Option chops a selected note into four with a 30-pixel drag up, one undo step.
 
 ## Not yet
 
 - Draw Mode in take lanes.
 - The Display & Input setting "Draw Mode with Pitch Lock", which makes pitch-locked drawing the default.
-- The key list's Cmd+E drag and E with Option drag changing a chop's parts, Apply MIDI Tool (Cmd+Return), Show MIDI Note Filters, and Shift with Left and Right moving the clip region.
+- The key list's Show MIDI Note Filters, and Shift with Left and Right moving the clip region.
 
 See [open questions](../open-questions.md) for the defaults taken where the manual is silent.
 

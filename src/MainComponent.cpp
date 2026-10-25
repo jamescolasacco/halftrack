@@ -8813,6 +8813,16 @@ private:
             }
             if (! gridBounds().contains (e.getPosition())) return;
             grabKeyboardFocus();
+            // With a chop under way a Cmd-drag up or down changes its parts, as the reference's Cmd+E drag does, and
+            // holding E with Option a drag over a selected note chops the selected notes so (its manual, sections
+            // 10.5.8.2 and 42.12). Shift steps the parts by powers of two.
+            if (! e.mods.isPopupMenu() && ((chop && e.mods.isCommandDown())
+                || (splitKeyHeld && e.mods.isAltDown() && std::any_of (clip->notes.begin(), clip->notes.end(), [&] (const auto& n) { return selectedNoteIds.contains (n.id) && noteBounds (n).contains (e.position); }))))
+            {
+                if (! chop) { startChop (true, true); chopFromMouse = chop.has_value(); }
+                if (chop) chopDrag = std::pair { e.position.y, chop->parts };
+                return;
+            }
             endGesture(); originalNotes.clear(); drawing = false; marquee = false; erasing = false; velocityDrag = copyDrag = false;
             if (splitKeyHeld && ! e.mods.isPopupMenu()) { splitLine = std::pair { e.position, e.position }; dragClipId = clip->id; repaint(); return; }
             // As in the reference: in Draw Mode a click on a note deletes it and a drag elsewhere draws
@@ -8898,6 +8908,18 @@ private:
                 return;
             }
             if (splitLine) { splitLine->second = e.position; repaint(); return; }
+            if (chopDrag && chop)
+            {
+                const int steps = (int) std::round ((chopDrag->first - e.position.y) / 10.0f); // A part for every 10 pixels.
+                auto parts = chop->parts;
+                for (size_t i = 0; i < parts.size(); ++i)
+                {
+                    const auto base = chopDrag->second[i];
+                    parts[i] = chopParts (chop->originals[i], e.mods.isShiftDown() ? (steps >= 0 ? base << juce::jmin (steps, 7) : base >> juce::jmin (-steps, 7)) : base + steps);
+                }
+                if (parts != chop->parts) { chop->parts = parts; applyChop(); }
+                return;
+            }
             const auto* clip = owner.currentMidiClip();
             if (clip == nullptr || clip->id != dragClipId || e.mods.isPopupMenu() || ! e.mouseWasDraggedSinceMouseDown()) return;
             if (erasing) { eraseAt (e.position); return; }
@@ -8998,6 +9020,7 @@ private:
         {
             silence(); keyPitch = -1;
             if (auto line = std::exchange (splitLine, std::nullopt)) { line->second = e.position; splitAlong (*line, e.mods.isCommandDown()); repaint(); return; }
+            if (std::exchange (chopDrag, std::nullopt)) { if (std::exchange (chopFromMouse, false)) endGesture(); repaint(); return; }
             endGesture(); drawing = false; erasing = false; drawn.clear(); originalNotes.clear(); braceDrag = 0;
             updateRows(); updateScroll(); repaint();
             if (marquee)
@@ -9801,6 +9824,10 @@ private:
         // one (Shift doubling or halving them). It is one undo step, which letting Cmd go or any other edit ends.
         struct Chop { juce::String clipId; std::vector<Session::MidiNoteInfo> originals; std::vector<int> parts; juce::StringArray pieces; };
         std::optional<Chop> chop;
+        // A drag that changes a chop's parts: where it started and the parts then; and whether a mouse gesture began
+        // the chop, so its release ends it.
+        std::optional<std::pair<float, std::vector<int>>> chopDrag;
+        bool chopFromMouse = false;
         juce::TimedCallback chopWatch { [this] { if (chop && ! juce::ModifierKeys::getCurrentModifiersRealtime().isCommandDown()) endGesture(); if (! chop) chopWatch.stopTimer(); } };
         // Split, as the reference's (section 10.5.8.1): while E is held, a drag draws a line that splits the
         // notes it crosses where it crosses them, and a drag along a note splits it where the drag ends.
@@ -10461,7 +10488,7 @@ private:
         // The most parts a note can be chopped into: none shorter than the shortest note.
         static int chopParts (const Session::MidiNoteInfo& note, int parts)
         { return juce::jlimit (1, juce::jmax (1, juce::jmin (128, (int) std::floor (note.lengthBeats * 960 + 1.0e-6))), parts); }
-        void startChop (bool adjustable)
+        void startChop (bool adjustable, bool fromOne = false)
         {
             const auto* clip = owner.currentMidiClip();
             auto notes = selectedNotes();
@@ -10470,14 +10497,15 @@ private:
             { owner.report (juce::Result::fail ("Chopping per-note expression is not supported yet.")); return; }
             Chop next { clip->id, notes, {}, {} };
             const auto grid = snapBeats();
-            for (const auto& n : notes) next.parts.push_back (chopParts (n, (int) std::lround (n.lengthBeats / grid)));
+            for (const auto& n : notes) next.parts.push_back (fromOne ? 1 : chopParts (n, (int) std::lround (n.lengthBeats / grid)));
             endGesture();
             if (std::all_of (next.parts.begin(), next.parts.end(), [] (int p) { return p <= 1; }) && ! adjustable)
             { owner.report (juce::Result::fail ("The selected notes are too short to chop on this grid.")); return; }
             owner.session.beginEditGesture ("Chop notes"); gesture = true;
             chop = std::move (next);
             applyChop();
-            if (adjustable) chopWatch.startTimerHz (20); else endGesture();
+            if (! adjustable) endGesture();
+            else if (! fromOne) chopWatch.startTimerHz (20); // Letting Cmd go ends it; a mouse chop ends with its drag.
         }
         void applyChop()
         {
@@ -25946,6 +25974,12 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         check (even (parts + 1), "with Cmd still held, Up makes one part more");
         pianoRoll.keyPressed (juce::KeyPress (juce::KeyPress::downKey, juce::ModifierKeys (juce::ModifierKeys::commandModifier | juce::ModifierKeys::shiftModifier), 0));
         check (even ((parts + 1) / 2), "and Shift+Down halves the parts");
+        {
+            const auto at = groupPoint (.5, 60), up = at - juce::Point<float> (0, 20);
+            pianoRoll.mouseDown (groupEvent (at, at, false, juce::ModifierKeys::commandModifier)); pianoRoll.mouseDrag (groupEvent (up, at, true, juce::ModifierKeys::commandModifier));
+            pianoRoll.mouseUp (groupEvent (up, at, true, juce::ModifierKeys::commandModifier));
+            check (even ((parts + 1) / 2 + 2), "a Cmd-drag 20 pixels up makes two parts more, as the reference's Cmd+E drag does");
+        }
         pianoRoll.modifierKeysChanged ({});
         check (session.undoSteps()[0] == "Chop notes", "letting Cmd go leaves one Chop step");
         pianoRoll.keyPressed (undo);
@@ -25963,6 +25997,22 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         groupDrag (groupPoint (.5, 60), groupPoint (3, 60));
         check (currentMidiClip()->notes.size() == 4 && std::abs (noteById (splitSource[0]).lengthBeats - 3) < 1e-6 && noteById (splitSource[1]).lengthBeats == 4,
                "and a drag along a note splits it where the drag ends");
+        {
+            // Holding E with Option, a drag up over a selected note chops the selected notes, a part for every 10 pixels.
+            pianoRoll.keyPressed (undo);
+            pianoRoll.keyStateChanged (false); // E let go, so the click selects.
+            groupClick (groupPoint (.5, 60));
+            pianoRoll.keyPressed (juce::KeyPress ('E'));
+            const auto at = groupPoint (.5, 60), up = at - juce::Point<float> (0, 30);
+            pianoRoll.mouseDown (groupEvent (at, at, false, juce::ModifierKeys::altModifier)); pianoRoll.mouseDrag (groupEvent (up, at, true, juce::ModifierKeys::altModifier));
+            pianoRoll.mouseUp (groupEvent (up, at, true, juce::ModifierKeys::altModifier));
+            int pieces = 0; for (const auto& n : currentMidiClip()->notes) pieces += n.pitch == 60;
+            check (pieces == 4 && std::abs (noteById (splitSource[0]).lengthBeats - 1) < 1e-9 && session.undoSteps()[0] == "Chop notes",
+                   "holding E with Option, a drag 30 pixels up over a selected note chops it into four, one undo step");
+            pianoRoll.keyPressed (undo);
+            pianoRoll.keyPressed (juce::KeyPress ('E'));
+            groupDrag (groupPoint (.5, 60), groupPoint (3, 60));
+        }
         pianoRoll.keyStateChanged (false);
     }
     {

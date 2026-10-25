@@ -2837,3 +2837,7 @@ UI area. The note editor's key tracks now have a height of their own, as the ref
 ## Apply Current MIDI Tool Settings — 2026-10-25
 
 UI area. As the reference's key list has it, Cmd+Return in the note editor applies the MIDI tool last opened or applied again with its last settings ([MIDI tools contract](research/midi-tools-contract.md#apply-current-midi-tool-settings-2026-10-25)). Checked in the UI suite.
+
+## Chopping by dragging — 2026-10-25
+
+UI area. As the reference's key list and manual describe, a Cmd-drag up or down during a chop changes its parts, and holding E with Option a drag over a selected note chops the selected notes, each one undo step ([note drawing contract](research/note-drawing-contract.md#split-and-chop-2026-10-25)). Checked in the UI suite.
