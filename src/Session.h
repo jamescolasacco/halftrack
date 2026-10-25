@@ -988,6 +988,9 @@ public:
     juce::Result setSceneTempo (const juce::String& sceneId, std::optional<double> bpm);
     juce::Result setSceneTimeSignature (const juce::String& sceneId, std::optional<TimeSignature>);
     juce::Result importAudioToSlot (const juce::File&, int trackIndex, int sceneIndex);
+    // A MIDI file into a MIDI track's empty Session slot: every track of the file in one clip named for it, looping
+    // over the file's length. One undo step; `clipId` names the new clip.
+    juce::Result importMidiFileToSlot (const juce::File&, int trackIndex, int sceneIndex, juce::String& clipId);
     juce::Result addMidiClipToSlot (const juce::String& trackId, int sceneIndex, double lengthBeats = 4);
     juce::Result clearSlot (int trackIndex, int sceneIndex);
     // Moving and copying Session clips, after the reference's grid. A clip goes to a slot of a track

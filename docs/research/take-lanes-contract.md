@@ -109,4 +109,4 @@ The take lanes suite puts a half-second sample into Take 1 at 3 s from the proje
 
 The UI suite also comps two MIDI takes of the same notes, the first half from Take 1 and the second from Take 2, and drags the split between the parts a quarter second later: one undo step, the right part's notes staying where they played. Undo puts the split back.
 
-Missing: MIDI files dropped into Session slots.
+MIDI files into Session slots (2026-10-25): `importMidiFileToSlot (file, track, scene, clipId)` puts a MIDI file into a MIDI track's empty slot, every track of it in one clip named for it, looping over the file's length, one undo step. MIDI files dropped on a MIDI track's slot go into it and the slots below, or beside the tracks into a new MIDI track; Import File in the Session takes a MIDI file for a MIDI track's selected slot, as the reference's manual has Import MIDI File insert into the selected clip slot (section 5.2). The slot clip suite and the UI suite check each, with undo.

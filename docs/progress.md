@@ -2952,3 +2952,7 @@ Engine and UI areas. As the reference's manual describes for take lanes (section
 
 UI area. As the reference's manual describes for every comp (section 21.7), dragging a source highlight's edge now also moves the split between two unlooped MIDI comp parts. The parts stay within the takes they came from, and the right part's notes stay where they play (`Session::setClipBeats`); one undo step. A UI check that crashed once on a missing group (reading past `state.groups`) now fails with the groups it finds.
 
+## MIDI files into Session slots — 2026-10-25
+
+Engine and UI areas. MIDI files dropped on a MIDI track's Session slot now go into it and the slots below, or beside the tracks into a new MIDI track. Import File in the Session takes a MIDI file for a MIDI track's selected slot, as the reference's manual describes (section 5.2). `Session::importMidiFileToSlot` makes one clip named for the file, looping over its length, one undo step.
+

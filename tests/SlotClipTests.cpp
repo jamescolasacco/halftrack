@@ -271,6 +271,36 @@ int runSlotClipTests (const juce::File& artifacts)
         const auto pasted = slots (audioTrack)[0].clip;
         check (slots (audioTrack)[0].hasClip && pasted.isAudio && pasted.file.existsAsFile() && pasted.file.isAChildOf (project.getParentDirectory()),
                "its audio is collected into the new project");
+        {
+            // A MIDI file into a MIDI track's Session slot: its tracks together in one looping clip named for it.
+            const auto midiFile = root.getChildFile ("Slot Notes.mid");
+            {
+                juce::MidiFile midi; midi.setTicksPerQuarterNote (960);
+                for (const auto& [channel, pitch] : { std::pair { 1, 48 }, std::pair { 3, 55 } })
+                {
+                    juce::MidiMessageSequence part;
+                    auto on = juce::MidiMessage::noteOn (channel, pitch, (juce::uint8) 90); on.setTimeStamp (0); part.addEvent (on);
+                    auto off = juce::MidiMessage::noteOff (channel, pitch, (juce::uint8) 40); off.setTimeStamp (6 * 960); part.addEvent (off);
+                    part.updateMatchedPairs(); midi.addTrack (part);
+                }
+                std::unique_ptr<juce::OutputStream> stream (midiFile.createOutputStream());
+                check (stream != nullptr && midi.writeTo (*stream, 1), "write a MIDI file of two tracks");
+            }
+            Session m (false);
+            ok (m.addMidiTrack ("Slot MIDI"), "a MIDI track");
+            const auto midiTrack = (int) m.snapshot().tracks.size() - 1;
+            juce::String clipId;
+            ok (m.importMidiFileToSlot (midiFile, midiTrack, 0, clipId), "put the file into its first slot");
+            const auto slot = m.snapshot().tracks[(size_t) midiTrack].slots[0];
+            check (slot.hasClip && slot.clip.id == clipId && slot.clip.name == "Slot Notes" && slot.clip.notes.size() == 2 && std::abs (slot.clip.lengthBeats - 6) < 1e-6
+                       && slot.clip.loop.on && std::abs (slot.clip.loop.length - 6) < 1e-6 && m.undoSteps()[0] == "Import session clip",
+                   "the slot holds one clip named for the file with both its tracks' notes, looping over its six beats, one undo step");
+            check (m.importMidiFileToSlot (midiFile, midiTrack, 0, clipId).failed() && m.importMidiFileToSlot (midiFile, 0, 1, clipId).failed()
+                       && m.importMidiFileToSlot (root.getChildFile ("none.mid"), midiTrack, 1, clipId).failed(),
+                   "a filled slot, an audio track's slot and a missing file are refused");
+            m.undo();
+            check (! m.snapshot().tracks[(size_t) midiTrack].slots[0].hasClip, "undo empties the slot");
+        }
         groupTests();
         root.deleteRecursively();
         std::cout << "Slot clips passed" << std::endl;

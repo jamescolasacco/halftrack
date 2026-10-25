@@ -14039,12 +14039,14 @@ private:
     void importSlotDialog (int track, int scene)
     {
         if (track < 0 || track >= (int) state.tracks.size() || scene < 0 || scene >= (int) state.scenes.size())
-        { report (juce::Result::fail ("Select an empty audio slot in Session first.")); return; }
-        if (state.tracks[(size_t) track].isMidi || state.tracks[(size_t) track].isReturn) { report (juce::Result::fail ("Choose an audio track to import audio into a Session slot.")); return; }
+        { report (juce::Result::fail ("Select an empty slot in Session first.")); return; }
+        if (state.tracks[(size_t) track].isReturn) { report (juce::Result::fail ("Choose an audio or MIDI track to import into a Session slot.")); return; }
         if (scene < (int) state.tracks[(size_t) track].slots.size() && state.tracks[(size_t) track].slots[(size_t) scene].hasClip)
         { report (juce::Result::fail ("This slot already contains a clip. Clear it before importing a replacement.")); return; }
         const auto trackId = state.tracks[(size_t) track].id, sceneId = state.scenes[(size_t) scene].id;
-        chooser = std::make_unique<juce::FileChooser> ("Import Audio into Session Slot", browserFolder, "*.wav;*.aif;*.aiff;*.flac;*.ogg;*.mp3");
+        // A MIDI track's slot takes a MIDI file, as the reference's Import MIDI File puts one in the selected slot (its manual, section 5.2).
+        const bool midi = state.tracks[(size_t) track].isMidi;
+        chooser = std::make_unique<juce::FileChooser> (midi ? "Import MIDI File into Session Slot" : "Import Audio into Session Slot", browserFolder, midi ? "*.mid;*.midi" : "*.wav;*.aif;*.aiff;*.flac;*.ogg;*.mp3");
         auto safe = juce::Component::SafePointer<Impl> (this);
         chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
             [safe, trackId, sceneId] (const juce::FileChooser& fc)
@@ -14059,9 +14061,48 @@ private:
     // one to a track along the audio tracks from it, new audio tracks made after the others when
     // they run out. Without a track (track < 0, the drop area right of the tracks) they go into a
     // new audio track, or new tracks.
+    // MIDI files dropped into the Session go into a MIDI track's slots one under another, from the slot they drop on,
+    // or into a new MIDI track's dropped beside the tracks, as one undo step.
+    void importLauncherMidiFiles (const juce::StringArray& files, int track, int firstScene)
+    {
+        if (track >= 0 && ! state.tracks[(size_t) track].isMidi) { report (juce::Result::fail ("Drop MIDI files into a MIDI track's Session slot.")); return; }
+        if (track >= 0)
+            for (int i = 0; i < files.size(); ++i)
+                if (const auto scene = firstScene + i; scene < (int) state.tracks[(size_t) track].slots.size() && state.tracks[(size_t) track].slots[(size_t) scene].hasClip)
+                { report (juce::Result::fail ("A destination slot already contains a clip. Clear it before importing a replacement.")); return; }
+        session.beginEditGesture ("Import Session clips");
+        auto id = track >= 0 ? state.tracks[(size_t) track].id : juce::String();
+        if (id.isEmpty())
+        {
+            const auto before = trackIds();
+            const auto result = session.addMidiTrack(); report (result); refresh();
+            if (result.failed()) { session.endEditGesture(); return; }
+            id = state.tracks[(size_t) createdTrack (before)].id;
+        }
+        int first = -1;
+        for (int i = 0; i < files.size(); ++i)
+        {
+            const auto scene = firstScene + i;
+            while (scene >= (int) state.scenes.size())
+            {
+                const auto result = session.addScene(); report (result); refresh();
+                if (result.failed()) { session.endEditGesture(); return; }
+            }
+            juce::String clipId;
+            const auto result = session.importMidiFileToSlot (juce::File (files[i]), trackIndex (id), scene, clipId); report (result); refresh();
+            if (result.failed()) break;
+            if (first < 0) first = trackIndex (id);
+        }
+        session.endEditGesture();
+        if (first >= 0) { showSession = true; showPiano = false; selectLauncherSlot (first, firstScene); }
+        refresh();
+    }
     void importLauncherFiles (const juce::StringArray& files, int track, int firstScene, bool acrossTracks = false)
     {
         if (track >= (int) state.tracks.size() || firstScene < 0) return;
+        juce::StringArray midiFiles;
+        for (const auto& path : files) if (juce::File (path).hasFileExtension ("mid;midi")) midiFiles.add (path);
+        if (! midiFiles.isEmpty()) { importLauncherMidiFiles (midiFiles, track, firstScene); if (midiFiles.size() == files.size()) return; }
         if (track >= 0 && (state.tracks[(size_t) track].isMidi || state.tracks[(size_t) track].isReturn)) { report (juce::Result::fail ("Drop audio into an audio track's Session slot.")); return; }
         std::vector<juce::File> audioFiles;
         for (const auto& file : files) if (isAudio (juce::File (file))) audioFiles.emplace_back (file);
@@ -24731,6 +24772,35 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         const auto title = getLocalPoint (&launcher, juce::Point<int> (launcher.columnX (launcher.columnOf (audio)) + 30, LauncherGrid::headerHeight / 2));
         itemDropped (SourceDetails (juce::String (browserDragPrefix) + "device:" + juce::String ((int) Session::EffectKind::saturator), &browserList, title));
         check (state.tracks[(size_t) audio].plugins.size() == 1 && selectedTrack == audio, "dropped on a column's title, a device joins that track");
+        {
+            // A MIDI file dropped on a MIDI track's slot, or beside the tracks, becomes a clip there.
+            const auto midiFile = folder.getChildFile ("Drop Notes.mid");
+            {
+                juce::MidiMessageSequence part;
+                auto on = juce::MidiMessage::noteOn (1, 60, (juce::uint8) 100); on.setTimeStamp (0); part.addEvent (on);
+                auto off = juce::MidiMessage::noteOff (1, 60, (juce::uint8) 64); off.setTimeStamp (4 * 960); part.addEvent (off);
+                part.updateMatchedPairs();
+                juce::MidiFile midi; midi.setTicksPerQuarterNote (960); midi.addTrack (part);
+                std::unique_ptr<juce::OutputStream> stream (midiFile.createOutputStream());
+                check (stream != nullptr && midi.writeTo (*stream, 1), "write a MIDI file of one note");
+            }
+            check (session.addMidiTrack ("Drop MIDI").wasOk(), "a MIDI track for the file"); refresh();
+            const auto midiTrack = (int) state.tracks.size() - 1;
+            importLauncherFiles ({ midiFile.getFullPathName() }, midiTrack, 0); refresh();
+            check (state.tracks[(size_t) midiTrack].slots[0].hasClip && state.tracks[(size_t) midiTrack].slots[0].clip.name == "Drop Notes"
+                       && state.tracks[(size_t) midiTrack].slots[0].clip.notes.size() == 1, "a MIDI file dropped on a MIDI track's slot becomes a clip there");
+            session.undo(); refresh();
+            check (! state.tracks[(size_t) midiTrack].slots[0].hasClip, "one undo step takes it back");
+            importLauncherFiles ({ midiFile.getFullPathName() }, audio, 0); refresh();
+            check (! state.tracks[(size_t) audio].slots[0].hasClip, "an audio track's slot does not take it");
+            const auto beforeMidi = trackIds();
+            filesDropped ({ midiFile.getFullPathName() }, inArea.x, inArea.y); refresh();
+            const int madeMidi = createdTrack (beforeMidi);
+            check (madeMidi >= 0 && state.tracks[(size_t) madeMidi].isMidi && state.tracks[(size_t) madeMidi].slots[0].clip.name == "Drop Notes",
+                   "dropped beside the tracks it makes a new MIDI track holding it");
+            session.undo(); refresh();
+            check (state.tracks.size() == tracks + 2, "one undo step takes that track back");
+        }
         folder.deleteRecursively();
         check (session.newProject().wasOk(), "leave the drops"); refresh();
     }

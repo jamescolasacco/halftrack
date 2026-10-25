@@ -9966,6 +9966,32 @@ Result Session::importAudioToSlot (const File& source, int trackIndex, int scene
     }
     impl->changed(); return Result::ok();
 }
+Result Session::importMidiFileToSlot (const File& file, int trackIndex, int sceneIndex, String& clipId)
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    if (impl->edit->getTransport().isRecording()) return Result::fail ("Stop recording before editing slots.");
+    auto* slot = impl->slot (trackIndex, sceneIndex);
+    if (! slot) return Result::fail ("Slot not found.");
+    if (slot->getClip()) return Result::fail ("Clear this slot before importing another clip.");
+    if (impl->slotRecording (slot->itemID)) return Result::fail ("End this slot's recording before adding a clip.");
+    if (! static_cast<bool> (slot->track.state.getProperty (midiTrackProperty))) return Result::fail ("Put MIDI files on a MIDI track.");
+    std::vector<MidiFilePart> parts;
+    if (auto read = readMidiFileParts (file, 0, *impl->edit, parts); read.failed()) return read;
+    te::MidiList merged;
+    merged.setMidiChannel (parts.front().list->getMidiChannel());
+    double length = 0;
+    for (const auto& part : parts) { merged.addFrom (*part.list, nullptr); length = std::max (length, part.length); }
+    impl->transaction ("Import session clip");
+    const te::BeatRange beats { te::BeatPosition::fromBeats (0), te::BeatPosition::fromBeats (length) };
+    auto clip = te::insertMIDIClip (*slot, file.getFileNameWithoutExtension().substring (0, 96), impl->edit->tempoSequence.toTime (beats));
+    if (! clip) return Result::fail ("Could not create the MIDI clip.");
+    clip->setSyncType (te::Clip::syncBarsBeats); clip->setLoopRangeBeats (beats);
+    clip->getSequence().copyFrom (merged, &impl->edit->getUndoManager());
+    impl->applyLaunchDefaults (*clip);
+    impl->colourNewClip (*clip);
+    clipId = clip->itemID.toString();
+    impl->changed(); return Result::ok();
+}
 Result Session::addMidiClipToSlot (const String& trackId, int sceneIndex, double length)
 {
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
