@@ -232,6 +232,22 @@ int runTrackOrderTests (const juce::File& artifacts)
             ok (s.saveProject (mixed), "save the Arrangement's controls"); ok (s.newProject(), "a new project for the controls");
             check (s.arrangementControls() == Session::ArrangementControls {}, "which has the defaults");
             ok (s.loadProject (mixed), "reopen with the controls"); check (s.arrangementControls() == controls, "and the saved controls come back");
+            // And the Arrangement's mixer: hidden at first, with its own sections, as the reference's default Set has them.
+            {
+                const auto first = s.snapshot().arrangementMixerSections;
+                check (! first.shown && first.inOut && first.sends && first.mixer && ! first.trackDelay && ! first.crossfader && s.arrangementMixerSections() == first,
+                       "the Arrangement's mixer is hidden at first, with In/Out, Sends and Volume and without Track Delay or the crossfader");
+                const auto sessionSections = s.mixerSections();
+                auto arranged = first; arranged.shown = true; arranged.sends = false; arranged.trackDelay = true; arranged.returns = false;
+                ok (s.saveProject (mixed), "save before showing it");
+                s.setArrangementMixerSections (arranged);
+                const auto kept = s.snapshot().arrangementMixerSections;
+                check (kept.shown && ! kept.sends && kept.trackDelay && kept.returns && s.mixerSections() == sessionSections && ! s.canUndo() && s.snapshot().dirty,
+                       "showing it and choosing its sections is view state apart from the Session mixer's, its returns following the Arrangement's");
+                ok (s.saveProject (mixed), "save the Arrangement's mixer"); ok (s.newProject(), "a new project for the mixer");
+                check (s.arrangementMixerSections() == first, "which hides it again");
+                ok (s.loadProject (mixed), "reopen with the mixer"); check (s.arrangementMixerSections() == kept, "and the saved mixer comes back");
+            }
             // And Lock Envelopes, off at first: an application setting, as the reference's is.
             check (! s.lockEnvelopes(), "Lock Envelopes is off at first");
             ok (s.saveProject (mixed), "save the project");

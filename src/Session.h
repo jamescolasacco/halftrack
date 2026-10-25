@@ -624,7 +624,7 @@ public:
     struct MixerSections
     {
         bool inOut = true, sends = true, returns = true, mixer = true, trackDelay = false, crossfader = false;
-        bool shown = true; // The whole mixer in the Session View, as the reference's View > Mixer.
+        bool shown = true; // The whole mixer in its view, as the reference's View > Mixer.
         bool operator== (const MixerSections&) const = default;
     };
     // View > Arrangement Track Controls, as the reference's: the Arrangement headers' routing (In/Out),
@@ -680,6 +680,7 @@ public:
         bool soloInPlace = true;
         bool loopIsSongStart = false; // The loop brace's Set Song Start Time Here.
         MixerSections mixerSections;
+        MixerSections arrangementMixerSections { .shown = false };
         ArrangementControls arrangementControls;
         bool arrangementOverview = true;
         TimeFormat timeRulerFormat = TimeFormat::minutesSeconds;
@@ -799,6 +800,13 @@ public:
     // The Session mixer's sections, as the reference's View menu shows and hides them (see MixerSections).
     MixerSections mixerSections() const;
     void setMixerSections (const MixerSections&);
+    // The Arrangement's mixer, as the reference's View > Mixer shows it at the bottom of the
+    // Arrangement: hidden at first (its Set's MixerInArrangement), with sections of its own (its
+    // ArrangerMixer states: In/Out, Sends and Volume shown, Track Delay and the crossfader hidden).
+    // Its returns show as the Arrangement's do (ArrangementControls::returns), so `returns` is not
+    // kept. Kept with the project as view state, as mixerSections is.
+    MixerSections arrangementMixerSections() const;
+    void setArrangementMixerSections (const MixerSections&);
     // The Arrangement's overview, as the reference's View > Overview shows it; its default Set shows
     // it. Kept with the project as view state, not as an undo step.
     bool arrangementOverview() const;

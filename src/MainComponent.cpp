@@ -445,6 +445,39 @@ public:
     }
 };
 
+// The mixer view control in the window's bottom right corner, as the reference's: three faders,
+// lit while the mixer of the view shown shows, or, as its options arrow, a triangle.
+class MixerViewButton final : public juce::Button
+{
+public:
+    explicit MixerViewButton (bool optionsArrow) : juce::Button (optionsArrow ? "Mixer view options" : "Mixer view control"), arrow (optionsArrow)
+    { setClickingTogglesState (false); setWantsKeyboardFocus (false); setMouseClickGrabsKeyboardFocus (false); }
+    void paintButton (juce::Graphics& g, bool over, bool down) override
+    {
+        const auto on = getToggleState() && ! arrow;
+        g.setColour (on ? orange : (over || down) ? raised.brighter (0.08f) : raised);
+        g.fillRect (getLocalBounds().reduced (1));
+        g.setColour (line); g.drawRect (getLocalBounds().reduced (1));
+        g.setColour (on ? themes::colour (0xff1a1a1a) : ink);
+        const auto r = getLocalBounds().toFloat().reduced (getWidth() * .25f, getHeight() * .22f);
+        if (arrow)
+        {
+            juce::Path triangle; triangle.addTriangle (r.getX(), r.getCentreY() - 2, r.getRight(), r.getCentreY() - 2, r.getCentreX(), r.getCentreY() + 3);
+            g.fillPath (triangle); return;
+        }
+        // Three fader lines, their caps at different heights.
+        for (int i = 0; i < 3; ++i)
+        {
+            const auto x = r.getX() + r.getWidth() * (float) i / 2.0f;
+            g.fillRect (x - .5f, r.getY(), 1.0f, r.getHeight());
+            const auto y = r.getY() + r.getHeight() * (i == 1 ? .25f : i == 0 ? .6f : .45f);
+            g.fillRect (x - 2.0f, y - 1.0f, 4.0f, 2.5f);
+        }
+    }
+private:
+    bool arrow = false;
+};
+
 // A mixer control's look for its lane: automated controls show a red thumb, overridden ones a grey one.
 void showAutomationState (juce::Slider& slider, const Session::AutomationLane& lane, const juce::String& manualTip, const juce::String& what)
 {
@@ -513,8 +546,19 @@ public:
                  &playButton, &stopButton, &recordButton, &overdubButton, &sessionRecordButton, &automationArmButton, &reEnableButton, &captureButton, &punchInButton, &punchOutButton, &followButton, &tempo, &nudgeDown, &nudgeUp, &meterLabel, &extButton, &tapButton, &loopButton, &clickButton, &clickSettingsButton, &positionLabel, &loopStartLabel, &loopLengthLabel, &quantisation, &backToArrangement,
                  &projectLabel, &audioButton, &addTrackButton, &addMidiButton, &newMidiClipButton, &sessionTab, &arrangementTab, &pianoTab, &importButton, &filesButton, &pluginsButton,
                  &folderButton, &upButton, &browserSearch, &browserList, &browserSidebar, &browseBack, &browseForward, &hotSwapLabel, &hotSwapClose, &info, &overview, &ruler, &timeRuler, &viewport,
-                 &horizontalScroll, &gridReadout, &zoomIn, &zoomOut, &fitButton, &launcher, &pianoRoll, &audioClipView, &midiLaunch, &clipLoop, &clipGroove, &deviceChain })
+                 &horizontalScroll, &gridReadout, &zoomIn, &zoomOut, &fitButton, &launcher, &arrangementMixer, &pianoRoll, &audioClipView, &midiLaunch, &clipLoop, &clipGroove, &deviceChain,
+                 &mixerViewButton, &mixerViewOptions })
             addAndMakeVisible (child);
+        // The mixer view control in the corner shows and hides the mixer of the view shown, and its
+        // arrow offers the Mixer Controls, as the reference's does.
+        mixerViewButton.setTooltip ("Mixer: show or hide the mixer of the view shown (Option+Cmd+M)");
+        mixerViewButton.onClick = [this] { menuItemSelected (109, 3); };
+        mixerViewOptions.setTooltip ("Mixer Controls: choose the controls the mixer shows");
+        mixerViewOptions.onClick = [this]
+        {
+            mixerControlsMenu().showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&mixerViewOptions),
+                                               [safe = juce::Component::SafePointer<Impl> (this)] (int id) { if (safe != nullptr && id != 0) safe->menuItemSelected (id, 3); });
+        };
 
         for (auto* button : std::initializer_list<juce::Button*> { &playButton, &stopButton, &recordButton, &sessionRecordButton, &automationArmButton, &reEnableButton, &punchInButton, &punchOutButton, &followButton, &tapButton, &loopButton, &clickButton, &clickSettingsButton,
                  &audioButton, &addTrackButton, &addMidiButton, &newMidiClipButton, &sessionTab, &arrangementTab, &pianoTab, &importButton, &filesButton, &pluginsButton, &folderButton,
@@ -837,12 +881,12 @@ public:
             : showPiano && drawMode ? "Draw Mode: drag to draw notes    Alt: one pitch    Click a note: delete    B: leave Draw Mode"
             : showPiano ? "Double-click: add or delete a note    Drag: select    Shift: add to the selection    Ruler: insertion point    B: Draw Mode" : "Space: play / pause     Click ruler: seek     Shift-drag ruler: loop     Double-click MIDI clip: edit notes";
         if (status.isEmpty() && showSession && ! showPiano) message = "Click triangle: launch     Double-click MIDI slot: edit     Enter: launch slot     Shift+Enter: launch scene     Tab: switch view";
-        g.drawText (message, 13, getHeight() - statusHeight, getWidth() - 280, statusHeight, juce::Justification::centredLeft, true);
+        g.drawText (message, 13, getHeight() - statusHeight, getWidth() - 336, statusHeight, juce::Justification::centredLeft, true);
         auto* device = session.audioDeviceManager().getCurrentAudioDevice();
         const auto deviceText = device != nullptr
             ? juce::String (device->getCurrentSampleRate() / 1000.0, 1) + " kHz  /  " + juce::String (device->getCurrentBufferSizeSamples()) + " smp"
             : "Audio device offline";
-        g.drawText (deviceText, getWidth() - 265,
+        g.drawText (deviceText, getWidth() - 321,
                     getHeight() - statusHeight, 252, statusHeight, juce::Justification::centredRight);
     }
 
@@ -910,6 +954,8 @@ public:
         for (auto* hidden : std::initializer_list<juce::Component*> { &importButton, &newMidiClipButton, &addTrackButton, &addMidiButton, &zoomIn, &zoomOut, &fitButton })
             hidden->setVisible (false);
         area.removeFromBottom (statusHeight);
+        mixerViewOptions.setBounds (getWidth() - 24, getHeight() - statusHeight + 3, 18, statusHeight - 6);
+        mixerViewButton.setBounds (mixerViewOptions.getX() - 30, mixerViewOptions.getY(), 30, mixerViewOptions.getHeight());
         // MIDI Map Mode shows its mappings in the browser's place, so the browser shows meanwhile.
         const bool browserShown = showBrowser || mapping();
         // The detail view shows either the device chain or, for an open clip, its editor; View > Hide
@@ -1002,6 +1048,12 @@ public:
         sessionTab.setToggleState (showSession, juce::dontSendNotification);
         arrangementTab.setToggleState (! showSession, juce::dontSendNotification);
         pianoTab.setToggleState (showPiano, juce::dontSendNotification);
+        // View > Mixer in the Arrangement shows its mixer under the tracks, leaving them room.
+        const bool arrangementMixerShown = ! showSession && state.arrangementMixerSections.shown;
+        arrangementMixer.setVisible (arrangementMixerShown);
+        arrangementMixerLaidOut = arrangementMixerShown ? arrangementMixer.preferredHeight() : -1;
+        if (arrangementMixerShown)
+            arrangementMixer.setBounds (area.removeFromBottom (juce::jlimit (0, juce::jmax (0, area.getHeight() - minimumArrangementHeight), arrangementMixerLaidOut)));
         const auto foot = area.removeFromBottom (12);
         timeRuler.setVisible (! showSession);
         timeRuler.setBounds (area.removeFromBottom (TimeRuler::height));
@@ -1075,7 +1127,7 @@ public:
                 report (session.setLaunchQuantisation (code == '0' ? Q::none : grids[code - '6'])); refresh(); return true;
             }
             // View > Mixer, as in the reference, before MIDI Map Mode's Cmd/Ctrl+M.
-            if ((code == 'M' || code == 'm') && key.getModifiers().isAltDown() && showSession) { menuItemSelected (109, 3); return true; }
+            if ((code == 'M' || code == 'm') && key.getModifiers().isAltDown()) { menuItemSelected (109, 3); return true; }
             if (code == 'M' && ! shift && ! key.getModifiers().isAltDown()) { setMidiMapMode (! midiMapMode); return true; }
             if (code == 'K' && ! shift) { setKeyMapMode (! keyMapMode); return true; }
             if (code == 'O' && ! shift && ! key.getModifiers().isAltDown()) { openDialog(); return true; }
@@ -2052,6 +2104,7 @@ private:
     double clipViewFraction = .58;
     juce::Rectangle<int> dividerBounds;
     static constexpr float automationMagnet = 6; // How near a grid line, in pixels, a breakpoint snaps to it.
+    static constexpr int minimumArrangementHeight = 160; // What the Arrangement's mixer leaves the tracks, rulers and scroll bar.
     static constexpr int categoryWidth = 98, trackWidth = 252, trackHeight = 72, rulerHeight = 60,
                          deviceHeight = 268, statusHeight = 24;
     // found: a search result from the index; depth: how far inside the listed folder's open folders it is.
@@ -2345,10 +2398,14 @@ private:
     // A choice in an Audio To chooser: an output, or Configure... (see outputChoices).
     static constexpr int configureOutputItem = 9000;
     struct OutputChoice { juce::String label; std::optional<Session::TrackOutput> output; bool separatorBefore = false; };
+    // Which mixer's sections a strip lays out: the Session's or the Arrangement's.
+    using Sections = Session::MixerSections Session::Snapshot::*;
     class TrackRow final : public juce::Component
     {
     public:
-        TrackRow (Impl& o, int i, bool verticalLayout = false) : owner (o), index (i), trackId (o.state.tracks[(size_t)i].id), columnLayout (verticalLayout)
+        // A column strip lays out the sections of the mixer it is in: the Session's, or the Arrangement's.
+        TrackRow (Impl& o, int i, bool verticalLayout = false, Sections shownSections = &Session::Snapshot::mixerSections)
+            : owner (o), index (i), trackId (o.state.tracks[(size_t)i].id), columnLayout (verticalLayout), sections (shownSections)
         {
             for (auto* c : std::initializer_list<juce::Component*> { &name, &mute, &solo, &arm, &gain, &pan, &input, &monitor, &sendMode }) addAndMakeVisible (c);
             addChildComponent (inputDetail); inputDetail.setName ("Track input channel");
@@ -2601,7 +2658,7 @@ private:
             if (detailWanted != inputDetailShown)
             {
                 inputDetailShown = detailWanted;
-                inputDetail.setVisible (inputDetailShown && ! returnTrack && (! columnLayout || owner.state.mixerSections.inOut) && ! owner.automationMode);
+                inputDetail.setVisible (inputDetailShown && ! returnTrack && (! columnLayout || (owner.state.*sections).inOut) && ! owner.automationMode);
                 resized();
             }
             monitor.setMode (track.monitor);
@@ -2630,7 +2687,7 @@ private:
                 sideA->setToggleState (track.crossfade == Session::CrossfadeAssign::a, juce::dontSendNotification);
                 sideB->setToggleState (track.crossfade == Session::CrossfadeAssign::b, juce::dontSendNotification);
                 // The mixer's sections, as its View menu shows them.
-                const auto& shown = owner.state.mixerSections;
+                const auto& shown = owner.state.*sections;
                 input.setVisible (shown.inOut && ! returnTrack); monitor.setVisible (shown.inOut && ! returnTrack);
                 inputDetail.setVisible (shown.inOut && ! returnTrack && inputDetailShown);
                 sendMode.setVisible (shown.inOut && returnTrack); output.setVisible (shown.inOut);
@@ -2787,7 +2844,7 @@ private:
                 // Top to bottom, each as its section is shown: input and output routing (In/Out),
                 // the sends, then the Mixer's pan and volume with meter, Track Delay and the
                 // crossfader assignment above the Mixer's activator / solo / arm.
-                const auto& shown = owner.state.mixerSections;
+                const auto& shown = owner.state.*sections;
                 name.setBounds (6, 2, getWidth() - 12, 18);
                 input.setBounds (5, 4, getWidth() - 10, 19); inputDetail.setBounds (5, 25, getWidth() - 10, 19);
                 monitor.setBounds (5, 46, getWidth() - 10, 19); output.setBounds (5, 67, getWidth() - 10, 19);
@@ -2898,6 +2955,7 @@ private:
         juce::Colour colour;
         float peakL = 0, peakR = 0;
         bool midi = false, columnLayout = false, returnTrack = false;
+        Sections sections;
         juce::String linkId;
         juce::Label name;
         LinkIndicator link;
@@ -2938,7 +2996,7 @@ private:
         static constexpr int inOutHeight = 48 + outputRow + 21;
     };
 
-    bool syncTrackRows (juce::Component& parent, std::vector<std::unique_ptr<TrackRow>>& rows, bool vertical)
+    bool syncTrackRows (juce::Component& parent, std::vector<std::unique_ptr<TrackRow>>& rows, bool vertical, Sections sections = &Session::Snapshot::mixerSections)
     {
         bool reordered = rows.size() != state.tracks.size();
         if (reordered) rows.clear();
@@ -2947,7 +3005,7 @@ private:
             const auto& track = state.tracks[i];
             if (i >= rows.size())
             {
-                auto row = std::make_unique<TrackRow> (*this, (int)i, vertical);
+                auto row = std::make_unique<TrackRow> (*this, (int)i, vertical, sections);
                 parent.addAndMakeVisible (*row); rows.push_back (std::move (row));
             }
             if (rows[i]->getTrackId() != track.id)
@@ -2955,7 +3013,7 @@ private:
                 auto found = std::find_if (rows.begin()+static_cast<std::ptrdiff_t>(i+1), rows.end(),
                     [&] (const auto& row) { return row->getTrackId() == track.id; });
                 if (found != rows.end()) std::iter_swap (rows.begin()+static_cast<std::ptrdiff_t>(i), found);
-                else { rows[i] = std::make_unique<TrackRow> (*this, (int)i, vertical); parent.addAndMakeVisible (*rows[i]); }
+                else { rows[i] = std::make_unique<TrackRow> (*this, (int)i, vertical, sections); parent.addAndMakeVisible (*rows[i]); }
                 reordered = true;
             }
             rows[i]->sync (track, (int)i);
@@ -2982,7 +3040,8 @@ private:
     class GroupHeader final : public juce::Component
     {
     public:
-        GroupHeader (Impl& o, juce::String id, bool column = false) : owner (o), groupId (std::move (id)), columnLayout (column)
+        GroupHeader (Impl& o, juce::String id, bool column = false, Sections shownSections = &Session::Snapshot::mixerSections)
+            : owner (o), groupId (std::move (id)), columnLayout (column), sections (shownSections)
         {
             for (auto* c : std::initializer_list<juce::Component*> { &fold, &name, &activator, &solo, &gain, &pan }) addAndMakeVisible (c);
             fold.setName ("Group fold"); fold.setTooltip ("Fold or unfold the group's tracks");
@@ -3074,9 +3133,9 @@ private:
                 syncSends (*g);
                 outputChoiceList = owner.outputChoices (groupId, g->parentId);
                 owner.syncOutputChooser (output, outputChoiceList, g->output, outputSignature);
-                output.setVisible (owner.state.mixerSections.inOut); output.setEnabled (! owner.session.isExporting());
+                output.setVisible ((owner.state.*sections).inOut); output.setEnabled (! owner.session.isExporting());
                 // The Mixer section, lined up with the tracks' as the In/Out section moves it.
-                const auto& shown = owner.state.mixerSections;
+                const auto& shown = owner.state.*sections;
                 for (auto* c : std::initializer_list<juce::Component*> { &gain, &activator, &solo }) c->setVisible (shown.mixer);
                 for (auto& send : sends) send->setVisible (shown.sends);
                 mixerShown = shown.mixer;
@@ -3129,7 +3188,7 @@ private:
         {
             if (columnLayout)
             {
-                const auto& shown = owner.state.mixerSections;
+                const auto& shown = owner.state.*sections;
                 int top = shown.inOut ? TrackRow::inOutHeight : 4;
                 output.setBounds (5, 67, getWidth() - 10, 19);
                 for (size_t i = 0; i < sends.size(); ++i)
@@ -3210,6 +3269,7 @@ private:
         juce::String groupId;
         juce::Colour colour;
         bool folded = false, columnLayout = false;
+        Sections sections;
         float peakL = 0, peakR = 0;
         FoldButton fold;
         juce::TextButton activator { "G" }, solo { "S" };
@@ -4881,6 +4941,163 @@ private:
         const auto meter = scene.timeSignature.value_or (state.timeSignatures.empty() ? Session::TimeSignature {} : state.timeSignatures.front().meter);
         return juce::String (meter.numerator) + "/" + juce::String (meter.denominator);
     }
+    // The Main channel at the foot of a mixer, the Session's or the Arrangement's: volume fader and
+    // output meter, Main Out, the cue and the crossfader, each as that mixer's sections show them.
+    class MasterStrip final : public juce::Component
+    {
+    public:
+        // Its view names it: "Session master strip" or "Arrangement master strip", and its volume likewise.
+        MasterStrip (Impl& o, Sections shownSections, const juce::String& view) : owner (o), sections (shownSections)
+        {
+            setName (view + " master strip");
+            gain.setName (view + " master volume"); gain.setSliderStyle (juce::Slider::LinearVertical);
+            gain.setTextBoxStyle (juce::Slider::TextBoxBelow, false, 54, 16); gain.setNormalisableRange (Session::levelRange (false));
+            gain.setDoubleClickReturnValue (true, 0);
+            gain.textFromValueFunction = [] (double v) { return v <= -100 ? juce::String ("-inf dB") : juce::String (v, 1) + " dB"; };
+            gain.onDragStart = [this] { owner.session.beginEditGesture ("Main volume"); };
+            gain.onDragEnd = [this] { owner.session.endEditGesture(); };
+            gain.onValueChange = [this] { owner.report (owner.session.setMasterGain ((float) gain.getValue())); };
+            gain.updateText(); addAndMakeVisible (gain);
+            crossfader.setName ("Crossfader"); crossfader.setSliderStyle (juce::Slider::LinearHorizontal);
+            crossfader.setTextBoxStyle (juce::Slider::NoTextBox, false, 0, 0); crossfader.setRange (-1, 1, .001); crossfader.setDoubleClickReturnValue (true, 0);
+            crossfader.setTooltip ("Crossfader: left plays side A, right plays side B. Double-click to centre.");
+            crossfader.onDragStart = [this] { owner.session.beginEditGesture ("Crossfader"); };
+            crossfader.onDragEnd = [this] { owner.session.endEditGesture(); };
+            crossfader.onValueChange = [this] { owner.report (owner.session.setCrossfader ((float) crossfader.getValue())); };
+            addAndMakeVisible (crossfader);
+            // Main Out, as the reference's Main track chooses the output it plays to.
+            output.setName ("Main Out"); output.setTooltip ("Main Out: the audio output the Main track plays to.");
+            output.onChange = [this]
+            {
+                const auto names = owner.session.outputNames();
+                if (juce::isPositiveAndBelow (output.getSelectedId() - 1, names.size())) owner.report (owner.session.setMasterOutput (names[output.getSelectedId() - 1]));
+                owner.refresh();
+            };
+            addAndMakeVisible (output);
+            // The cue, as the reference's master track has it: Cue Out, the Solo/Cue switch and
+            // the cue volume, at which the click, previews and cued tracks play on Cue Out.
+            cueOutput.setName ("Cue Out"); cueOutput.setTooltip ("Cue Out: the audio output the click, previews and cued tracks play to.");
+            cueOutput.onChange = [this]
+            {
+                const auto names = owner.session.outputNames();
+                if (juce::isPositiveAndBelow (cueOutput.getSelectedId() - 1, names.size())) owner.report (owner.session.setCueOutput (names[cueOutput.getSelectedId() - 1]));
+                owner.refresh();
+            };
+            addAndMakeVisible (cueOutput);
+            soloCue.setName ("Solo/Cue"); soloCue.setClickingTogglesState (false);
+            soloCue.setColour (juce::TextButton::buttonOnColourId, themes::colour (0xff57a7ff)); soloCue.setColour (juce::TextButton::textColourOnId, themes::colour (0xff1a1a1a));
+            soloCue.onClick = [this] { owner.report (owner.session.setCueMode (! owner.state.cueMode)); owner.refresh(); };
+            addAndMakeVisible (soloCue);
+            cueVolume.setName ("Cue volume"); cueVolume.setSliderStyle (juce::Slider::RotaryHorizontalVerticalDrag);
+            cueVolume.setTextBoxStyle (juce::Slider::NoTextBox, false, 0, 0); cueVolume.setNormalisableRange (Session::levelRange (false, -70));
+            cueVolume.setDoubleClickReturnValue (true, -6);
+            cueVolume.textFromValueFunction = [] (double v) { return v <= -70 ? juce::String ("-inf dB") : juce::String (v, 1) + " dB"; };
+            cueVolume.onDragStart = [this] { owner.session.beginEditGesture ("Cue volume"); };
+            cueVolume.onDragEnd = [this] { owner.session.endEditGesture(); };
+            cueVolume.onValueChange = [this] { owner.report (owner.session.setCueVolume ((float) cueVolume.getValue())); };
+            cueVolume.setPopupDisplayEnabled (true, true, nullptr);
+            addAndMakeVisible (cueVolume);
+        }
+        void sync()
+        {
+            const auto& shown = owner.state.*sections;
+            cueOutput.setVisible (shown.inOut); output.setVisible (shown.inOut);
+            for (auto* c : std::initializer_list<juce::Component*> { &soloCue, &cueVolume, &gain }) c->setVisible (shown.mixer);
+            crossfader.setVisible (shown.crossfader);
+            if (shown != laidOut) { laidOut = shown; resized(); }
+            const auto names = owner.session.outputNames();
+            if (names != cueOutputNames) { cueOutputNames = names; cueOutput.clear (juce::dontSendNotification); for (int i = 0; i < names.size(); ++i) cueOutput.addItem (names[i], i + 1); }
+            const auto cue = owner.state.cueOutput.isNotEmpty() ? owner.state.cueOutput : owner.session.masterOutput();
+            cueOutput.setSelectedId (names.indexOf (cue) + 1, juce::dontSendNotification);
+            cueOutput.setEnabled (names.size() > 1 && ! owner.session.isExporting());
+            soloCue.setButtonText (owner.state.cueMode ? "Cue" : "Solo");
+            soloCue.setToggleState (owner.state.cueMode, juce::dontSendNotification);
+            soloCue.setEnabled (owner.state.cueAvailable && ! owner.session.isExporting());
+            soloCue.setTooltip (owner.state.cueAvailable ? "Solo/Cue: the tracks' switches solo them, or cue them on Cue Out"
+                                                         : "Solo/Cue: choose a Cue Out apart from the Main Out to cue tracks");
+            if (! cueVolume.isMouseButtonDown()) cueVolume.setValue (owner.state.cueVolumeDb, juce::dontSendNotification);
+            cueVolume.setTooltip ("Cue volume: " + cueVolume.getTextFromValue (cueVolume.getValue()) + ". The click, previews and cued tracks play at it. Double-click for -6 dB.");
+            cueVolume.setEnabled (! owner.session.isExporting());
+            if (! crossfader.isMouseButtonDown()) crossfader.setValue (owner.state.crossfader, juce::dontSendNotification);
+            crossfader.setEnabled (! owner.session.isExporting());
+            if (! gain.isMouseButtonDown()) gain.setValue (owner.state.masterGainDb, juce::dontSendNotification);
+            gain.setEnabled (! owner.session.isExporting());
+            showAutomationState (gain, owner.state.masterVolumeAutomation, "Main output level. Double-click for 0 dB.", "Main volume");
+            gain.getProperties().set ("midiMapTarget", "master");
+            if (names != outputNames) { outputNames = names; output.clear (juce::dontSendNotification); for (int i = 0; i < names.size(); ++i) output.addItem (names[i], i + 1); }
+            output.setSelectedId (names.indexOf (owner.session.masterOutput()) + 1, juce::dontSendNotification);
+            output.setEnabled (names.size() > 1 && ! owner.session.isExporting());
+            peakL = owner.state.masterPeakL; peakR = owner.state.masterPeakR; repaint();
+        }
+        void resized() override
+        {
+            // In line with the tracks' monitor and Audio To rows, and their pan knobs, as the
+            // mixer's sections are shown.
+            const auto& shown = owner.state.*sections;
+            const int top = shown.inOut ? TrackRow::inOutHeight : 4;
+            cueOutput.setBounds (5, 46, getWidth() - 10, 19);
+            output.setBounds (5, 67, getWidth() - 10, 19);
+            soloCue.setBounds (5, top + 9, 44, 18); cueVolume.setBounds (getWidth() - 39, top + 3, 32, 32);
+            const int bottom = getHeight() - (shown.crossfader ? 56 : 34);
+            gain.setBounds (6, top + 58, 54, juce::jmax (20, bottom - (top + 58))); crossfader.setBounds (16, getHeight() - 34, getWidth() - 32, 22);
+        }
+        void mouseDown (const juce::MouseEvent& e) override { if (! e.mods.isPopupMenu()) owner.selectChain (Session::mainChain); }
+        void paint (juce::Graphics& g) override
+        {
+            g.fillAll (themes::colour (0xff383838));
+            g.setColour (muted); g.setFont (font (9.0f, true)); g.drawText ("MAIN", 6, 4, getWidth() - 12, 16, juce::Justification::centred);
+            if (cueVolume.isVisible()) g.drawText ("CUE", cueVolume.getX(), cueVolume.getBottom(), 32, 10, juce::Justification::centred);
+            if (crossfader.isVisible()) { g.drawText ("A", 4, getHeight() - 34, 12, 22, juce::Justification::centred); g.drawText ("B", getWidth() - 16, getHeight() - 34, 12, 22, juce::Justification::centred); }
+            const juce::Rectangle<int> meter { 66, gain.getY() + 4, 10, juce::jmax (10, gain.getBottom() - 20 - gain.getY()) };
+            for (int channel = 0; channel < 2 && gain.isVisible(); ++channel)
+            {
+                const auto bar = meter.withWidth (4).translated (channel * 6, 0);
+                const auto level = channel == 0 ? peakL : peakR;
+                const auto fraction = juce::jlimit (0.0f, 1.0f, (juce::Decibels::gainToDecibels (level, -60.0f) + 60.0f) / 60.0f);
+                g.setColour (themes::colour (0xff181818)); g.fillRect (bar);
+                g.setColour (level >= 1.0f ? red : green); g.fillRect (bar.withTop (bar.getBottom() - juce::roundToInt (bar.getHeight() * fraction)));
+            }
+            g.setColour (line); g.drawRect (getLocalBounds());
+        }
+    private:
+        Impl& owner;
+        Sections sections;
+        juce::Slider gain, crossfader;
+        juce::ComboBox output, cueOutput; juce::StringArray outputNames, cueOutputNames;
+        juce::TextButton soloCue { "Solo" };
+        juce::Slider cueVolume;
+        Session::MixerSections laidOut;
+        float peakL = 0, peakR = 0;
+        ChildMouseEvents childMouse { *this }; // A click anywhere on the strip shows the Main's chain.
+    };
+    // A mixer's columns, left to right: a group's before what is in it, a folded group hiding its
+    // members, and the returns after the tracks unless they are hidden.
+    struct MixerColumn { int track = -1, group = -1; };
+    std::vector<MixerColumn> mixerColumns (bool returns) const
+    {
+        std::vector<MixerColumn> columns;
+        for (const auto& item : visualOrder())
+        {
+            if (item.group)
+            {
+                if (! anyFolded (state.groups[(size_t) item.index].parentId)) columns.push_back ({ -1, item.index });
+                continue;
+            }
+            const auto& track = state.tracks[(size_t) item.index];
+            if (track.isReturn && ! returns) continue;
+            if (! anyFolded (track.groupId)) columns.push_back ({ item.index, -1 });
+        }
+        return columns;
+    }
+    // A mixer's strips' height from its sections shown, all of them making the tallest. The strips
+    // grow by a row of send knobs for every three returns.
+    int mixerStripHeight (const Session::MixerSections& shown) const
+    {
+        int returns = 0; for (const auto& track : state.tracks) returns += track.isReturn;
+        return (shown.inOut ? TrackRow::inOutHeight : 4) + (shown.sends ? (returns + 2) / 3 * 40 : 0)
+             + (shown.mixer ? 158 : 4) + (shown.trackDelay ? 22 : 0) + (shown.crossfader ? 24 : 0);
+    }
+
     class LauncherGrid final : public juce::Component, private juce::ScrollBar::Listener
     {
     public:
@@ -4908,23 +5125,8 @@ private:
             resized(); repaint();
         }
         // Display columns: a group's column precedes its members, and a folded group hides them.
-        struct Column { int track = -1, group = -1; };
-        void buildColumns()
-        {
-            columns.clear();
-            for (const auto& item : owner.visualOrder())
-            {
-                // A column for each group, before what is in it, unless a group around it is folded.
-                if (item.group)
-                {
-                    if (! owner.anyFolded (owner.state.groups[(size_t) item.index].parentId)) columns.push_back ({ -1, item.index });
-                    continue;
-                }
-                const auto& track = owner.state.tracks[(size_t) item.index];
-                if (track.isReturn && ! owner.state.mixerSections.returns) continue; // The Returns section hidden.
-                if (! owner.anyFolded (track.groupId)) columns.push_back ({ item.index, -1 });
-            }
-        }
+        using Column = MixerColumn;
+        void buildColumns() { columns = owner.mixerColumns (owner.state.mixerSections.returns); }
         int columnCount() const { return (int) columns.size(); }
         int columnOf (int track) const { for (size_t c = 0; c < columns.size(); ++c) if (columns[c].track == track) return (int) c; return -1; }
         int groupColumnOf (int group) const { for (size_t c = 0; c < columns.size(); ++c) if (columns[c].group == group) return (int) c; return -1; }
@@ -5593,16 +5795,8 @@ private:
     public:
         static constexpr int headerHeight = 22, gridTop = headerHeight, columnWidth = 120, rowHeight = 24,
                              sceneWidth = 132, baseMixerHeight = 252 + TrackRow::inOutHeight - 48, stopHeight = 22, scrollSize = 10;
-        // The mixer grows by a row of send knobs for every three returns.
-        // The strips' height, from the mixer's sections shown: all of them make the base height.
-        int mixerHeight() const
-        {
-            const auto& shown = owner.state.mixerSections;
-            if (! shown.shown) return 0; // View > Mixer hides it, the grid taking its place.
-            int returns = 0; for (const auto& track : owner.state.tracks) returns += track.isReturn;
-            return (shown.inOut ? TrackRow::inOutHeight : 4) + (shown.sends ? (returns + 2) / 3 * 40 : 0)
-                 + (shown.mixer ? 158 : 4) + (shown.trackDelay ? 22 : 0) + (shown.crossfader ? 24 : 0);
-        }
+        // The strips' height (see Impl::mixerStripHeight); View > Mixer hides them, the grid taking their place.
+        int mixerHeight() const { return owner.state.mixerSections.shown ? owner.mixerStripHeight (owner.state.mixerSections) : 0; }
         // The Master column follows the last track column, or the right edge once tracks scroll.
         int masterX() const { return juce::jlimit (0, tracksWidth(), (int) columns.size() * columnWidth - (int) offsetX); }
     private:
@@ -5611,132 +5805,7 @@ private:
         std::vector<std::unique_ptr<TrackRow>> rows;
         std::vector<std::unique_ptr<GroupHeader>> groupStrips;
         std::vector<Column> columns;
-        // The Master channel at the foot of the Master column: volume fader and output meter.
-        class MasterStrip final : public juce::Component
-        {
-        public:
-            explicit MasterStrip (Impl& o) : owner (o)
-            {
-                setName ("Session master strip");
-                gain.setName ("Session master volume"); gain.setSliderStyle (juce::Slider::LinearVertical);
-                gain.setTextBoxStyle (juce::Slider::TextBoxBelow, false, 54, 16); gain.setNormalisableRange (Session::levelRange (false));
-                gain.setDoubleClickReturnValue (true, 0);
-                gain.textFromValueFunction = [] (double v) { return v <= -100 ? juce::String ("-inf dB") : juce::String (v, 1) + " dB"; };
-                gain.onDragStart = [this] { owner.session.beginEditGesture ("Main volume"); };
-                gain.onDragEnd = [this] { owner.session.endEditGesture(); };
-                gain.onValueChange = [this] { owner.report (owner.session.setMasterGain ((float) gain.getValue())); };
-                gain.updateText(); addAndMakeVisible (gain);
-                crossfader.setName ("Crossfader"); crossfader.setSliderStyle (juce::Slider::LinearHorizontal);
-                crossfader.setTextBoxStyle (juce::Slider::NoTextBox, false, 0, 0); crossfader.setRange (-1, 1, .001); crossfader.setDoubleClickReturnValue (true, 0);
-                crossfader.setTooltip ("Crossfader: left plays side A, right plays side B. Double-click to centre.");
-                crossfader.onDragStart = [this] { owner.session.beginEditGesture ("Crossfader"); };
-                crossfader.onDragEnd = [this] { owner.session.endEditGesture(); };
-                crossfader.onValueChange = [this] { owner.report (owner.session.setCrossfader ((float) crossfader.getValue())); };
-                addAndMakeVisible (crossfader);
-                // Main Out, as the reference's Main track chooses the output it plays to.
-                output.setName ("Main Out"); output.setTooltip ("Main Out: the audio output the Main track plays to.");
-                output.onChange = [this]
-                {
-                    const auto names = owner.session.outputNames();
-                    if (juce::isPositiveAndBelow (output.getSelectedId() - 1, names.size())) owner.report (owner.session.setMasterOutput (names[output.getSelectedId() - 1]));
-                    owner.refresh();
-                };
-                addAndMakeVisible (output);
-                // The cue, as the reference's master track has it: Cue Out, the Solo/Cue switch and
-                // the cue volume, at which the click, previews and cued tracks play on Cue Out.
-                cueOutput.setName ("Cue Out"); cueOutput.setTooltip ("Cue Out: the audio output the click, previews and cued tracks play to.");
-                cueOutput.onChange = [this]
-                {
-                    const auto names = owner.session.outputNames();
-                    if (juce::isPositiveAndBelow (cueOutput.getSelectedId() - 1, names.size())) owner.report (owner.session.setCueOutput (names[cueOutput.getSelectedId() - 1]));
-                    owner.refresh();
-                };
-                addAndMakeVisible (cueOutput);
-                soloCue.setName ("Solo/Cue"); soloCue.setClickingTogglesState (false);
-                soloCue.setColour (juce::TextButton::buttonOnColourId, themes::colour (0xff57a7ff)); soloCue.setColour (juce::TextButton::textColourOnId, themes::colour (0xff1a1a1a));
-                soloCue.onClick = [this] { owner.report (owner.session.setCueMode (! owner.state.cueMode)); owner.refresh(); };
-                addAndMakeVisible (soloCue);
-                cueVolume.setName ("Cue volume"); cueVolume.setSliderStyle (juce::Slider::RotaryHorizontalVerticalDrag);
-                cueVolume.setTextBoxStyle (juce::Slider::NoTextBox, false, 0, 0); cueVolume.setNormalisableRange (Session::levelRange (false, -70));
-                cueVolume.setDoubleClickReturnValue (true, -6);
-                cueVolume.textFromValueFunction = [] (double v) { return v <= -70 ? juce::String ("-inf dB") : juce::String (v, 1) + " dB"; };
-                cueVolume.onDragStart = [this] { owner.session.beginEditGesture ("Cue volume"); };
-                cueVolume.onDragEnd = [this] { owner.session.endEditGesture(); };
-                cueVolume.onValueChange = [this] { owner.report (owner.session.setCueVolume ((float) cueVolume.getValue())); };
-                cueVolume.setPopupDisplayEnabled (true, true, nullptr);
-                addAndMakeVisible (cueVolume);
-            }
-            void sync()
-            {
-                const auto& shown = owner.state.mixerSections;
-                cueOutput.setVisible (shown.inOut); output.setVisible (shown.inOut);
-                for (auto* c : std::initializer_list<juce::Component*> { &soloCue, &cueVolume, &gain }) c->setVisible (shown.mixer);
-                crossfader.setVisible (shown.crossfader);
-                if (shown != laidOut) { laidOut = shown; resized(); }
-                const auto names = owner.session.outputNames();
-                if (names != cueOutputNames) { cueOutputNames = names; cueOutput.clear (juce::dontSendNotification); for (int i = 0; i < names.size(); ++i) cueOutput.addItem (names[i], i + 1); }
-                const auto cue = owner.state.cueOutput.isNotEmpty() ? owner.state.cueOutput : owner.session.masterOutput();
-                cueOutput.setSelectedId (names.indexOf (cue) + 1, juce::dontSendNotification);
-                cueOutput.setEnabled (names.size() > 1 && ! owner.session.isExporting());
-                soloCue.setButtonText (owner.state.cueMode ? "Cue" : "Solo");
-                soloCue.setToggleState (owner.state.cueMode, juce::dontSendNotification);
-                soloCue.setEnabled (owner.state.cueAvailable && ! owner.session.isExporting());
-                soloCue.setTooltip (owner.state.cueAvailable ? "Solo/Cue: the tracks' switches solo them, or cue them on Cue Out"
-                                                             : "Solo/Cue: choose a Cue Out apart from the Main Out to cue tracks");
-                if (! cueVolume.isMouseButtonDown()) cueVolume.setValue (owner.state.cueVolumeDb, juce::dontSendNotification);
-                cueVolume.setTooltip ("Cue volume: " + cueVolume.getTextFromValue (cueVolume.getValue()) + ". The click, previews and cued tracks play at it. Double-click for -6 dB.");
-                cueVolume.setEnabled (! owner.session.isExporting());
-                if (! crossfader.isMouseButtonDown()) crossfader.setValue (owner.state.crossfader, juce::dontSendNotification);
-                crossfader.setEnabled (! owner.session.isExporting());
-                if (! gain.isMouseButtonDown()) gain.setValue (owner.state.masterGainDb, juce::dontSendNotification);
-                gain.setEnabled (! owner.session.isExporting());
-                showAutomationState (gain, owner.state.masterVolumeAutomation, "Main output level. Double-click for 0 dB.", "Main volume");
-                gain.getProperties().set ("midiMapTarget", "master");
-                if (names != outputNames) { outputNames = names; output.clear (juce::dontSendNotification); for (int i = 0; i < names.size(); ++i) output.addItem (names[i], i + 1); }
-                output.setSelectedId (names.indexOf (owner.session.masterOutput()) + 1, juce::dontSendNotification);
-                output.setEnabled (names.size() > 1 && ! owner.session.isExporting());
-                peakL = owner.state.masterPeakL; peakR = owner.state.masterPeakR; repaint();
-            }
-            void resized() override
-            {
-                // In line with the tracks' monitor and Audio To rows, and their pan knobs, as the
-                // mixer's sections are shown.
-                const auto& shown = owner.state.mixerSections;
-                const int top = shown.inOut ? TrackRow::inOutHeight : 4;
-                cueOutput.setBounds (5, 46, getWidth() - 10, 19);
-                output.setBounds (5, 67, getWidth() - 10, 19);
-                soloCue.setBounds (5, top + 9, 44, 18); cueVolume.setBounds (getWidth() - 39, top + 3, 32, 32);
-                const int bottom = getHeight() - (shown.crossfader ? 56 : 34);
-                gain.setBounds (6, top + 58, 54, juce::jmax (20, bottom - (top + 58))); crossfader.setBounds (16, getHeight() - 34, getWidth() - 32, 22);
-            }
-            void mouseDown (const juce::MouseEvent& e) override { if (! e.mods.isPopupMenu()) owner.selectChain (Session::mainChain); }
-            void paint (juce::Graphics& g) override
-            {
-                g.fillAll (themes::colour (0xff383838));
-                g.setColour (muted); g.setFont (font (9.0f, true)); g.drawText ("MAIN", 6, 4, getWidth() - 12, 16, juce::Justification::centred);
-                if (cueVolume.isVisible()) g.drawText ("CUE", cueVolume.getX(), cueVolume.getBottom(), 32, 10, juce::Justification::centred);
-                if (crossfader.isVisible()) { g.drawText ("A", 4, getHeight() - 34, 12, 22, juce::Justification::centred); g.drawText ("B", getWidth() - 16, getHeight() - 34, 12, 22, juce::Justification::centred); }
-                const juce::Rectangle<int> meter { 66, gain.getY() + 4, 10, juce::jmax (10, gain.getBottom() - 20 - gain.getY()) };
-                for (int channel = 0; channel < 2 && gain.isVisible(); ++channel)
-                {
-                    const auto bar = meter.withWidth (4).translated (channel * 6, 0);
-                    const auto level = channel == 0 ? peakL : peakR;
-                    const auto fraction = juce::jlimit (0.0f, 1.0f, (juce::Decibels::gainToDecibels (level, -60.0f) + 60.0f) / 60.0f);
-                    g.setColour (themes::colour (0xff181818)); g.fillRect (bar);
-                    g.setColour (level >= 1.0f ? red : green); g.fillRect (bar.withTop (bar.getBottom() - juce::roundToInt (bar.getHeight() * fraction)));
-                }
-                g.setColour (line); g.drawRect (getLocalBounds());
-            }
-        private:
-            Impl& owner;
-            juce::Slider gain, crossfader;
-            juce::ComboBox output, cueOutput; juce::StringArray outputNames, cueOutputNames;
-            juce::TextButton soloCue { "Solo" };
-            juce::Slider cueVolume;
-            Session::MixerSections laidOut;
-            float peakL = 0, peakR = 0;
-            ChildMouseEvents childMouse { *this }; // A click anywhere on the strip shows the Main's chain.
-        } masterStrip { owner };
+        MasterStrip masterStrip { owner, &Session::Snapshot::mixerSections, "Session" };
         juce::ScrollBar horizontal { false }, vertical { true };
         double offsetX = 0, offsetScene = 0;
         int tracksWidth() const { return juce::jmax (1, getWidth() - sceneWidth - scrollSize); }
@@ -5759,6 +5828,174 @@ private:
         }
         static void drawTriangle (juce::Graphics& g, int x, int y) { juce::Path path; path.addTriangle ((float) x, (float) y, (float) x, (float) y + 10, (float) x + 9, (float) y + 5); g.fillPath (path); }
         void scrollBarMoved (juce::ScrollBar* bar, double start) override { if (bar == &horizontal) offsetX = start; else offsetScene = start; resized(); repaint(); }
+    };
+
+    // The Arrangement's mixer, as the reference's View > Mixer shows it at the bottom of the
+    // Arrangement: the Session mixer's strips side by side in the tracks' order, a group's before
+    // what is in it, each under a title bar in its track's colour, and the Main strip at the right.
+    // Its sections are its own (Session::arrangementMixerSections), and the returns show as the
+    // Arrangement's do. Its strips are made only while it shows.
+    class ArrangementMixer final : public juce::Component, private juce::ScrollBar::Listener
+    {
+    public:
+        static constexpr int titleHeight = 22, columnWidth = LauncherGrid::columnWidth, mainWidth = LauncherGrid::sceneWidth, scrollSize = 10;
+        explicit ArrangementMixer (Impl& o) : owner (o)
+        {
+            setName ("Arrangement mixer"); setWantsKeyboardFocus (true);
+            for (auto* child : std::initializer_list<juce::Component*> { &strips, &horizontal, &masterStrip }) addAndMakeVisible (child);
+            strips.setInterceptsMouseClicks (false, true);
+            horizontal.addListener (this);
+        }
+        ~ArrangementMixer() override { horizontal.removeListener (this); }
+        bool shown() const { return owner.state.arrangementMixerSections.shown; }
+        void sync()
+        {
+            if (! shown()) { rows.clear(); groupStrips.clear(); columns.clear(); return; }
+            columns = owner.mixerColumns (owner.state.arrangementControls.returns);
+            owner.syncTrackRows (strips, rows, true, &Session::Snapshot::arrangementMixerSections);
+            bool same = groupStrips.size() == owner.state.groups.size();
+            for (size_t i = 0; same && i < groupStrips.size(); ++i) same = groupStrips[i]->getId() == owner.state.groups[i].id;
+            if (! same)
+            {
+                groupStrips.clear();
+                for (const auto& group : owner.state.groups)
+                {
+                    groupStrips.push_back (std::make_unique<GroupHeader> (owner, group.id, true, &Session::Snapshot::arrangementMixerSections));
+                    strips.addAndMakeVisible (*groupStrips.back());
+                }
+            }
+            for (auto& strip : groupStrips) strip->sync();
+            masterStrip.sync();
+            resized(); repaint();
+        }
+        // The titles, the strips as its sections need them, and the scroll bar.
+        int preferredHeight() const { return titleHeight + owner.mixerStripHeight (owner.state.arrangementMixerSections) + scrollSize; }
+        int columnCount() const { return (int) columns.size(); }
+        int columnOf (int track) const { for (size_t c = 0; c < columns.size(); ++c) if (columns[c].track == track) return (int) c; return -1; }
+        int groupColumnOf (int group) const { for (size_t c = 0; c < columns.size(); ++c) if (columns[c].group == group) return (int) c; return -1; }
+        int columnX (int column) const { return column * columnWidth - (int) offsetX; }
+        int columnAt (int x) const
+        {
+            const int c = (int) std::floor ((x + offsetX) / columnWidth);
+            return x >= 0 && x < stripsWidth() && c >= 0 && c < (int) columns.size() ? c : -1;
+        }
+        // The Main strip follows the last strip, or keeps the right edge once the strips scroll.
+        int mainX() const { return juce::jlimit (0, stripsWidth(), (int) columns.size() * columnWidth - (int) offsetX); }
+        juce::Point<float> titlePoint (int column) const { return { (float) columnX (column) + columnWidth / 2.0f, titleHeight / 2.0f }; }
+        juce::Point<float> groupFoldPoint (int group) const { return { (float) columnX (groupColumnOf (group)) + 8.0f, titleHeight / 2.0f }; }
+        void resized() override
+        {
+            const int height = juce::jmax (0, getHeight() - titleHeight - scrollSize);
+            strips.setBounds (0, titleHeight, stripsWidth(), height);
+            for (int i = 0; i < (int) rows.size(); ++i)
+            {
+                const int c = columnOf (i);
+                rows[(size_t) i]->setVisible (c >= 0); rows[(size_t) i]->setBounds (columnX (juce::jmax (0, c)), 0, columnWidth, height);
+            }
+            for (int g = 0; g < (int) groupStrips.size(); ++g)
+            {
+                const int c = groupColumnOf (g);
+                groupStrips[(size_t) g]->setVisible (c >= 0); groupStrips[(size_t) g]->setBounds (columnX (juce::jmax (0, c)), 0, columnWidth, height);
+            }
+            masterStrip.setBounds (mainX(), titleHeight, mainWidth, height);
+            horizontal.setBounds (0, getHeight() - scrollSize, stripsWidth(), scrollSize);
+            const auto totalWidth = juce::jmax ((double) stripsWidth(), (double) columns.size() * columnWidth);
+            offsetX = juce::jlimit (0.0, juce::jmax (0.0, totalWidth - stripsWidth()), offsetX);
+            horizontal.setRangeLimits (0, totalWidth, juce::dontSendNotification); horizontal.setCurrentRange (offsetX, stripsWidth(), juce::dontSendNotification);
+            horizontal.setSingleStepSize (columnWidth);
+        }
+        void paint (juce::Graphics& g) override
+        {
+            g.fillAll (themes::colour (0xff1a1a1a));
+            const auto dark = themes::colour (0xff141414);
+            // Title bars: the track's colour and name, lighter while it is selected; a group's folds it.
+            g.saveState(); g.reduceClipRegion (0, 0, stripsWidth(), titleHeight);
+            for (int c = 0; c < (int) columns.size(); ++c)
+            {
+                const int x = columnX (c);
+                if (x + columnWidth <= 0 || x >= stripsWidth()) continue;
+                const auto title = juce::Rectangle<int> (x, 0, columnWidth, titleHeight).reduced (1, 0).withTrimmedBottom (1);
+                if (const int index = columns[(size_t) c].group; index >= 0)
+                {
+                    const auto& group = owner.state.groups[(size_t) index];
+                    g.setColour (group.colour); g.fillRect (title);
+                    juce::Path fold; const auto fx = (float) title.getX() + 7, fy = (float) title.getCentreY();
+                    if (group.folded) fold.addTriangle (fx, fy - 4, fx, fy + 4, fx + 6, fy);
+                    else fold.addTriangle (fx - 1, fy - 3, fx + 7, fy - 3, fx + 3, fy + 3);
+                    g.setColour (dark); g.fillPath (fold);
+                    g.setFont (font (11.0f, true)); g.drawText (group.name, title.withTrimmedLeft (18).reduced (4, 0), juce::Justification::centredLeft, true);
+                    continue;
+                }
+                const int t = columns[(size_t) c].track;
+                const auto& track = owner.state.tracks[(size_t) t];
+                const bool selected = t == owner.selectedTrack || owner.multiSelectedTracks.contains (track.id);
+                g.setColour (selected ? track.colour.brighter (0.25f) : track.colour); g.fillRect (title);
+                g.setColour (dark); g.setFont (font (11.0f, selected));
+                g.drawText (track.name, title.reduced (6, 0), juce::Justification::centredLeft, true);
+            }
+            g.restoreState();
+            const auto main = juce::Rectangle<int> (mainX(), 0, mainWidth, titleHeight).reduced (1, 0).withTrimmedBottom (1);
+            g.setColour (themes::colour (0xff4a4a4a)); g.fillRect (main);
+            g.setColour (ink); g.setFont (font (11.0f, true)); g.drawText ("Main", main.reduced (6, 0), juce::Justification::centredLeft);
+        }
+        // A title selects its track, Shift adding it to the selection, or its group, whose triangle
+        // folds it; its menu is the track's header menu. Main's selects the Main track.
+        void mouseDown (const juce::MouseEvent& e) override
+        {
+            if (owner.session.isExporting()) return;
+            if (isShowing()) grabKeyboardFocus();
+            if (e.y >= titleHeight) return;
+            const int column = columnAt (e.x);
+            if (column < 0)
+            {
+                if (e.x >= mainX() && e.x < mainX() + mainWidth && ! e.mods.isPopupMenu()) owner.selectChain (Session::mainChain);
+                return;
+            }
+            if (const int index = columns[(size_t) column].group; index >= 0)
+            {
+                const auto& group = owner.state.groups[(size_t) index];
+                if (e.mods.isPopupMenu()) { owner.showHeaderMenu (group.id, false); return; }
+                if (e.x - columnX (column) < 20) owner.report (owner.session.setGroupFolded (group.id, ! group.folded));
+                else owner.selectChain (group.id);
+                owner.refresh(); return;
+            }
+            const int track = columns[(size_t) column].track;
+            if (e.mods.isPopupMenu()) { owner.showHeaderMenu (owner.state.tracks[(size_t) track].id, false); return; }
+            owner.pressTrackHeader (track, e.mods.isShiftDown(), false);
+            owner.refresh();
+        }
+        // While it has the keys, Left and Right select the track or group beside the selected one.
+        bool keyPressed (const juce::KeyPress& key) override
+        {
+            const bool left = key == juce::KeyPress::leftKey, right = key == juce::KeyPress::rightKey;
+            if ((! left && ! right) || columns.empty()) return false;
+            int at = columnOf (owner.selectedTrack);
+            if (const auto* group = owner.groupInfo (owner.selectedChain)) at = groupColumnOf ((int) (group - owner.state.groups.data()));
+            at = at < 0 ? 0 : juce::jlimit (0, (int) columns.size() - 1, at + (right ? 1 : -1));
+            if (columns[(size_t) at].group >= 0) owner.selectChain (owner.state.groups[(size_t) columns[(size_t) at].group].id);
+            else { owner.multiSelectedTracks.clear(); owner.selectTrack (columns[(size_t) at].track); }
+            reveal (at); owner.refresh(); return true;
+        }
+        // Scrolls the column into view.
+        void reveal (int column)
+        {
+            if (column < 0) return;
+            const double left = column * (double) columnWidth;
+            if (left < offsetX) offsetX = left;
+            else if (left + columnWidth > offsetX + stripsWidth()) offsetX = left + columnWidth - stripsWidth();
+            resized(); repaint();
+        }
+    private:
+        Impl& owner;
+        juce::Component strips;
+        std::vector<std::unique_ptr<TrackRow>> rows;
+        std::vector<std::unique_ptr<GroupHeader>> groupStrips;
+        std::vector<MixerColumn> columns;
+        MasterStrip masterStrip { owner, &Session::Snapshot::arrangementMixerSections, "Arrangement" };
+        juce::ScrollBar horizontal { false };
+        double offsetX = 0;
+        int stripsWidth() const { return juce::jmax (1, getWidth() - mainWidth); }
+        void scrollBarMoved (juce::ScrollBar*, double start) override { offsetX = start; resized(); repaint(); }
     };
 
     // Audio clip detail: Clip and Sample boxes (warp, tempo, gain, reverse) beside the waveform.
@@ -10120,6 +10357,9 @@ private:
     Canvas canvas;
     Ruler ruler;
     LauncherGrid launcher;
+    ArrangementMixer arrangementMixer { *this };
+    int arrangementMixerLaidOut = -1; // The height its layout gave the Arrangement's mixer, or -1 while hidden.
+    MixerViewButton mixerViewButton { false }, mixerViewOptions { true };
     PianoRoll pianoRoll;
     AudioClipView audioClipView { *this };
     LaunchBox midiLaunch { *this };
@@ -10475,10 +10715,11 @@ private:
             case menuFocusBrowser: showBrowser = true; resized(); browserList.grabKeyboardFocus(); break;
             case menuFocusGroovePool: openGroovePool(); break;
             case menuFocusMixer:
-                // The Session's mixer, shown if it was hidden.
-                showSessionView();
-                if (! state.mixerSections.shown) { auto shown = state.mixerSections; shown.shown = true; session.setMixerSections (shown); refresh(); launcher.resized(); }
-                clickedArea = Area::session; launcher.grabKeyboardFocus();
+                // The Arrangement's mixer, shown if it was hidden, as the reference's command shows it.
+                if (showSession) break;
+                if (! state.arrangementMixerSections.shown) { auto shown = state.arrangementMixerSections; shown.shown = true; session.setArrangementMixerSections (shown); refresh(); resized(); }
+                clickedArea = Area::arrangement;
+                if (arrangementMixer.isShowing()) arrangementMixer.grabKeyboardFocus();
                 break;
             default: break;
         }
@@ -13054,6 +13295,9 @@ private:
         canvas.syncRows();
         if (selectedSceneIndex() < 0) selectedSceneId = state.scenes.empty() ? juce::String() : state.scenes.front().id;
         launcher.sync();
+        if (arrangementMixerLaidOut != (! showSession && state.arrangementMixerSections.shown ? arrangementMixer.preferredHeight() : -1)) resized();
+        arrangementMixer.sync();
+        mixerViewButton.setToggleState (shownMixer().shown, juce::dontSendNotification);
         pianoRoll.sync();
         if (showPiano && (audioClipView.isVisible() != (selectedAudioClip() != nullptr) || midiLaunch.isVisible() != (selectedAudioClip() == nullptr && sessionMidiClip() != nullptr)
                           || clipGroove.isVisible() != (selectedAudioClip() == nullptr && currentMidiClip() != nullptr)
@@ -13470,6 +13714,29 @@ private:
             const bool plain = (id == menuRecordArrangement) == starts;
             mappings->addKeyPress (id, juce::KeyPress (juce::KeyPress::F9Key, plain ? juce::ModifierKeys() : juce::ModifierKeys (juce::ModifierKeys::shiftModifier), 0));
         }
+    }
+    // The mixer of the view shown: the Session's, or the Arrangement's at the bottom of the Arrangement.
+    const Session::MixerSections& shownMixer() const { return showSession ? state.mixerSections : state.arrangementMixerSections; }
+    void setShownMixer (const Session::MixerSections& sections)
+    {
+        if (showSession) session.setMixerSections (sections); else session.setArrangementMixerSections (sections);
+        refresh(); resized(); launcher.resized(); launcher.repaint();
+    }
+    // View > Mixer Controls, and the mixer view control's menu: the sections of the mixer of the view
+    // shown, as the reference picks them by view, but the Return Tracks entry, which is the Session
+    // mixer's in either view (the Arrangement's mixer shows the returns as the Arrangement does). The
+    // entries are named as the reference's manual names them.
+    juce::PopupMenu mixerControlsMenu()
+    {
+        const auto& shown = shownMixer();
+        juce::PopupMenu sections;
+        sections.addItem (menuEntry (103, "In/Out", true, shown.inOut)); sections.addItem (menuEntry (104, "Sends", true, shown.sends));
+        sections.addItem (menuEntry (105, "Mixer", true, shown.mixer));
+        sections.addSeparator();
+        sections.addItem (menuEntry (106, "Track Options", true, shown.trackDelay)); sections.addItem (menuEntry (107, "Crossfader", true, shown.crossfader));
+        sections.addSeparator();
+        sections.addItem (menuEntry (108, "Return Tracks", true, state.mixerSections.returns));
+        return sections;
     }
     // Menu commands wait while a dialog or menu is open over the window, as the reference's do.
     bool menusBlocked() const { return session.isExporting() || juce::ModalComponentManager::getInstance()->getNumModalComponents() > 0; }
@@ -14076,17 +14343,9 @@ private:
             add (92, "Video Window", video::supported(), videoWindow != nullptr && videoWindow->isVisible());
            #endif
             popup.addSeparator();
-            // The Session mixer's sections, as the reference's View menu shows and hides them.
-            const auto& shown = state.mixerSections;
-            add (109, "Mixer", showSession, shown.shown);
-            juce::PopupMenu sections;
-            sections.addItem (menuEntry (103, "In/Out", true, shown.inOut)); sections.addItem (menuEntry (104, "Sends", true, shown.sends));
-            sections.addItem (menuEntry (105, "Mixer", true, shown.mixer));
-            sections.addSeparator();
-            sections.addItem (menuEntry (106, "Track Delay", true, shown.trackDelay)); sections.addItem (menuEntry (107, "Crossfader", true, shown.crossfader));
-            sections.addSeparator();
-            sections.addItem (menuEntry (108, "Returns", true, shown.returns));
-            popup.addSubMenu ("Mixer Controls", sections, ! menusBlocked());
+            // The mixer of the view shown, and its sections, as the reference's View menu shows and hides them.
+            add (109, "Mixer", true, shownMixer().shown);
+            popup.addSubMenu ("Mixer Controls", mixerControlsMenu(), ! menusBlocked());
             // The Arrangement headers' controls, as the reference's Arrangement Track Controls submenu.
             const auto& arranged = state.arrangementControls;
             juce::PopupMenu controls;
@@ -14126,7 +14385,8 @@ private:
             add (menuFocusClip, "Focus Clip View", currentMidiClip() != nullptr || selectedAudioClip() != nullptr); add (menuFocusDevices, "Focus Device View");
             add (menuFocusBrowser, "Focus Browser"); add (menuFocusGroovePool, "Focus Groove Pool");
             popup.addSeparator();
-            add (menuFocusMixer, "Focus Mixer");
+            // Focus Mixer is the Arrangement's, as the reference's is enabled only there.
+            add (menuFocusMixer, "Focus Mixer", ! showSession);
         }
         else if (menuName == "Options")
         {
@@ -14254,13 +14514,14 @@ private:
             case 101: report (session.pasteTime (pasteTimeTrack(), state.insertMarker)); refresh(); break;
             case 102: { const auto [a, b] = editRange(); report (session.duplicateTime (a, b)); refresh(); break; }
             case 98: report (session.setSoloInPlace (! state.soloInPlace)); refresh(); break;
-            case 109: { auto shown = state.mixerSections; shown.shown = ! shown.shown; session.setMixerSections (shown); refresh(); launcher.resized(); launcher.repaint(); break; }
-            case 103: case 104: case 105: case 106: case 107: case 108:
+            case 109: { auto shown = shownMixer(); shown.shown = ! shown.shown; setShownMixer (shown); break; }
+            case 108: { auto shown = state.mixerSections; shown.returns = ! shown.returns; session.setMixerSections (shown); refresh(); launcher.resized(); launcher.repaint(); break; }
+            case 103: case 104: case 105: case 106: case 107:
             {
-                auto shown = state.mixerSections;
-                auto& section = id == 103 ? shown.inOut : id == 104 ? shown.sends : id == 105 ? shown.mixer : id == 106 ? shown.trackDelay : id == 107 ? shown.crossfader : shown.returns;
+                auto shown = shownMixer();
+                auto& section = id == 103 ? shown.inOut : id == 104 ? shown.sends : id == 105 ? shown.mixer : id == 106 ? shown.trackDelay : shown.crossfader;
                 section = ! section;
-                session.setMixerSections (shown); refresh(); launcher.resized(); launcher.repaint();
+                setShownMixer (shown);
                 break;
             }
             case 30: showPiano = false; addTrack(); resized(); break;
@@ -21194,10 +21455,14 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
             showBrowser = false; resized();
             menuItemSelected (menuFocusBrowser, 5);
             check (showBrowser, "Focus Browser shows the browser");
-            const auto sections = state.mixerSections;
-            auto hidden = sections; hidden.shown = false; session.setMixerSections (hidden); refresh();
-            check (handleKey (juce::KeyPress ('M', juce::ModifierKeys (alt | shift), 0)) && showSession && state.mixerSections.shown, "Option+Shift+M shows the Session with its mixer");
-            session.setMixerSections (sections); showArrangementView(); refresh();
+            // Focus Mixer is the Arrangement's, as the reference's: it shows the Arrangement's mixer.
+            const auto arranged = state.arrangementMixerSections;
+            showSessionView(); refresh();
+            check (! entry ("Navigate", menuFocusMixer)->isEnabled, "in the Session, Focus Mixer cannot act");
+            showArrangementView(); refresh();
+            check (entry ("Navigate", menuFocusMixer)->isEnabled && ! arranged.shown && handleKey (juce::KeyPress ('M', juce::ModifierKeys (alt | shift), 0)) && ! showSession
+                       && state.arrangementMixerSections.shown && arrangementMixer.isVisible(), "in the Arrangement, Option+Shift+M shows its mixer");
+            session.setArrangementMixerSections (arranged); refresh();
         }
         {
             // View > Arrangement Track Controls shows and hides the Arrangement headers' routing, volume and pan,
@@ -23696,6 +23961,92 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
                        && launcher.mixerHeight() == 0 && ! input->isShowing(), "Cmd/Ctrl+Option+M hides the Session mixer, as View > Mixer does");
             check (handleKey (juce::KeyPress ('M', juce::ModifierKeys::commandModifier | juce::ModifierKeys::altModifier, 0)) && state.mixerSections.shown
                        && launcher.mixerHeight() > 0 && ! midiMapMode, "and shows it again, leaving MIDI Map Mode alone");
+        }
+        // The Arrangement's mixer, as the reference's View > Mixer shows it at the bottom of the Arrangement,
+        // with sections of its own and the returns as the Arrangement shows them.
+        {
+            const auto sessionSections = state.mixerSections;
+            const auto arrangedAtFirst = state.arrangementMixerSections;
+            const auto viewItem = [this] (int id)
+            {
+                const auto menu = getMenuForIndex (getMenuBarNames().indexOf ("View"), "View");
+                for (juce::PopupMenu::MenuItemIterator items (menu, true); items.next();) if (items.getItem().itemID == id) return items.getItem();
+                return juce::PopupMenu::Item();
+            };
+            showArrangementView(); refresh();
+            check (! arrangedAtFirst.shown && ! arrangementMixer.isVisible() && viewItem (109).isEnabled && ! viewItem (109).isTicked && ! mixerViewButton.getToggleState()
+                       && viewItem (106).text == "Track Options" && ! viewItem (106).isTicked && viewItem (108).text == "Return Tracks",
+                   "in the Arrangement its mixer is hidden at first, View > Mixer can show it, and Mixer Controls offers its sections");
+            const int lanesHigh = viewport.getHeight();
+            check (handleKey (juce::KeyPress ('M', juce::ModifierKeys::commandModifier | juce::ModifierKeys::altModifier, 0)) && state.arrangementMixerSections.shown
+                       && arrangementMixer.isVisible() && state.mixerSections == sessionSections && viewItem (109).isTicked && mixerViewButton.getToggleState(),
+                   "Cmd/Ctrl+Option+M shows it there, leaving the Session's mixer as it was");
+            check (viewport.getHeight() < lanesHigh && arrangementMixer.getY() >= viewport.getBottom() && (! showDetail || arrangementMixer.getBottom() <= deviceChain.getY()),
+                   "it sits under the tracks, above the detail view, taking its height from them");
+            int returns = 0; for (const auto& track : state.tracks) returns += track.isReturn;
+            check (returns > 0 && arrangementMixer.columnCount() == launcher.columnCount(), "it has a strip for each track, group and return, as the Session's mixer has");
+            auto* volume = dynamic_cast<juce::Slider*> (findNamed (arrangementMixer, "Track volume"));
+            auto* mainVolume = dynamic_cast<juce::Slider*> (findNamed (arrangementMixer, "Arrangement master volume"));
+            // The suite's window is never on screen, so visibility is checked up to the mixer.
+            const auto shownIn = [this] (juce::Component* c) { for (; c != nullptr && c != &arrangementMixer; c = c->getParentComponent()) if (! c->isVisible()) return false; return c != nullptr; };
+            check (shownIn (volume) && shownIn (mainVolume), "its strips have the tracks' faders and the Main strip its own");
+            {
+                const auto* row = dynamic_cast<TrackRow*> (volume->getParentComponent());
+                const int first = row != nullptr ? trackIndex (row->getTrackId()) : -1;
+                const auto before = first >= 0 ? state.tracks[(size_t) first].gainDb : 0.0f;
+                volume->setValue (before - 4, juce::sendNotificationSync); refresh();
+                check (first >= 0 && std::abs (state.tracks[(size_t) first].gainDb - (before - 4)) < .01, "its faders are the tracks' own volume");
+                session.undo(); refresh();
+            }
+            menuItemSelected (106, 3); refresh();
+            auto* delay = findNamed (arrangementMixer, "Track delay");
+            check (state.arrangementMixerSections.trackDelay && state.mixerSections == sessionSections && viewItem (106).isTicked && delay != nullptr && delay->isVisible(),
+                   "in the Arrangement, Mixer Controls > Track Options shows its mixer's Track Delay, not the Session's");
+            menuItemSelected (106, 3); refresh();
+            const int columns = arrangementMixer.columnCount();
+            menuItemSelected (108, 3); refresh();
+            check (! state.mixerSections.returns && arrangementMixer.columnCount() == columns, "Return Tracks is the Session mixer's in either view, as the reference's is");
+            menuItemSelected (108, 3); refresh();
+            menuItemSelected (menuArrangementReturns, 4); refresh();
+            check (arrangementMixer.columnCount() == columns - returns, "hiding the Arrangement's returns hides their strips");
+            menuItemSelected (menuArrangementReturns, 4); refresh();
+            check (arrangementMixer.columnCount() == columns, "and showing them brings them back");
+            // A title selects its track; Left and Right step along the strips.
+            int second = -1; for (int t = 0; t < (int) state.tracks.size() && second < 0; ++t) if (arrangementMixer.columnOf (t) == 1) second = t;
+            if (second >= 0)
+            {
+                const auto now = juce::Time::getCurrentTime();
+                const auto at = arrangementMixer.titlePoint (1);
+                arrangementMixer.mouseDown (juce::MouseEvent (juce::Desktop::getInstance().getMainMouseSource(), at, juce::ModifierKeys (juce::ModifierKeys::leftButtonModifier), 1.0f, 0, 0, 0, 0,
+                                                              &arrangementMixer, &arrangementMixer, now, at, now, 1, false));
+                check (selectedTrack == second && selectedChain.isEmpty(), "clicking a strip's title selects its track");
+                arrangementMixer.keyPressed (juce::KeyPress (juce::KeyPress::leftKey)); refresh();
+                const bool firstColumn = arrangementMixer.columnOf (selectedTrack) == 0 || groupInfo (selectedChain) != nullptr;
+                check (firstColumn, "Left selects the track or group before it");
+                arrangementMixer.keyPressed (juce::KeyPress (juce::KeyPress::rightKey)); refresh();
+                check (selectedTrack == second && selectedChain.isEmpty(), "and Right the one after");
+            }
+            else check (false, "a second strip to click");
+            if (const auto* configured = std::getenv ("HALFTRACK_TEST_UI_SNAPSHOT_DIRECTORY"))
+                if (const juce::File directory (juce::String::fromUTF8 (configured)); directory.createDirectory().wasOk())
+                {
+                    juce::PNGImageFormat png; const auto output = directory.getChildFile ("arrangement-mixer.png");
+                    if (auto stream = output.createOutputStream(); stream && stream->setPosition (0) && stream->truncate().wasOk()
+                        && png.writeImageToStream (createComponentSnapshot (getLocalBounds(), true, 1.0f), *stream))
+                        std::cout << "UI SNAPSHOT " << output.getFullPathName() << std::endl;
+                }
+            // The corner's mixer view control shows and hides the mixer of the view shown, and its arrow offers Mixer Controls.
+            const auto controls = mixerControlsMenu();
+            bool offersTrackOptions = false; for (juce::PopupMenu::MenuItemIterator items (controls); items.next();) offersTrackOptions = offersTrackOptions || items.getItem().itemID == 106;
+            check (offersTrackOptions && mixerViewButton.isVisible() && mixerViewOptions.isVisible() && mixerViewOptions.getRight() <= getWidth()
+                       && mixerViewButton.getY() >= getHeight() - statusHeight, "the mixer view control sits in the bottom right corner, its arrow offering Mixer Controls");
+            mixerViewButton.onClick(); refresh();
+            check (! state.arrangementMixerSections.shown && ! arrangementMixer.isVisible() && ! mixerViewButton.getToggleState() && viewport.getHeight() == lanesHigh,
+                   "the mixer view control hides the Arrangement's mixer, giving the tracks their height back");
+            showSessionView(); refresh();
+            check (mixerViewButton.getToggleState() == state.mixerSections.shown && ! arrangementMixer.isVisible() && state.mixerSections == sessionSections,
+                   "in the Session the control shows the Session's mixer, and the Arrangement's stays out of sight");
+            session.setArrangementMixerSections (arrangedAtFirst); refresh();
         }
         auto* sideA = dynamic_cast<juce::Button*> (findNamed (launcher, "Crossfade A"));
         auto* fader = dynamic_cast<juce::Slider*> (findNamed (launcher, "Crossfader"));

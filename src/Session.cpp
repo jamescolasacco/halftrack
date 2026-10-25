@@ -68,6 +68,10 @@ const juce::Identifier mixerInOutProperty { "halftrackMixerInOut" }, mixerSendsP
                        arrangementVolumeProperty { "halftrackArrangementVolume" }, arrangementTrackOptionsProperty { "halftrackArrangementTrackOptions" },
                        arrangementReturnsProperty { "halftrackArrangementReturns" }, arrangementOverdubProperty { "halftrackArrangementOverdub" },
                        sceneSettingsShownProperty { "halftrackSceneSettingsShown" };
+// The Arrangement mixer's sections shown, as view state.
+const juce::Identifier arrangementMixerInOutProperty { "halftrackArrangementMixerInOut" }, arrangementMixerSendsProperty { "halftrackArrangementMixerSends" },
+                       arrangementMixerVolumeProperty { "halftrackArrangementMixerVolume" }, arrangementMixerTrackDelayProperty { "halftrackArrangementMixerTrackDelay" },
+                       arrangementMixerCrossfaderProperty { "halftrackArrangementMixerCrossfader" }, arrangementMixerShownProperty { "halftrackMixerInArrangement" };
 constexpr float defaultCueVolumeDb = -6.0f; // As the reference's default Set has it.
 // The reference's count-ins, none or one, two or four bars, as the engine's modes.
 te::Edit::CountIn countInMode (int bars)
@@ -7069,7 +7073,7 @@ Session::Snapshot Session::snapshot() const
     s.cueMode = s.cueModeChosen && s.cueAvailable;
     s.soloInPlace = soloInPlace();
     s.loopIsSongStart = loopIsSongStart();
-    s.mixerSections = mixerSections(); s.arrangementControls = arrangementControls(); s.arrangementOverview = arrangementOverview(); s.timeRulerFormat = timeRulerFormat(); s.sceneSettingsShown = sceneSettingsShown();
+    s.mixerSections = mixerSections(); s.arrangementMixerSections = arrangementMixerSections(); s.arrangementControls = arrangementControls(); s.arrangementOverview = arrangementOverview(); s.timeRulerFormat = timeRulerFormat(); s.sceneSettingsShown = sceneSettingsShown();
     for (const auto& m : e.state.getChildWithName (midiMapType))
         if (auto mapping = readMidiMapping (m); isMappableTarget (mapping.target) && impl->mappingCurrent (m)) s.midiMappings.push_back (mapping);
     s.midiLearnTarget = impl->midiLearnTarget;
@@ -14264,6 +14268,24 @@ void Session::setMixerSections (const MixerSections& sections)
     s.setProperty (mixerInOutProperty, sections.inOut, nullptr); s.setProperty (mixerSendsProperty, sections.sends, nullptr); s.setProperty (mixerReturnsProperty, sections.returns, nullptr);
     s.setProperty (mixerVolumeProperty, sections.mixer, nullptr); s.setProperty (mixerTrackDelayProperty, sections.trackDelay, nullptr);
     s.setProperty (mixerCrossfaderProperty, sections.crossfader, nullptr); s.setProperty (mixerShownProperty, sections.shown, nullptr);
+    impl->viewStateChanged();
+}
+Session::MixerSections Session::arrangementMixerSections() const
+{
+    const auto& s = impl->edit->state;
+    const MixerSections fallback { .shown = false };
+    return { s.getProperty (arrangementMixerInOutProperty, fallback.inOut), s.getProperty (arrangementMixerSendsProperty, fallback.sends), fallback.returns,
+             s.getProperty (arrangementMixerVolumeProperty, fallback.mixer), s.getProperty (arrangementMixerTrackDelayProperty, fallback.trackDelay),
+             s.getProperty (arrangementMixerCrossfaderProperty, fallback.crossfader), s.getProperty (arrangementMixerShownProperty, fallback.shown) };
+}
+void Session::setArrangementMixerSections (const MixerSections& sections)
+{
+    auto kept = sections; kept.returns = MixerSections().returns;
+    if (kept == arrangementMixerSections()) return;
+    auto s = impl->edit->state;
+    s.setProperty (arrangementMixerInOutProperty, kept.inOut, nullptr); s.setProperty (arrangementMixerSendsProperty, kept.sends, nullptr);
+    s.setProperty (arrangementMixerVolumeProperty, kept.mixer, nullptr); s.setProperty (arrangementMixerTrackDelayProperty, kept.trackDelay, nullptr);
+    s.setProperty (arrangementMixerCrossfaderProperty, kept.crossfader, nullptr); s.setProperty (arrangementMixerShownProperty, kept.shown, nullptr);
     impl->viewStateChanged();
 }
 Session::ArrangementControls Session::arrangementControls() const
