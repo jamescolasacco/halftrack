@@ -698,6 +698,12 @@ public:
         CrossfadeCurve crossfadeCurve = CrossfadeCurve::constantPower;
         AutomationLane masterVolumeAutomation;
         std::vector<TrackInfo> tracks;
+        // Automatic colours (see the track colours contract): the project's colour sequence index, as the
+        // reference's ColorSequenceIndex (-1 before one is drawn); the sequence slots the picker for audio,
+        // MIDI and group tracks and the one for returns and the Main give next (-1 before they start); and
+        // the Main's colour, transparent for none.
+        int colourSequence = -1, nextTrackColour = -1, nextReturnColour = -1;
+        juce::Colour mainColour;
         std::vector<GroupInfo> groups;
         std::vector<SceneInfo> scenes;
         std::vector<LocatorInfo> locators;
@@ -740,6 +746,16 @@ public:
     ~Session() override;
     Snapshot snapshot() const;
     juce::Result newProject();
+    // Halftrack's own colour palette, laid out as the reference's: 5 rows of 14, a hue to a column and the
+    // last column grey, lighter rows first. Automatic colours are its indices.
+    static constexpr int paletteColumns = 14, paletteRows = 5, paletteSize = paletteColumns * paletteRows;
+    static juce::Colour paletteColour (int index);
+    // The automatic colours a colour sequence index chooses, as palette indices in order: one of the
+    // reference's eight sequences of 17, or with Reduced Automatic Colors its one of 11 (static reading).
+    static std::vector<int> automaticColours (int sequenceIndex, bool reduced);
+    // Seeds the generator automatic colours are drawn from, the reference's minstd, which it seeds once
+    // per run from the system; for tests.
+    static void seedColourGenerator (std::uint32_t seed);
     // A new project like the reference's built-in default Set (read from its bundle, 2026-10-22):
     // two MIDI tracks without instruments, two audio tracks, and returns with a reverb and a delay,
     // so 1-MIDI, 2-MIDI, 3-Audio, 4-Audio, A- and B- named by their devices, with eight scenes at
@@ -1373,6 +1389,13 @@ public:
         // the Arrangement's scrub area scrubs. Off, a click there places the insert marker, and a Shift-click there or
         // on the bar numbers scrubs, as its manual says (section 6.3).
         bool permanentScrubAreas = true;
+        // Theme & Colors' Track and Clip Colors, after the reference's (its manual, section 2.3.2, and its song
+        // preference data): Auto-Assign Track Colors (on) steps new tracks through the project's colour
+        // sequence, and off gives them Default Track Color, a palette index (0); Reduced Automatic Colors (off)
+        // steps through the reference's 11 colourblind-friendly colours instead; and the Clip Color toggle,
+        // Random (off, giving the track's colour), gives new clips random colours from the sequence.
+        bool autoAssignTrackColours = true, reducedAutomaticColours = false, randomClipColours = false;
+        int defaultTrackColour = 0;
         // The computer MIDI keyboard (KEYS) and Options > Scale Highlighting (K), which the reference keeps with
         // its song preference data, both off at first: they come back as they were left.
         bool computerMidiKeyboard = false, highlightScale = false;

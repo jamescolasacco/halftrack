@@ -13855,16 +13855,9 @@ private:
     }
     // The headers' Duplicate: the selected group, or the selected tracks.
     void duplicateSelectedHeaders() { if (const auto ids = headerSelection(); session.canDuplicateTracks (ids)) duplicateFromUI (ids); }
-    // Halftrack's own palette for the headers' colour grid, laid out as the reference's: 5 rows of
-    // 14, a hue to a column and the last column grey, lighter rows first.
-    static constexpr int paletteColumns = 14, paletteRows = 5;
-    static juce::Colour paletteColour (int index)
-    {
-        const int column = index % paletteColumns, row = juce::jlimit (0, paletteRows - 1, index / paletteColumns);
-        constexpr float brightness[] { 0.92f, 0.82f, 0.72f, 0.6f, 0.46f }, saturation[] { 0.62f, 0.48f, 0.36f, 0.42f, 0.38f };
-        if (column == paletteColumns - 1) return juce::Colour::greyLevel (0.86f - 0.16f * (float) row);
-        return juce::Colour::fromHSV (std::fmod (0.98f + (float) column * 0.92f / (paletteColumns - 1), 1.0f), saturation[row], brightness[row], 1.0f);
-    }
+    // Halftrack's own palette for the colour grids (Session::paletteColour), laid out as the reference's.
+    static constexpr int paletteColumns = Session::paletteColumns, paletteRows = Session::paletteRows;
+    static juce::Colour paletteColour (int index) { return Session::paletteColour (index); }
     struct ColourGrid final : juce::PopupMenu::CustomComponent
     {
         ColourGrid (std::vector<juce::Colour> used, std::shared_ptr<int> picked) : CustomComponent (false), inUse (std::move (used)), chosen (std::move (picked))
@@ -17789,7 +17782,9 @@ private:
     public:
         explicit ThemePage (Impl& o) : owner (o)
         {
-            for (auto* c : std::initializer_list<juce::Component*> { &heading, &themeLabel, &theme }) addAndMakeVisible (c);
+            for (auto* c : std::initializer_list<juce::Component*> { &heading, &themeLabel, &theme, &coloursHeading, &autoColours, &defaultLabel, &defaultColour,
+                                                                    &reducedColours, &clipLabel, &clipColour })
+                addAndMakeVisible (c);
             styleHeading (heading, "Theme"); themeLabel.setText ("Theme", juce::dontSendNotification);
             theme.setName ("Interface theme");
             for (int kind = 0; kind < themes::kindCount; ++kind) theme.addItem (themes::name ((themes::Kind) kind), kind + 1);
@@ -17799,14 +17794,59 @@ private:
                 p.theme = juce::jlimit (0, Session::Preferences::themeCount - 1, theme.getSelectedId() - 1);
                 owner.report (owner.session.setPreferences (p)); owner.applyInterfaceLook(); sync();
             };
+            // Track and Clip Colors, as the reference's section of this page names them (its manual, section 2.3.2).
+            styleHeading (coloursHeading, "Track and Clip Colors");
+            autoColours.setName ("Auto-Assign Track Colors"); reducedColours.setName ("Reduced Automatic Colors");
+            defaultLabel.setText ("Default Track Color", juce::dontSendNotification); defaultColour.setName ("Default track color");
+            clipLabel.setText ("Clip Color", juce::dontSendNotification); clipColour.setName ("Clip color");
+            clipColour.addItem ("Track Color", 1); clipColour.addItem ("Random", 2);
+            autoColours.onClick = reducedColours.onClick = [this] { apply(); };
+            clipColour.onChange = [this] { apply(); };
+            defaultColour.onClick = [this]
+            {
+                auto picked = std::make_shared<int> (-1);
+                juce::PopupMenu menu;
+                menu.addCustomItem (1, std::make_unique<ColourGrid> (std::vector<juce::Colour> { Session::paletteColour (owner.session.preferences().defaultTrackColour) }, picked), nullptr, "Default Track Color");
+                menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&defaultColour),
+                                    [safe = juce::Component::SafePointer<ThemePage> (this), picked] (int) { if (safe != nullptr && *picked >= 0) safe->chooseDefaultColour (*picked); });
+            };
             sync();
         }
-        void sync() { theme.setSelectedId (owner.session.preferences().theme + 1, juce::dontSendNotification); }
-        void resized() override { auto area = getLocalBounds().reduced (16, 8); preferenceHeading (area, heading); preferenceRow (area, themeLabel, theme, 160); }
+        void sync()
+        {
+            const auto p = owner.session.preferences();
+            theme.setSelectedId (p.theme + 1, juce::dontSendNotification);
+            autoColours.setToggleState (p.autoAssignTrackColours, juce::dontSendNotification); reducedColours.setToggleState (p.reducedAutomaticColours, juce::dontSendNotification);
+            clipColour.setSelectedId (p.randomClipColours ? 2 : 1, juce::dontSendNotification);
+            // The default colour is the one new tracks take with Auto-Assign off, so the swatch is dimmed while it is on.
+            defaultColour.setColour (juce::TextButton::buttonColourId, Session::paletteColour (p.defaultTrackColour));
+            defaultColour.setAlpha (p.autoAssignTrackColours ? 0.4f : 1.0f);
+        }
+        void apply()
+        {
+            auto p = owner.session.preferences();
+            p.autoAssignTrackColours = autoColours.getToggleState(); p.reducedAutomaticColours = reducedColours.getToggleState();
+            p.randomClipColours = clipColour.getSelectedId() == 2;
+            owner.report (owner.session.setPreferences (p)); sync();
+        }
+        // Default Track Color: the swatch chosen from the palette.
+        void chooseDefaultColour (int index)
+        {
+            auto p = owner.session.preferences(); p.defaultTrackColour = juce::jlimit (0, Session::paletteSize - 1, index);
+            owner.report (owner.session.setPreferences (p)); sync();
+        }
+        void resized() override
+        {
+            auto area = getLocalBounds().reduced (16, 8); preferenceHeading (area, heading); preferenceRow (area, themeLabel, theme, 160);
+            area.removeFromTop (8); preferenceHeading (area, coloursHeading); autoColours.setBounds (area.removeFromTop (22));
+            preferenceRow (area, defaultLabel, defaultColour, 40); reducedColours.setBounds (area.removeFromTop (22)); preferenceRow (area, clipLabel, clipColour, 120);
+        }
     private:
         Impl& owner;
-        juce::Label heading, themeLabel;
-        juce::ComboBox theme;
+        juce::Label heading, themeLabel, coloursHeading, defaultLabel, clipLabel;
+        juce::ComboBox theme, clipColour;
+        juce::ToggleButton autoColours { "Auto-Assign Track Colors" }, reducedColours { "Reduced Automatic Colors" };
+        juce::TextButton defaultColour;
     };
     // Preferences' Record, Warp & Launch page, in the reference's sections: Record, Warp and fades, and
     // Launch.
@@ -23367,6 +23407,23 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         auto* zoomChooser = dynamic_cast<juce::ComboBox*> (findNamed (panel, "Display zoom"));
         check (themeChooser != nullptr && themeChooser->getNumItems() == themes::kindCount && themeChooser->getText() == "Dark" && zoomChooser != nullptr && zoomChooser->getText() == "100%",
                "Preferences offer Dark, Light and High Contrast, and the display zoom, at Dark and 100%");
+        {
+            // Theme & Colors' Track and Clip Colors, as the reference's section names them.
+            auto* autoColours = dynamic_cast<juce::ToggleButton*> (findNamed (panel, "Auto-Assign Track Colors"));
+            auto* reduced = dynamic_cast<juce::ToggleButton*> (findNamed (panel, "Reduced Automatic Colors"));
+            auto* clipColour = dynamic_cast<juce::ComboBox*> (findNamed (panel, "Clip color"));
+            auto* swatch = dynamic_cast<juce::TextButton*> (findNamed (panel, "Default track color"));
+            auto* page = swatch != nullptr ? dynamic_cast<ThemePage*> (swatch->getParentComponent()) : nullptr;
+            check (autoColours != nullptr && autoColours->getToggleState() && reduced != nullptr && ! reduced->getToggleState() && clipColour != nullptr && clipColour->getText() == "Track Color"
+                       && page != nullptr && swatch->getAlpha() < 1.0f, "Track and Clip Colors offer Auto-Assign on, Reduced Automatic Colors off and Clip Color at Track Color, the default swatch dimmed");
+            autoColours->setToggleState (false, juce::sendNotificationSync); page->chooseDefaultColour (30);
+            check (! session.preferences().autoAssignTrackColours && session.preferences().defaultTrackColour == 30 && swatch->getAlpha() == 1.0f
+                       && swatch->findColour (juce::TextButton::buttonColourId) == Session::paletteColour (30), "switching Auto-Assign off brightens the swatch, and a chosen swatch becomes Default Track Color");
+            clipColour->setSelectedId (2, juce::sendNotificationSync); reduced->setToggleState (true, juce::sendNotificationSync);
+            check (session.preferences().randomClipColours && session.preferences().reducedAutomaticColours, "Random clip colours and Reduced Automatic Colors are set from there");
+            auto restored = session.preferences(); restored.autoAssignTrackColours = true; restored.defaultTrackColour = 0; restored.randomClipColours = restored.reducedAutomaticColours = false;
+            check (session.setPreferences (restored).wasOk(), "the colour settings back as they were"); page->sync();
+        }
         const auto mapButton = midiMapButton.findColour (juce::TextButton::buttonOnColourId);
         const auto snapshot = [&] (const juce::String& file)
         {

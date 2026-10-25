@@ -25,6 +25,8 @@
 #include <atomic>
 #include <cstdlib>
 #include <filesystem>
+#include <random>
+#include <deque>
 
 namespace halftrack
 {
@@ -57,6 +59,18 @@ const juce::Identifier cueOutputProperty { "halftrackCueOutput" }, cueVolumeProp
 const juce::Identifier soloInPlaceProperty { "halftrackSoloInPlace" };
 // The loop brace's Set Song Start Time Here, as the reference's: Play starts at the loop's start.
 const juce::Identifier loopIsSongStartProperty { "halftrackLoopIsSongStart" };
+// Automatic colours, kept with the project as the reference keeps them with its Set: the colour sequence index
+// (ColorSequenceIndex), the slots its two pickers take next (NextColorIndex), and the Main's colour.
+const juce::Identifier colourSequenceProperty { "halftrackColourSequence" }, nextTrackColourProperty { "halftrackNextTrackColour" },
+                       nextReturnColourProperty { "halftrackNextReturnColour" }, mainColourProperty { "halftrackMainColour" };
+// The generator automatic colours are drawn from: as the reference's, minstd (48271, 2^31 - 1), one for the
+// run, seeded from the system.
+std::minstd_rand& colourGenerator()
+{
+    static std::minstd_rand generator { std::random_device {}() };
+    return generator;
+}
+int drawColour() { return static_cast<int> (colourGenerator()()); }
 const juce::Identifier locatorSongStartProperty { "halftrackSongStart" }; // On the locator that is the song's start.
 // A track's first clip's name, which its automatic name can show, and that clip while it is the only one.
 const juce::Identifier firstClipNameProperty { "halftrackFirstClipName" }, firstClipIdProperty { "halftrackFirstClipId" };
@@ -1703,6 +1717,22 @@ Result validateTrackLinks (const juce::ValueTree& state)
             return Result::fail ("The project contains an invalid track link.");
     }
     for (const auto& child : state) if (auto result = validateTrackLinks (child); result.failed()) return result;
+    return Result::ok();
+}
+// Automatic colours: a colour sequence index the generator can draw, picker slots within a sequence, and an
+// opaque Main colour.
+Result validateColours (const juce::ValueTree& state)
+{
+    const auto whole = [&] (const juce::Identifier& key, juce::int64 low, juce::int64 high)
+    {
+        if (! state.hasProperty (key)) return true;
+        const auto text = state[key].toString().trim();
+        return text.isNotEmpty() && String (text.getLargeIntValue()) == text && text.getLargeIntValue() >= low && text.getLargeIntValue() <= high;
+    };
+    const auto main = state[mainColourProperty].toString();
+    if (! whole (colourSequenceProperty, -1, 2147483646) || ! whole (nextTrackColourProperty, -1, 16) || ! whole (nextReturnColourProperty, -1, 16)
+        || (state.hasProperty (mainColourProperty) && (main.length() != 8 || ! main.containsOnly ("0123456789abcdefABCDEF") || juce::Colour::fromString (main).getAlpha() != 255)))
+        return Result::fail ("This project's automatic colours are out of range.");
     return Result::ok();
 }
 Result validateLocators (const juce::ValueTree& state)
@@ -3505,6 +3535,7 @@ struct Session::Impl
         if (clip == nullptr) { changed(); return; }
         auto* undo = &edit->getUndoManager();
         giveDefaultFades (*clip, undo); // Kept for when it reaches the Arrangement.
+        colourNewClip (*clip, true);
         clip->setPosition ({ { te::TimePosition(), edit->tempoSequence.toTime (beats.getEnd()) }, te::TimeDuration() });
         if (auto* midi = dynamic_cast<te::MidiClip*> (clip))
         {
@@ -3952,7 +3983,89 @@ struct Session::Impl
     // A new track from the saved default of its kind, placed as addAudioTrack and addMidiTrack place
     // theirs, with a new colour, as the reference gives one (0x1021d4f68). False when there is none,
     // or it cannot be read, so a plain track is made instead.
-    bool addFromDefault (bool midi, const String& name, const String& after, juce::Colour colour)
+    // Automatic colours, as the reference's (static reading; see the track colours contract). The project keeps
+    // a colour sequence index, choosing one of the sequences, and where its two pickers take their next colour:
+    // one for audio, MIDI and group tracks stepping forward, and one for returns and the Main stepping back from
+    // the slot before the first's start, so the two walk apart.
+    int colourSequenceIndex() const { return static_cast<int> (edit->state.getProperty (colourSequenceProperty, -1)); }
+    std::vector<int> colourSequence() const { return automaticColours (colourSequenceIndex(), prefs.reducedAutomaticColours); }
+    int colourSlot (bool returns) const
+    {
+        const int slot = static_cast<int> (edit->state.getProperty (returns ? nextReturnColourProperty : nextTrackColourProperty, -1));
+        return slot < 0 ? -1 : slot % (int) colourSequence().size();
+    }
+    // Draws a colour sequence index if the project has none, and with `reset` the pickers' places too. The
+    // pickers, once either has no place, start at a random slot, the second one slot before it.
+    void setUpColourPickers (bool reset, juce::UndoManager* undo)
+    {
+        if (colourSequenceIndex() < 0) edit->state.setProperty (colourSequenceProperty, drawColour(), undo);
+        if (reset) { edit->state.removeProperty (nextTrackColourProperty, undo); edit->state.removeProperty (nextReturnColourProperty, undo); recentClipColours.clear(); }
+        if (colourSlot (false) >= 0 && colourSlot (true) >= 0) return;
+        const int length = (int) colourSequence().size(), start = drawColour() % length;
+        edit->state.setProperty (nextTrackColourProperty, start, undo);
+        edit->state.setProperty (nextReturnColourProperty, (start + length - 1) % length, undo);
+    }
+    // A picker's next colour, which it then steps past.
+    juce::Colour nextAutomaticColour (bool returns, juce::UndoManager* undo)
+    {
+        setUpColourPickers (false, undo);
+        const auto sequence = colourSequence();
+        const int length = (int) sequence.size(), slot = colourSlot (returns);
+        edit->state.setProperty (returns ? nextReturnColourProperty : nextTrackColourProperty, (slot + (returns ? length - 1 : 1)) % length, undo);
+        return paletteColour (sequence[(size_t) slot]);
+    }
+    // An inserted track's colour, as the reference colours one: Default Track Color with Auto-Assign Track
+    // Colors off; inside a group, its group's, the picker not stepping; otherwise its picker's next.
+    bool buildingProject = false; // While startProject builds tracks, which recolourNewProject then colours.
+    juce::Colour newTrackColour (const te::Track& t, juce::UndoManager* undo)
+    {
+        if (buildingProject) return {};
+        if (! prefs.autoAssignTrackColours) return paletteColour (prefs.defaultTrackColour);
+        if (auto* parent = t.getParentFolderTrack()) return parent->getColour();
+        const auto* audio = dynamic_cast<const te::AudioTrack*> (&t);
+        return nextAutomaticColour (audio != nullptr && isReturn (*audio), undo);
+    }
+    // As the reference colours a new Set: a new colour sequence and picker places, then every track in order,
+    // groups before what they hold (which takes the group's colour), then the Main, then the returns.
+    void recolourNewProject (juce::UndoManager* undo)
+    {
+        const juce::ScopedValueSetter<bool> colouring (buildingProject, false);
+        edit->state.removeProperty (colourSequenceProperty, undo);
+        setUpColourPickers (true, undo);
+        juce::Array<te::Track*> returns;
+        for (auto* t : te::getAllTracks (*edit))
+        {
+            auto* audio = dynamic_cast<te::AudioTrack*> (t);
+            if (audio != nullptr && isReturn (*audio)) returns.add (t);
+            else if (audio != nullptr || dynamic_cast<te::FolderTrack*> (t) != nullptr) t->setColour (newTrackColour (*t, undo));
+        }
+        edit->state.setProperty (mainColourProperty, (prefs.autoAssignTrackColours ? nextAutomaticColour (true, undo) : paletteColour (prefs.defaultTrackColour)).toString(), undo);
+        for (auto* t : returns) t->setColour (newTrackColour (*t, undo));
+    }
+    // Random clip colours (the Clip Color toggle at Random), as the reference's clip picker (static reading): a
+    // new clip without a colour takes one at random from the project's sequence, other than the last two it
+    // gave, which are not saved. Clips recorded together share one: recordingClipColour, drawn by the first
+    // take of recordings that overlap.
+    std::deque<int> recentClipColours;
+    std::optional<juce::Colour> recordingClipColour;
+    juce::Colour randomClipColour()
+    {
+        setUpColourPickers (false, &edit->getUndoManager());
+        auto candidates = colourSequence();
+        std::erase_if (candidates, [&] (int c) { return std::find (recentClipColours.begin(), recentClipColours.end(), c) != recentClipColours.end(); });
+        const int chosen = candidates[(size_t) (drawColour() % (int) candidates.size())];
+        recentClipColours.push_back (chosen);
+        if (recentClipColours.size() > 2) recentClipColours.pop_front();
+        return paletteColour (chosen);
+    }
+    void colourNewClip (te::Clip& clip, bool recorded = false)
+    {
+        if (! prefs.randomClipColours || clip.state.hasProperty (clipColourProperty)) return;
+        auto colour = recorded && recordingClipColour ? *recordingClipColour : randomClipColour();
+        if (recorded) recordingClipColour = colour;
+        clip.state.setProperty (clipColourProperty, juce::VariantConverter<juce::Colour>::toVar (colour), &edit->getUndoManager());
+    }
+    bool addFromDefault (bool midi, const String& name, const String& after)
     {
         const auto file = defaultTracks[midi ? 1 : 0];
         if (plainTracks || ! file.existsAsFile()) return false;
@@ -3966,9 +4079,9 @@ struct Session::Impl
         if (track == nullptr) return false;
         freshCopy (*track, original);
         if (name.trim().isNotEmpty()) track->setName (name.trim());
-        track->setColour (colour);
         track->getClipSlotList().ensureNumberOfSlots (edit->getSceneList().getNumScenes());
         placeNewTrack (*track, after); lastCreated = track;
+        track->setColour (newTrackColour (*track, &edit->getUndoManager())); // Over the default track's own.
         return true;
     }
     // The headers' Copy: each copied top-most track's or group's state, in order.
@@ -4499,6 +4612,7 @@ struct Session::Impl
             && std::isfinite (p.driverErrorCompensationMs) && std::abs (p.driverErrorCompensationMs) <= 200
             && juce::isPositiveAndBelow ((int) p.metronomeSound, Session::metronomeSoundCount)
             && (p.countInBars == 0 || p.countInBars == 1 || p.countInBars == 2 || p.countInBars == 4)
+            && juce::isPositiveAndBelow (p.defaultTrackColour, paletteSize)
             && validPaths (p.userFolders) && validPaths (p.recentProjects);
     }
     // Places and recent projects are absolute paths, each once.
@@ -4547,6 +4661,11 @@ struct Session::Impl
             read.drawWithPitchLock = number ("drawWithPitchLock", 0, 2) == 1;
             const int scrubAreas = number ("permanentScrubAreas", 1, 2);
             read.permanentScrubAreas = scrubAreas == 1;
+            const int autoColours = number ("autoAssignTrackColours", 1, 2), reducedColours = number ("reducedAutomaticColours", 0, 2), randomClips = number ("randomClipColours", 0, 2);
+            const int defaultColour = number ("defaultTrackColour", 0, paletteSize);
+            read.autoAssignTrackColours = autoColours == 1; read.reducedAutomaticColours = reducedColours == 1; read.randomClipColours = randomClips == 1;
+            read.defaultTrackColour = juce::jmax (0, defaultColour);
+            const bool coloursRead = autoColours >= 0 && reducedColours >= 0 && randomClips >= 0 && defaultColour >= 0;
             read.computerMidiKeyboard = number ("computerMidiKeyboard", 0, 2) == 1; read.highlightScale = number ("highlightScale", 0, 2) == 1;
             read.selectOnLaunch = number ("selectOnLaunch", 1, 2) == 1; read.selectNextSceneOnLaunch = number ("selectNextSceneOnLaunch", 1, 2) == 1;
             read.startPlaybackWithRecord = startPlayback == 1;
@@ -4557,7 +4676,7 @@ struct Session::Impl
             for (auto* project : xml->getChildWithTagNameIterator ("RECENTPROJECT")) read.recentProjects.add (project->getStringAttribute ("path"));
             read.createFadesOnClipEdges = edgeFades == 1;
             read.metronomeSound = static_cast<Session::MetronomeSound> (juce::jmax (0, sound));
-            valid = valid && follow >= 0 && sceneRecord >= 0 && audioUnits >= 0 && vst3System >= 0 && vst3Custom >= 0 && edgeFades >= 0 && sound >= 0 && startPlayback >= 0 && locked >= 0 && tapStart >= 0 && fullHeight >= 0 && scrubAreas >= 0 && validPreferences (read);
+            valid = valid && follow >= 0 && sceneRecord >= 0 && audioUnits >= 0 && vst3System >= 0 && vst3Custom >= 0 && edgeFades >= 0 && sound >= 0 && startPlayback >= 0 && locked >= 0 && tapStart >= 0 && fullHeight >= 0 && scrubAreas >= 0 && coloursRead && validPreferences (read);
         }
         if (valid) { prefs = read; fadesOnClipEdges = prefs.createFadesOnClipEdges; return; }
         // Set an unreadable file aside rather than lose it, and keep the defaults.
@@ -4587,6 +4706,8 @@ struct Session::Impl
         xml.setAttribute ("startPlaybackWithTapTempo", next.startPlaybackWithTapTempo ? 1 : 0);
         xml.setAttribute ("fullHeightBrowser", next.fullHeightBrowser ? 1 : 0);
         xml.setAttribute ("drawWithPitchLock", next.drawWithPitchLock ? 1 : 0); xml.setAttribute ("permanentScrubAreas", next.permanentScrubAreas ? 1 : 0);
+        xml.setAttribute ("autoAssignTrackColours", next.autoAssignTrackColours ? 1 : 0); xml.setAttribute ("defaultTrackColour", next.defaultTrackColour);
+        xml.setAttribute ("reducedAutomaticColours", next.reducedAutomaticColours ? 1 : 0); xml.setAttribute ("randomClipColours", next.randomClipColours ? 1 : 0);
         xml.setAttribute ("computerMidiKeyboard", next.computerMidiKeyboard ? 1 : 0); xml.setAttribute ("highlightScale", next.highlightScale ? 1 : 0);
         xml.setAttribute ("selectOnLaunch", next.selectOnLaunch ? 1 : 0); xml.setAttribute ("selectNextSceneOnLaunch", next.selectNextSceneOnLaunch ? 1 : 0);
         xml.setAttribute ("preferencesTab", next.preferencesTab);
@@ -7164,6 +7285,8 @@ Session::Snapshot Session::snapshot() const
     s.position = transport.getPosition().inSeconds();
     s.insertMarker = transport.startPosition.get().inSeconds();
     s.duration = e.getLength().inSeconds();
+    s.colourSequence = impl->colourSequenceIndex(); s.nextTrackColour = impl->colourSlot (false); s.nextReturnColour = impl->colourSlot (true);
+    s.mainColour = juce::Colour::fromString (e.state[mainColourProperty].toString());
     s.tempo = e.tempoSequence.getBpmAt (te::TimePosition::fromSeconds (juce::jmax (0.0, s.position))) / impl->nudgeFactor;
     s.tempoMap.clear();
     // A device as the snapshot shows it, in any chain.
@@ -7440,6 +7563,7 @@ Result Session::newBuiltInDefaultProject() { return startProject (true); }
 Result Session::startProject (bool builtInDefaultSet)
 {
     const juce::ScopedValueSetter<bool> plain (impl->plainTracks, true); // A new project's tracks are the built-in ones.
+    const juce::ScopedValueSetter<bool> building (impl->buildingProject, true);
     impl->endNudge();
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
     endEditGesture();
@@ -7455,7 +7579,7 @@ Result Session::startProject (bool builtInDefaultSet)
     impl->audition.reset(); // Its states belong to the replaced Edit.
     impl->previewing.clear();
     impl->edit = std::make_unique<te::Edit> (std::move (options));
-    ++impl->projectGeneration;
+    ++impl->projectGeneration; impl->recentClipColours.clear(); impl->recordingClipColour.reset(); // The clip picker belongs to the project.
     impl->edit->getMasterVolumePlugin()->setVolumeDb (0);
     impl->edit->tempoSequence.getTempo (0)->setBpm (120);
     impl->edit->clickTrackGain = .6f; impl->edit->clickTrackEmphasiseBars = true;
@@ -7489,6 +7613,7 @@ Result Session::startProject (bool builtInDefaultSet)
         scene->state.setProperty ("halftrackSceneID", juce::Uuid().toString(), nullptr);
         scene->name = "Scene " + String (scene->getIndex() + 1);
     }
+    impl->recolourNewProject (nullptr);
     impl->prepareEdit();
     impl->pristineNewDocument = true;
     return Result::ok();
@@ -7552,6 +7677,7 @@ Result Session::loadProject (const File& file)
     if (auto result = validateCurveModifiers (state); result.failed()) return result;
     if (auto result = validateFollowActions (state); result.failed()) return result;
     if (auto result = validateLocators (state); result.failed()) return result;
+    if (auto result = validateColours (state); result.failed()) return result;
     if (auto result = validateTrackDelays (state); result.failed()) return result;
     if (auto result = validateTrackLinks (state); result.failed()) return result;
     if (auto result = validateHostedInstruments (state); result.failed()) return result;
@@ -7609,7 +7735,7 @@ Result Session::loadProject (const File& file)
     impl->audition.reset(); // Its states belong to the replaced Edit.
     stopNotePreviews();
     impl->edit = std::move (candidate);
-    ++impl->projectGeneration;
+    ++impl->projectGeneration; impl->recentClipColours.clear(); impl->recordingClipColour.reset(); // The clip picker belongs to the project.
     for (auto* t : te::getAudioTracks (*impl->edit))
     {
         t->getClipSlotList().ensureNumberOfSlots (impl->edit->getSceneList().getNumScenes());
@@ -8199,10 +8325,13 @@ Result Session::setPreferences (const Preferences& next)
     if (! Impl::validPreferences (next)) return Result::fail ("Those preferences are out of range.");
     if (next == impl->prefs && impl->prefsFile().existsAsFile()) return Result::ok();
     const bool sound = next.metronomeSound != impl->prefs.metronomeSound;
+    const bool colours = next.reducedAutomaticColours != impl->prefs.reducedAutomaticColours;
     if (next.countInBars != impl->prefs.countInBars && impl->edit->getTransport().isRecording())
         return Result::fail ("Stop recording before changing the count-in.");
     if (auto r = impl->savePreferences (next); r.failed()) return r;
     if (sound) impl->applyMetronomeSound();
+    // As the reference's: the pickers start again at a random place, the sequence and every colour kept.
+    if (colours) impl->setUpColourPickers (true, nullptr);
     impl->edit->setCountInMode (countInMode (next.countInBars)); // An application setting too.
     sendChangeMessage(); return Result::ok();
 }
@@ -8561,22 +8690,43 @@ Result Session::locateMissingMedia (const File& folder, int& found)
     if (found > 0) { impl->edit->restartPlayback(); impl->explicitChanges = true; impl->pristineNewDocument = false; }
     sendChangeMessage(); return Result::ok();
 }
+juce::Colour Session::paletteColour (int index)
+{
+    index = juce::jlimit (0, paletteSize - 1, index);
+    const int column = index % paletteColumns, row = index / paletteColumns;
+    constexpr float brightness[] { 0.92f, 0.82f, 0.72f, 0.6f, 0.46f }, saturation[] { 0.62f, 0.48f, 0.36f, 0.42f, 0.38f };
+    if (column == paletteColumns - 1) return juce::Colour::greyLevel (0.86f - 0.16f * (float) row);
+    return juce::Colour::fromHSV (std::fmod (0.98f + (float) column * 0.92f / (paletteColumns - 1), 1.0f), saturation[row], brightness[row], 1.0f);
+}
+std::vector<int> Session::automaticColours (int sequenceIndex, bool reduced)
+{
+    // The reference's tables (static reading, 0x106a80d50 and 0x106a80d80), as indices into its palette of 70,
+    // which Halftrack's lays out the same way.
+    static constexpr int sequences[8][17] { { 22, 3, 2, 19, 18, 6, 20, 7, 17, 16, 1, 4, 5, 21, 10, 9, 23 }, { 24, 11, 0, 16, 2, 1, 3, 15, 17, 6, 20, 23, 22, 10, 25, 26, 12 },
+                                            { 14, 1, 4, 19, 18, 20, 21, 6, 17, 16, 3, 2, 0, 25, 10, 12, 26 }, { 17, 16, 3, 1, 2, 15, 0, 26, 14, 12, 24, 10, 25, 8, 20, 22, 21 },
+                                            { 21, 7, 22, 8, 10, 9, 24, 23, 25, 11, 12, 0, 26, 2, 1, 16, 3 }, { 1, 14, 16, 0, 3, 2, 26, 24, 11, 25, 12, 9, 10, 23, 20, 6, 8 },
+                                            { 19, 4, 2, 17, 1, 3, 18, 6, 5, 21, 20, 8, 7, 10, 9, 11, 25 }, { 0, 1, 2, 16, 15, 17, 18, 6, 4, 3, 7, 8, 10, 22, 24, 12, 25 } };
+    static constexpr int reducedSequence[] { 0, 1, 3, 5, 9, 10, 14, 20, 21, 23, 26 };
+    if (reduced) return { std::begin (reducedSequence), std::end (reducedSequence) };
+    const auto& chosen = sequences[juce::jmax (0, sequenceIndex) % 8];
+    return { std::begin (chosen), std::end (chosen) };
+}
+void Session::seedColourGenerator (std::uint32_t seed) { colourGenerator().seed (seed); }
 Result Session::addAudioTrack (String name, const String& after)
 {
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
     impl->transaction ("Add audio track");
     const auto count = te::getAudioTracks (*impl->edit).size();
-    if (impl->addFromDefault (false, name, after, juce::Colour (std::array<juce::uint32, 6> { 0xffd0a35e, 0xff86a395, 0xff899bbb, 0xffb98579, 0xffaaa179, 0xffa58aaa }[(size_t) count % 6]))) { impl->changed(); return Result::ok(); }
+    if (impl->addFromDefault (false, name, after)) { impl->changed(); return Result::ok(); }
     impl->edit->ensureNumberOfAudioTracks (count + 1);
     auto* t = impl->track (count);
     if (! t) return Result::fail ("Could not create an audio track.");
     t->setName (name.trim()); // Empty is automatic.
-    const juce::uint32 colours[] = { 0xffd0a35e, 0xff86a395, 0xff899bbb, 0xffb98579, 0xffaaa179, 0xffa58aaa };
-    t->setColour (juce::Colour (colours[count % 6]));
     if (auto result = useTrackMixer (*t); result.failed()) return result;
     t->getVolumePlugin()->setVolumeDb (0);
     t->getClipSlotList().ensureNumberOfSlots (impl->edit->getSceneList().getNumScenes());
     impl->placeNewTrack (*t, after); impl->lastCreated = t;
+    t->setColour (impl->newTrackColour (*t, &impl->edit->getUndoManager())); // Placed first, as a group's track takes its colour.
     impl->changed();
     return Result::ok();
 }
@@ -8584,13 +8734,12 @@ Result Session::addMidiTrack (String name, const String& after)
 {
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
     impl->transaction ("Add MIDI track");
-    if (impl->addFromDefault (true, name, after, juce::Colour (0xff9d91bc))) { impl->changed(); return Result::ok(); }
+    if (impl->addFromDefault (true, name, after)) { impl->changed(); return Result::ok(); }
     const auto count = te::getAudioTracks (*impl->edit).size();
     impl->edit->ensureNumberOfAudioTracks (count + 1);
     auto* track = impl->track (count);
     if (! track) return Result::fail ("Could not create a MIDI track.");
     track->setName (name.trim()); // Empty is automatic.
-    track->setColour (juce::Colour (0xff9d91bc));
     track->state.setProperty (midiTrackProperty, true, &impl->edit->getUndoManager());
     if (auto result = useTrackMixer (*track); result.failed()) return result;
     track->getVolumePlugin()->setVolumeDb (0);
@@ -8599,6 +8748,7 @@ Result Session::addMidiTrack (String name, const String& after)
     track->pluginList.insertPlugin (synth, 0, nullptr);
     track->getClipSlotList().ensureNumberOfSlots (impl->edit->getSceneList().getNumScenes());
     impl->placeNewTrack (*track, after); impl->lastCreated = track;
+    track->setColour (impl->newTrackColour (*track, &impl->edit->getUndoManager()));
     impl->changed(); return Result::ok();
 }
 Result Session::addReturnTrack (String name, const String& after)
@@ -8624,7 +8774,7 @@ Result Session::addReturnTrack (String name, const String& after)
     track->state.setProperty (returnBusProperty, bus, undo);
     track->state.setProperty (returnModeProperty, static_cast<int> (SendMode::post), undo);
     track->setName (name.trim()); // Empty is automatic.
-    track->setColour (juce::Colour (0xffb9a283));
+    track->setColour (impl->newTrackColour (*track, undo));
     if (auto result = useTrackMixer (*track); result.failed()) return result;
     track->getVolumePlugin()->setVolumeDb (0);
     aux->busNumber = bus;
@@ -9244,6 +9394,7 @@ Result Session::addMidiClip (const String& trackId, double start, double length)
     auto clip = track->insertMIDIClip ("MIDI clip", time, nullptr);
     if (! clip) return Result::fail ("Could not create the MIDI clip.");
     clip->setSyncType (te::Clip::syncBarsBeats);
+    impl->colourNewClip (*clip);
     impl->changed(); return Result::ok();
 }
 Result Session::addScene (String name)
@@ -9560,6 +9711,7 @@ Result Session::importAudioToSlot (const File& source, int trackIndex, int scene
     clip->setFadeIn (te::TimeDuration::fromSeconds (0)); clip->setFadeOut (te::TimeDuration::fromSeconds (0));
     giveDefaultFades (*clip, &impl->edit->getUndoManager()); // Kept for when it reaches the Arrangement.
     impl->applyLaunchDefaults (*clip);
+    impl->colourNewClip (*clip);
     // Session clips always follow the tempo, in the preferred warp mode.
     if (impl->prefs.defaultWarpMode != WarpMode::stretch)
     {
@@ -9587,6 +9739,7 @@ Result Session::addMidiClipToSlot (const String& trackId, int sceneIndex, double
     if (! clip) return Result::fail ("Could not create the MIDI clip.");
     clip->setSyncType (te::Clip::syncBarsBeats); clip->setLoopRangeBeats (beats);
     impl->applyLaunchDefaults (*clip);
+    impl->colourNewClip (*clip);
     impl->changed(); return Result::ok();
 }
 Result Session::clearSlot (int trackIndex, int sceneIndex)
@@ -10012,6 +10165,7 @@ Result Session::recordSlot (int trackIndex, int sceneIndex)
     input->startRecording (std::move (contexts));
     if (! transport.isPlaying()) transport.play (false);
     if (preroll) impl->edit->setClickTrackRange ({ *preroll, start });
+    if (! impl->anyRecording()) impl->recordingClipColour.reset(); // Takes recorded together share a colour.
     impl->slotRecordings.push_back ({ trackId, slot->itemID, start });
     sendChangeMessage(); return Result::ok();
 }
@@ -11151,7 +11305,8 @@ Result Session::groupTracks (const juce::StringArray& ids, String& groupId)
     if (folder == nullptr) return Result::fail ("Could not create the group.");
     if (auto result = useTrackMixer (*folder); result.failed()) return result;
     folder->setName ({}); // Automatic: its number and Group.
-    folder->setColour (members.getFirst()->getColour());
+    // As the reference's: its first track's colour, or Default Track Color with Auto-Assign Track Colors off.
+    folder->setColour (impl->prefs.autoAssignTrackColours ? members.getFirst()->getColour() : paletteColour (impl->prefs.defaultTrackColour));
     te::Track* preceding = nullptr;
     for (auto* track : members) { impl->edit->moveTrack (te::Track::Ptr (track), te::TrackInsertPoint (folder.get(), preceding)); preceding = track; }
     groupId = folder->itemID.toString();
@@ -12004,6 +12159,7 @@ Result Session::importAudio (const File& source, int index, double start)
     clip->setAutoTempo (false); clip->setAutoPitch (false);
     clip->setFadeIn (te::TimeDuration::fromSeconds (0)); clip->setFadeOut (te::TimeDuration::fromSeconds (0));
     giveDefaultFades (*clip, &impl->edit->getUndoManager());
+    impl->colourNewClip (*clip);
     // Auto-Warp Long Samples: a long sample is taken for a song. Its tempo and first beat come from
     // its content: the clip starts on the first beat, with a warp marker there. A sound with no
     // steady beat to find takes the tempo of whole bars.
@@ -15305,6 +15461,7 @@ void Session::finishRecording (bool stopTransport)
                     std::stable_sort (recorded.begin(), recorded.end(), [&] (te::Clip* a, te::Clip* b) { return rank (a) < rank (b); });
                 }
                 for (auto* clip : recorded) giveDefaultFades (*clip, &impl->edit->getUndoManager()); // As new clips are.
+                for (auto* clip : recorded) impl->colourNewClip (*clip, true);
                 for (auto* clip : recorded) impl->keepTake (*track, *clip);
                 // In order, so the last pass is left on top in the main lane, as the reference copies it there.
                 auto earlier = impl->clipsBeforeRecording;
@@ -15337,6 +15494,7 @@ Result Session::beginRecording (bool waitForPlay)
     if (waitForPlay) { impl->recordWaiting = true; sendChangeMessage(); return Result::ok(); }
     impl->recordWaiting = false;
     impl->captures.clear(); impl->captureTransaction = false;
+    if (impl->slotRecordings.empty()) impl->recordingClipColour.reset(); // Takes recorded together share a colour.
     impl->clipsBeforeRecording.clear();
     for (auto* t : te::getAudioTracks (*impl->edit)) for (auto* c : t->getClips()) impl->clipsBeforeRecording.insert (c->itemID.toString());
     const auto quantisation=snapshot().recordQuantisation;

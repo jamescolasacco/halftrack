@@ -26,7 +26,7 @@ Each capability with partial implementation (a PARTIAL row of the [capability le
 | REC-011 | linked-tracks, ui |  |
 | REC-012 | external-sync, midi-ports, ui |  |
 | ARR-001 | preferences, track-order, ui |  |
-| ARR-002 | groups, track-duplicate, track-order, ui, video |  |
+| ARR-002 | groups, track-colours, track-duplicate, track-order, ui, video |  |
 | ARR-003 | audio-clips, clip-loops, ui |  |
 | ARR-004 | edit-grid, range-edit, ui |  |
 | ARR-005 | midi-files, range-clipboard, ui |  |

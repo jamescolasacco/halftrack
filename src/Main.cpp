@@ -44,6 +44,7 @@ int runStemExportTests (const juce::File&);
 int runCrossfadeTests (const juce::File&);
 int runTimeEditTests (const juce::File&);
 int runTrackDelayTests (const juce::File&);
+int runTrackColourTests (const juce::File&);
 int runMidiControllerTests (const juce::File&);
 int runRangeEditTests (const juce::File&);
 int runTimeSignatureTests (const juce::File&);
@@ -798,6 +799,12 @@ public:
         {
             const int i = args.indexOf ("--self-test-track-delay");
             setApplicationReturnValue (runTrackDelayTests (juce::File (args[i + 1])));
+            quit(); return;
+        }
+        if (args.contains ("--self-test-track-colours"))
+        {
+            const int i = args.indexOf ("--self-test-track-colours");
+            setApplicationReturnValue (runTrackColourTests (juce::File (args[i + 1])));
             quit(); return;
         }
         if (args.contains ("--self-test-time-edit"))
