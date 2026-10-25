@@ -478,6 +478,40 @@ private:
     bool arrow = false;
 };
 
+// The Clip View and Device View selectors in the window's bottom right corner, left of the mixer
+// view control, as the reference's: each lit while its view shows in the detail view. A right-click
+// on the Device View selector lists the track's devices (onMenu).
+class DetailViewSelector final : public juce::Button
+{
+public:
+    explicit DetailViewSelector (bool clipView) : juce::Button (clipView ? "Clip View selector" : "Device View selector"), clip (clipView)
+    { setClickingTogglesState (false); setWantsKeyboardFocus (false); setMouseClickGrabsKeyboardFocus (false); }
+    std::function<void()> onMenu;
+    void mouseDown (const juce::MouseEvent& e) override { if (e.mods.isPopupMenu() && onMenu != nullptr) { onMenu(); return; } juce::Button::mouseDown (e); }
+    void paintButton (juce::Graphics& g, bool over, bool down) override
+    {
+        const auto on = getToggleState();
+        g.setColour (on ? orange : (over || down) ? raised.brighter (0.08f) : raised);
+        g.fillRect (getLocalBounds().reduced (1));
+        g.setColour (line); g.drawRect (getLocalBounds().reduced (1));
+        g.setColour ((on ? themes::colour (0xff1a1a1a) : ink).withMultipliedAlpha (isEnabled() ? 1.0f : .4f));
+        const auto r = getLocalBounds().toFloat().reduced (getWidth() * .26f, getHeight() * .24f);
+        g.drawRect (r, 1.0f);
+        if (clip)
+        {
+            // A clip: a title strip, and notes under it.
+            g.fillRect (r.withHeight (r.getHeight() * .3f));
+            g.fillRect (r.getX() + 2.0f, r.getY() + r.getHeight() * .55f, r.getWidth() * .35f, 1.5f);
+            g.fillRect (r.getCentreX(), r.getY() + r.getHeight() * .75f, r.getWidth() * .35f, 1.5f);
+        }
+        else
+            // A device: two knobs.
+            for (int i = 0; i < 2; ++i) g.fillEllipse (r.getX() + r.getWidth() * (.18f + .42f * (float) i), r.getCentreY() - 1.8f, 3.6f, 3.6f);
+    }
+private:
+    bool clip = true;
+};
+
 // A mixer control's look for its lane: automated controls show a red thumb, overridden ones a grey one.
 void showAutomationState (juce::Slider& slider, const Session::AutomationLane& lane, const juce::String& manualTip, const juce::String& what)
 {
@@ -547,8 +581,20 @@ public:
                  &projectLabel, &audioButton, &addTrackButton, &addMidiButton, &newMidiClipButton, &sessionTab, &arrangementTab, &pianoTab, &importButton, &filesButton, &pluginsButton,
                  &folderButton, &upButton, &browserSearch, &browserList, &browserSidebar, &browseBack, &browseForward, &hotSwapLabel, &hotSwapClose, &info, &overview, &ruler, &timeRuler, &viewport,
                  &horizontalScroll, &gridReadout, &zoomIn, &zoomOut, &fitButton, &launcher, &arrangementMixer, &pianoRoll, &audioClipView, &midiLaunch, &clipLoop, &clipGroove, &deviceChain,
-                 &mixerViewButton, &mixerViewOptions })
+                 &mixerViewButton, &mixerViewOptions, &clipViewSelector, &deviceViewSelector })
             addAndMakeVisible (child);
+        // The Clip View and Device View selectors beside it: a click shows its view, or hides the
+        // detail view while it shows; Option-click switches between them, as the reference's do.
+        clipViewSelector.setTooltip ("Clip View: show or hide the selected clip's view (Option+Cmd+3). Option-click switches to the Device View.");
+        deviceViewSelector.setTooltip ("Device View: show or hide the track's devices (Option+Cmd+4). Option-click switches to the Clip View. Right-click to list the devices.");
+        clipViewSelector.onClick = [this] { chooseDetailView (true, juce::ModifierKeys::getCurrentModifiers().isAltDown()); };
+        deviceViewSelector.onClick = [this] { chooseDetailView (false, juce::ModifierKeys::getCurrentModifiers().isAltDown()); };
+        deviceViewSelector.onMenu = [this]
+        {
+            const auto ids = devicesListed();
+            deviceListMenu().showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&deviceViewSelector),
+                                            [safe = juce::Component::SafePointer<Impl> (this), ids] (int item) { if (safe != nullptr && juce::isPositiveAndBelow (item - 1, ids.size())) safe->showDevice (ids[item - 1]); });
+        };
         // The mixer view control in the corner shows and hides the mixer of the view shown, and its
         // arrow offers the Mixer Controls, as the reference's does.
         mixerViewButton.setTooltip ("Mixer: show or hide the mixer of the view shown (Option+Cmd+M)");
@@ -881,12 +927,12 @@ public:
             : showPiano && drawMode ? "Draw Mode: drag to draw notes    Alt: one pitch    Click a note: delete    B: leave Draw Mode"
             : showPiano ? "Double-click: add or delete a note    Drag: select    Shift: add to the selection    Ruler: insertion point    B: Draw Mode" : "Space: play / pause     Click ruler: seek     Shift-drag ruler: loop     Double-click MIDI clip: edit notes";
         if (status.isEmpty() && showSession && ! showPiano) message = "Click triangle: launch     Double-click MIDI slot: edit     Enter: launch slot     Shift+Enter: launch scene     Tab: switch view";
-        g.drawText (message, 13, getHeight() - statusHeight, getWidth() - 336, statusHeight, juce::Justification::centredLeft, true);
+        g.drawText (message, 13, getHeight() - statusHeight, getWidth() - 400, statusHeight, juce::Justification::centredLeft, true);
         auto* device = session.audioDeviceManager().getCurrentAudioDevice();
         const auto deviceText = device != nullptr
             ? juce::String (device->getCurrentSampleRate() / 1000.0, 1) + " kHz  /  " + juce::String (device->getCurrentBufferSizeSamples()) + " smp"
             : "Audio device offline";
-        g.drawText (deviceText, getWidth() - 321,
+        g.drawText (deviceText, getWidth() - 385,
                     getHeight() - statusHeight, 252, statusHeight, juce::Justification::centredRight);
     }
 
@@ -956,6 +1002,10 @@ public:
         area.removeFromBottom (statusHeight);
         mixerViewOptions.setBounds (getWidth() - 24, getHeight() - statusHeight + 3, 18, statusHeight - 6);
         mixerViewButton.setBounds (mixerViewOptions.getX() - 30, mixerViewOptions.getY(), 30, mixerViewOptions.getHeight());
+        deviceViewSelector.setBounds (mixerViewButton.getX() - 34, mixerViewOptions.getY(), 28, mixerViewOptions.getHeight());
+        clipViewSelector.setBounds (deviceViewSelector.getX() - 30, mixerViewOptions.getY(), 28, mixerViewOptions.getHeight());
+        clipViewSelector.setToggleState (showDetail && showPiano, juce::dontSendNotification); clipViewSelector.setEnabled (canShowClipView());
+        deviceViewSelector.setToggleState (showDetail && ! showPiano, juce::dontSendNotification);
         // MIDI Map Mode shows its mappings in the browser's place, so the browser shows meanwhile.
         const bool browserShown = showBrowser || mapping();
         // The detail view shows either the device chain or, for an open clip, its editor; View > Hide
@@ -10517,6 +10567,7 @@ private:
     ArrangementMixer arrangementMixer { *this };
     int arrangementMixerLaidOut = -1; // The height its layout gave the Arrangement's mixer, or -1 while hidden.
     MixerViewButton mixerViewButton { false }, mixerViewOptions { true };
+    DetailViewSelector clipViewSelector { true }, deviceViewSelector { false };
     PianoRoll pianoRoll;
     AudioClipView audioClipView { *this };
     LaunchBox midiLaunch { *this };
@@ -14329,6 +14380,36 @@ private:
     }
     // The clip view and the device view share the detail view, as the reference's do.
     void showClipView (bool clip) { if (clip == showPiano) return; if (clip) openPianoRoll(); else closeClipView(); }
+    // The corner's selectors: a click shows the view, or hides the detail view while it shows it;
+    // with toggle (Option held) it switches between the Clip View and the Device View.
+    void chooseDetailView (bool clip, bool toggle)
+    {
+        if (toggle) { if (canShowClipView()) { showDetail = true; showClipView (! showPiano); resized(); repaint(); } return; }
+        if (clip && ! canShowClipView()) return;
+        if (showDetail && showPiano == clip) showDetail = false;
+        else { showDetail = true; showClipView (clip); }
+        resized(); repaint();
+    }
+    // The Device View selector's menu: the devices of the chain the device view shows, in order.
+    juce::StringArray devicesListed() const
+    {
+        juce::StringArray ids;
+        if (const auto* devices = chainDevices()) for (const auto& device : *devices) ids.add (device.id);
+        return ids;
+    }
+    juce::PopupMenu deviceListMenu() const
+    {
+        juce::PopupMenu menu;
+        const auto* devices = chainDevices();
+        if (devices == nullptr || devices->empty()) menu.addItem (1, "No Devices", false);
+        else for (size_t i = 0; i < devices->size(); ++i) menu.addItem ((int) i + 1, (*devices)[i].name);
+        return menu;
+    }
+    // Shows the device view with the device selected.
+    void showDevice (const juce::String& id)
+    {
+        showDetail = true; showClipView (false); selectDevice (id, {}); resized(); repaint();
+    }
     // The clip view editor's tab (see EditorTab); an audio clip, without MPE, shows its sample instead.
     EditorTab shownEditorTab() const { return editorTab == EditorTab::expression && selectedAudioClip() != nullptr ? EditorTab::content : editorTab; }
     void setEditorTab (EditorTab tab)
@@ -21803,6 +21884,30 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
                        "it gives the clip view the whole height, hiding the Arrangement");
                 check (handleKey (juce::KeyPress ('E', juce::ModifierKeys (cmd | alt), 0)) && ! fullSizeClipView && pianoRoll.getHeight() == editorHigh && viewport.isVisible(),
                        "and again gives it back");
+            }
+            {
+                // The corner's Clip View and Device View selectors, left of the mixer view control, as the reference's.
+                check (clipViewSelector.isVisible() && deviceViewSelector.isVisible() && clipViewSelector.getRight() <= deviceViewSelector.getX()
+                           && deviceViewSelector.getRight() <= mixerViewButton.getX() && clipViewSelector.getY() >= getHeight() - statusHeight
+                           && clipViewSelector.getToggleState() && ! deviceViewSelector.getToggleState(), "the Clip View and Device View selectors sit left of the mixer view control, the Clip View's lit");
+                clipViewSelector.onClick();
+                check (! showDetail && ! clipViewSelector.getToggleState() && ! deviceViewSelector.getToggleState(), "clicking the lit selector hides the detail view");
+                deviceViewSelector.onClick();
+                check (showDetail && ! showPiano && deviceViewSelector.getToggleState() && ! clipViewSelector.getToggleState(), "the Device View selector shows the device view");
+                chooseDetailView (false, true);
+                check (showDetail && showPiano && clipViewSelector.getToggleState(), "Option-clicking a selector switches to the Clip View");
+                chooseDetailView (true, true);
+                check (showDetail && ! showPiano, "and back to the Device View");
+                check (session.addNativeEffect (selectedTrack, Session::EffectKind::saturator).wasOk(), "a device on the track"); refresh();
+                const auto listed = devicesListed();
+                const auto deviceMenu = deviceListMenu(); // Kept, as the iterator reads into it.
+                bool named = false; for (juce::PopupMenu::MenuItemIterator items (deviceMenu); items.next();) named = named || (items.getItem().itemID == listed.size() && items.getItem().isEnabled);
+                check (! listed.isEmpty() && named, "a right-click on the Device View selector lists the track's devices");
+                closeClipView(); showDetail = false; resized();
+                showDevice (listed[listed.size() - 1]);
+                check (showDetail && ! showPiano && selectedDevices.contains (listed[listed.size() - 1]), "choosing one shows the device view with it selected");
+                session.undo(); refresh(); selectedDevices.clear();
+                showDetail = true; showClipView (true); resized();
             }
             session.undo(); selectedClip = -1; closeClipView(); refresh();
             showBrowser = false; resized();

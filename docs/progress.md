@@ -2717,3 +2717,7 @@ UI area. View > Full-Size Clip View, Cmd/Ctrl+Option+E, as the reference's Toggl
 ## Clip View editor tabs — 2026-10-24
 
 UI area. As the reference's Clip View does, the note editor now has Notes, Envelopes and MPE tabs, and an audio clip's editor Sample and Envelopes tabs. View > Notes (Sample), Envelopes and MPE, Option+Shift+1 to 3, choose them, and Option+Tab (Ctrl+Tab elsewhere) steps through them. The Notes tab's lane shows velocity or chance. The Envelopes tab fills the editor with the clip's MIDI controllers, under a MIDI Ctrl heading, and its envelopes. The MPE tab shows the note expression lanes. An audio clip draws its envelope over the waveform only in its Envelopes tab, the chooser beside the tabs. The note editor's header now leads with the tabs, the lane chooser, Fold and Scale, and hides its last controls when narrow rather than letting them run off its edge ([contract](research/clip-view-contract.md)). Checked in the UI suite.
+
+## The Clip View and Device View selectors — 2026-10-24
+
+UI area. As the reference's corner has them, the Clip View and Device View selectors sit left of the mixer view control. Each is lit while its view shows; a click shows it, or hides the detail view while it shows; Option-click switches between them, and a right-click on the Device View selector lists the chain's devices, choosing one showing it selected ([layout contract](research/window-layout-contract.md)). Checked in the UI suite.
