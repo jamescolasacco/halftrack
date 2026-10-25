@@ -8737,7 +8737,19 @@ private:
                 marker.addTriangle (insertX - 5, (float) gridTop - 8, insertX + 5, (float) gridTop - 8, insertX, (float) gridTop);
                 g.setColour (orange); g.fillPath (marker);
             }
+            if (splitLine) { g.setColour (orange); g.drawLine ({ splitLine->first, splitLine->second }, 1.5f); } // The line a split drag draws.
         }
+        bool keyStateChanged (bool) override
+        {
+            if (splitKeyHeld && ! juce::KeyPress::isKeyCurrentlyDown ('E') && ! juce::KeyPress::isKeyCurrentlyDown ('e')) splitKeyHeld = false;
+            return false;
+        }
+        void modifierKeysChanged (const juce::ModifierKeys& mods) override
+        {
+            if (chop && ! mods.isCommandDown()) endGesture(); // Letting Cmd go ends a chop.
+            juce::Component::modifierKeysChanged (mods);
+        }
+        void focusLost (FocusChangeType) override { splitKeyHeld = false; splitLine.reset(); endGesture(); }
         void mouseDown (const juce::MouseEvent& e) override
         {
             const auto* clip = owner.currentMidiClip();
@@ -8791,6 +8803,7 @@ private:
             if (! gridBounds().contains (e.getPosition())) return;
             grabKeyboardFocus();
             endGesture(); originalNotes.clear(); drawing = false; marquee = false; erasing = false; velocityDrag = copyDrag = false;
+            if (splitKeyHeld && ! e.mods.isPopupMenu()) { splitLine = std::pair { e.position, e.position }; dragClipId = clip->id; repaint(); return; }
             // As in the reference: in Draw Mode a click on a note deletes it and a drag elsewhere draws
             // notes (drawNotes); without it, a double-click adds a note (addNote) or deletes one.
             const bool plain = ! e.mods.isPopupMenu() && ! e.mods.isShiftDown();
@@ -8864,6 +8877,7 @@ private:
                 if (pitch != keyPitch) { keyPitch = pitch; sound ({ { pitch, keyVelocity } }); }
                 return;
             }
+            if (splitLine) { splitLine->second = e.position; repaint(); return; }
             const auto* clip = owner.currentMidiClip();
             if (clip == nullptr || clip->id != dragClipId || e.mods.isPopupMenu() || ! e.mouseWasDraggedSinceMouseDown()) return;
             if (erasing) { eraseAt (e.position); return; }
@@ -8963,6 +8977,7 @@ private:
         void mouseUp (const juce::MouseEvent& e) override
         {
             silence(); keyPitch = -1;
+            if (auto line = std::exchange (splitLine, std::nullopt)) { line->second = e.position; splitAlong (*line, e.mods.isCommandDown()); repaint(); return; }
             endGesture(); drawing = false; erasing = false; drawn.clear(); originalNotes.clear(); braceDrag = 0;
             updateRows(); updateScroll(); repaint();
             if (marquee)
@@ -8994,6 +9009,10 @@ private:
                 if (dynamic_cast<juce::TextEditor*> (focused) != nullptr) return false;
             if (owner.session.isExporting()) return true;
             if (const auto letter = owner.shiftedLetter (key)) { const juce::ScopedValueSetter<bool> asShortcut (owner.lettersAsShortcuts, true); return keyPressed (*letter); }
+            // With Cmd still held after a chop, Up and Down change its parts (see Chop).
+            if (chop && key.getModifiers().isCommandDown() && ! key.getModifiers().isAltDown()
+                && (key.getKeyCode() == juce::KeyPress::upKey || key.getKeyCode() == juce::KeyPress::downKey))
+            { changeChop (key.getKeyCode() == juce::KeyPress::upKey ? 1 : -1, key.getModifiers().isShiftDown()); return true; }
             endGesture(); originalNotes.clear(); drawing = false; marquee = false; erasing = false;
             const auto* clip = owner.currentMidiClip();
             const auto code = key.getKeyCode();
@@ -9009,6 +9028,7 @@ private:
             }
             if (code == juce::KeyPress::escapeKey) { clearSelection(); timeRange.reset(); repaint(); return true; }
             if (clip != nullptr && code == '0' && !key.getModifiers().isAnyModifierKeyDown()) { noteCommand (NoteCommand::toggleActive); return true; }
+            if (clip != nullptr && (code == 'E' || code == 'e') && ! mods.isAnyModifierKeyDown()) { splitKeyHeld = true; return true; } // Held, drags split (see Split).
             if (clip != nullptr && timeRangeKey (key)) return true;
             if (clip != nullptr) { const auto shown = *clip; if (braceKey (shown, key)) return true; }
             if (clip != nullptr && editorKey (key)) return true;
@@ -9065,7 +9085,7 @@ private:
             const auto mods = key.getModifiers();
             if (! mods.isCommandDown()) return false;
             if ((code == 'L' || code == 'l') && ! mods.isShiftDown() && ! mods.isAltDown() && timeRange) { loopTimeRange(); return true; }
-            if ((code == 'E' || code == 'e') && ! mods.isShiftDown() && ! mods.isAltDown() && timeRange) { splitNotesAtRange(); return true; }
+            if ((code == 'E' || code == 'e') && ! mods.isShiftDown() && ! mods.isAltDown() && timeRange && ! hasSelectedNote()) { splitNotesAtRange(); return true; }
             if ((code == 'E' || code == 'e') && mods.isShiftDown() && ! mods.isAltDown()) { owner.splitClipFromWithin(); return true; }
             if ((code == 'J' || code == 'j') && mods.isAltDown() && ! mods.isShiftDown() && timeRange) { fitNotesToRange(); return true; }
             return false;
@@ -9198,7 +9218,7 @@ private:
                         insertNotes (normalisedNotes (notes), std::ceil ((noteExtent (notes).second - 1.0e-9) / snapBeats()) * snapBeats(), true);
                     break;
                 case NoteCommand::remove: deleteSelectedNote(); break;
-                case NoteCommand::split: splitNotesAtMarker(); break;
+                case NoteCommand::split: if (hasSelectedNote()) startChop (true); else splitNotesAtMarker(); break;
                 case NoteCommand::toggleActive: toggleSelectedNotes(); break;
                 case NoteCommand::selectAll: for (const auto& note : clip->notes) selectedNoteIds.insert (note.id); sync(); break;
                 case NoteCommand::invertSelection:
@@ -9744,6 +9764,16 @@ private:
         int topPitch = 77;
         float drawVelocity = 0.8f;
         bool gesture = false, resizeNote = false, drawing = false, marquee = false, erasing = false, pitchLocked = false, velocityDrag = false, copyDrag = false, copied = false;
+        // Chop, as the reference's (its manual, section 10.5.8.2): Cmd+E divides each selected note into equal
+        // parts, as many as grid steps it lasts; with Cmd still held, Up and Down change every note's parts by
+        // one (Shift doubling or halving them). It is one undo step, which letting Cmd go or any other edit ends.
+        struct Chop { juce::String clipId; std::vector<Session::MidiNoteInfo> originals; std::vector<int> parts; juce::StringArray pieces; };
+        std::optional<Chop> chop;
+        juce::TimedCallback chopWatch { [this] { if (chop && ! juce::ModifierKeys::getCurrentModifiersRealtime().isCommandDown()) endGesture(); if (! chop) chopWatch.stopTimer(); } };
+        // Split, as the reference's (section 10.5.8.1): while E is held, a drag draws a line that splits the
+        // notes it crosses where it crosses them, and a drag along a note splits it where the drag ends.
+        bool splitKeyHeld = false;
+        std::optional<std::pair<juce::Point<float>, juce::Point<float>>> splitLine;
         juce::String typedVelocity; // Digits typed for the selected notes' velocity, until Return.
         std::optional<std::pair<double, double>> timeRange; // The timespan a background drag selected, in content beats.
         std::optional<std::tuple<double, double, int>> zoomBack; // The view before Z, for X.
@@ -10182,7 +10212,7 @@ private:
             for (auto& note : notes) { note.startBeat += beatDelta; note.pitch += pitchDelta; }
             updateNotes (clipId, notes, "Move MIDI notes");
         }
-        void endGesture() { if (gesture) { owner.session.endEditGesture(); gesture = false; } }
+        void endGesture() { chop.reset(); if (gesture) { owner.session.endEditGesture(); gesture = false; } }
         void updateScroll()
         {
             const auto grid = gridBounds(); const auto* clip = owner.currentMidiClip();
@@ -10338,6 +10368,94 @@ private:
                 operation == Session::NoteTransform::fixedLength ? defaultLength() : snapBeats()));
             owner.refresh();
         }
+        // The most parts a note can be chopped into: none shorter than the shortest note.
+        static int chopParts (const Session::MidiNoteInfo& note, int parts)
+        { return juce::jlimit (1, juce::jmax (1, juce::jmin (128, (int) std::floor (note.lengthBeats * 960 + 1.0e-6))), parts); }
+        void startChop (bool adjustable)
+        {
+            const auto* clip = owner.currentMidiClip();
+            auto notes = selectedNotes();
+            if (clip == nullptr || notes.empty()) return;
+            if (std::any_of (notes.begin(), notes.end(), [] (const auto& n) { return ! n.pitchBend.empty() || ! n.slide.empty() || ! n.pressure.empty(); }))
+            { owner.report (juce::Result::fail ("Chopping per-note expression is not supported yet.")); return; }
+            Chop next { clip->id, notes, {}, {} };
+            const auto grid = snapBeats();
+            for (const auto& n : notes) next.parts.push_back (chopParts (n, (int) std::lround (n.lengthBeats / grid)));
+            endGesture();
+            if (std::all_of (next.parts.begin(), next.parts.end(), [] (int p) { return p <= 1; }) && ! adjustable)
+            { owner.report (juce::Result::fail ("The selected notes are too short to chop on this grid.")); return; }
+            owner.session.beginEditGesture ("Chop notes"); gesture = true;
+            chop = std::move (next);
+            applyChop();
+            if (adjustable) chopWatch.startTimerHz (20); else endGesture();
+        }
+        void applyChop()
+        {
+            if (! chop) return;
+            auto& c = *chop;
+            if (! c.pieces.isEmpty()) { owner.report (owner.session.removeMidiNotes (c.clipId, c.pieces)); c.pieces.clear(); }
+            std::vector<Session::MidiNoteInfo> firsts, rest;
+            for (size_t i = 0; i < c.originals.size(); ++i)
+            {
+                const auto& note = c.originals[i];
+                const auto length = note.lengthBeats / c.parts[i];
+                auto first = note; first.lengthBeats = length; firsts.push_back (first);
+                for (int k = 1; k < c.parts[i]; ++k)
+                {
+                    auto piece = note; piece.id.clear(); piece.startBeat = note.startBeat + k * length;
+                    piece.lengthBeats = k + 1 == c.parts[i] ? note.startBeat + note.lengthBeats - piece.startBeat : length;
+                    rest.push_back (piece);
+                }
+            }
+            owner.report (owner.session.updateMidiNotes (c.clipId, firsts));
+            if (! rest.empty()) owner.report (owner.session.addMidiNotes (c.clipId, rest, c.pieces));
+            // The parts are selected.
+            clearSelection();
+            for (const auto& n : firsts) selectedNoteIds.insert (n.id);
+            for (const auto& id : c.pieces) selectedNoteIds.insert (id);
+            if (! firsts.empty()) selectedNoteId = firsts.front().id;
+            owner.refresh();
+        }
+        void changeChop (int direction, bool doubling)
+        {
+            if (! chop) return;
+            for (size_t i = 0; i < chop->parts.size(); ++i)
+            {
+                const auto parts = chop->parts[i];
+                chop->parts[i] = chopParts (chop->originals[i], doubling ? (direction > 0 ? parts * 2 : parts / 2) : parts + direction);
+            }
+            applyChop();
+        }
+        // Splits the notes a drawn line crosses, where it crosses them; a line along a note splits it where it
+        // ends. With Cmd the splits fall on the grid.
+        void splitAlong (std::pair<juce::Point<float>, juce::Point<float>> line, bool onGrid)
+        {
+            const auto* clip = owner.currentMidiClip();
+            if (clip == nullptr) return;
+            const auto [from, to] = line;
+            std::vector<std::pair<juce::String, double>> cuts;
+            for (const auto& note : clip->notes)
+            {
+                const auto bounds = noteBounds (note);
+                float x = to.x;
+                if (std::abs (to.y - from.y) < 1.0f) { if (from.y < bounds.getY() || from.y >= bounds.getBottom()) continue; }
+                else
+                {
+                    const auto y = bounds.getCentreY();
+                    if (y < std::min (from.y, to.y) || y > std::max (from.y, to.y)) continue;
+                    x = from.x + (to.x - from.x) * (y - from.y) / (to.y - from.y);
+                }
+                auto beat = beatAt (x);
+                if (onGrid) beat = std::round (beat / snapBeats()) * snapBeats();
+                if (beat > note.startBeat + 1.0e-9 && beat < note.startBeat + note.lengthBeats - 1.0e-9) cuts.push_back ({ note.id, beat });
+            }
+            if (cuts.empty()) return;
+            const auto clipId = clip->id;
+            endGesture();
+            owner.session.beginEditGesture ("Split notes");
+            for (const auto& [id, beat] : cuts) { juce::StringArray inserted; owner.report (owner.session.splitMidiNotes (clipId, { id }, beat, inserted)); }
+            owner.session.endEditGesture(); owner.refresh();
+        }
         void splitNotesAtMarker()
         {
             const auto* clip=owner.currentMidiClip();if(!clip)return;
@@ -10426,7 +10544,7 @@ private:
             popup.addSeparator();
             popup.addItem (2, "Copy Notes", hasSelectedNote()); popup.addItem (3, "Cut Notes", hasSelectedNote());
             popup.addItem (4, "Paste Notes at Marker", ! noteClipboard.empty()); popup.addItem (5, "Duplicate Notes");
-            popup.addItem (7, "Split Notes at Marker", hasNotes);
+            popup.addItem (7, "Split Notes at Marker", hasNotes); popup.addItem (9, "Chop Notes on Grid", hasSelectedNote());
             const auto selected = selectedNotes();
             const bool activate = std::any_of (selected.begin(), selected.end(), [] (const auto& note) { return !note.active; });
             popup.addItem (8, activate ? "Activate Selected Notes" : "Deactivate Selected Notes", !selected.empty());
@@ -10441,6 +10559,7 @@ private:
                 if (result >= 100 && result < 100 + Session::noteToolCount) safe->openNoteTool (static_cast<Session::NoteTool> (result - 100));
                 if (result == 1) safe->deleteSelectedNote();
                 if (result == 7 && safe->insertionBeat==marker) safe->splitNotesAtMarker();
+                if (result == 9) safe->startChop (false);
                 if (result == 8) safe->toggleSelectedNotes();
                 const char command = result == 2 ? 'C' : result == 3 ? 'X' : result == 4 ? 'V' : result == 5 ? 'D' : 0;
                 if (command != 0) safe->keyPressed (juce::KeyPress (command, juce::ModifierKeys (juce::ModifierKeys::commandModifier), 0));
@@ -25706,8 +25825,42 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
     check(rightHalvesMoved&&rightCount==2&&noteById(splitSource[0]).pitch==60&&noteById(splitSource[1]).pitch==64&&noteById(splitSource[2]).pitch==67,"split selects exactly the new right halves without selecting originals");
     pianoRoll.keyPressed(undo);pianoRoll.keyPressed(undo);check(currentMidiClip()->notes.size()==3,"one undo rejoins all split notes");
     pianoRoll.keyPressed(redo);check(noteIds(currentMidiClip()->notes)==splitIds,"split redo retains all note identities");pianoRoll.keyPressed(undo);
-    markerClick(2);groupClick(groupPoint(.5,60));pianoRoll.keyPressed(splitKey);
-    check(currentMidiClip()->notes.size()==4&&noteById(splitSource[1]).lengthBeats==4,"selected-note split leaves the other intersecting note whole");
+    markerClick(2);groupClick(groupPoint(.5,60));
+    {
+        // With notes selected, Cmd+E chops them on the grid instead, as the reference's does (its manual, section
+        // 10.5.8.2); with Cmd still held, Up and Down change the parts, Shift doubling or halving them, one undo step.
+        const int parts = (int) std::lround (4.0 / pianoRoll.snapBeats());
+        const auto even = [&] (int count)
+        {
+            std::vector<double> lengths; for (const auto& n : currentMidiClip()->notes) if (n.pitch == 60) lengths.push_back (n.lengthBeats);
+            return (int) lengths.size() == count && std::all_of (lengths.begin(), lengths.end(), [&] (double v) { return std::abs (v - 4.0 / count) < 1e-9; });
+        };
+        pianoRoll.keyPressed (splitKey);
+        check (parts >= 2 && even (parts) && noteById (splitSource[1]).lengthBeats == 4 && pianoRoll.selectedNoteCount() == parts,
+               "with a note selected, Cmd/Ctrl+E chops it into grid-long parts, selected, leaving the other note whole");
+        pianoRoll.keyPressed (juce::KeyPress (juce::KeyPress::upKey, juce::ModifierKeys (juce::ModifierKeys::commandModifier), 0));
+        check (even (parts + 1), "with Cmd still held, Up makes one part more");
+        pianoRoll.keyPressed (juce::KeyPress (juce::KeyPress::downKey, juce::ModifierKeys (juce::ModifierKeys::commandModifier | juce::ModifierKeys::shiftModifier), 0));
+        check (even ((parts + 1) / 2), "and Shift+Down halves the parts");
+        pianoRoll.modifierKeysChanged ({});
+        check (session.undoSteps()[0] == "Chop notes", "letting Cmd go leaves one Chop step");
+        pianoRoll.keyPressed (undo);
+        check (currentMidiClip()->notes.size() == 3 && noteById (splitSource[0]).lengthBeats == 4, "one undo puts the note back whole");
+    }
+    {
+        // Holding E, a line drawn across notes splits them where it crosses them, and a drag along a note splits it
+        // where the drag ends (its manual, section 10.5.8.1).
+        pianoRoll.keyPressed (juce::KeyPress ('E'));
+        groupDrag (groupPoint (2.5, 66), groupPoint (2.5, 58));
+        check (currentMidiClip()->notes.size() == 5 && std::abs (noteById (splitSource[0]).lengthBeats - 2.5) < 1e-6 && std::abs (noteById (splitSource[1]).lengthBeats - 1.5) < 1e-6
+                   && noteById (splitSource[2]).lengthBeats == 1, "holding E, a line drawn across two notes splits both where it crosses them");
+        pianoRoll.keyPressed (undo);
+        pianoRoll.keyPressed (juce::KeyPress ('E'));
+        groupDrag (groupPoint (.5, 60), groupPoint (3, 60));
+        check (currentMidiClip()->notes.size() == 4 && std::abs (noteById (splitSource[0]).lengthBeats - 3) < 1e-6 && noteById (splitSource[1]).lengthBeats == 4,
+               "and a drag along a note splits it where the drag ends");
+        pianoRoll.keyStateChanged (false);
+    }
     {
         juce::TextEditor editor;juce::DocumentWindow focusWindow("Halftrack split shortcut test",panel,juce::DocumentWindow::closeButton);
         focusWindow.setContentNonOwned(&editor,false);focusWindow.setBounds(120,120,260,80);focusWindow.setVisible(true);editor.grabKeyboardFocus();

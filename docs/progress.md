@@ -2821,3 +2821,7 @@ Engine and UI areas. Racks now keep macro variations, as the reference's manual 
 ## Time signature markers in time commands — 2026-10-25
 
 Engine area. As the reference's manual says the time commands affect the time signature markers in the selected time, Paste Time and Duplicate Time now insert the markers inside the copied time, kept on the range clipboard, and give back the following meter after the new time when its markers would change it; Insert, Delete and Cut Time already moved or removed them ([contract](research/time-commands-contract.md)). Checked by the time edit suite.
+
+## Note Chop and drawn Split — 2026-10-25
+
+UI area. As the reference's manual describes, Cmd+E with notes selected now chops them on the grid into equal parts that stay selected, and with Cmd still held Up and Down change the parts (Shift doubling or halving them), all one undo step; with no notes selected it still splits every note at the insert marker or the timespan's edges. Holding E, a line drawn across notes splits them where it crosses them, and a drag along a note splits it where the drag ends ([note drawing contract](research/note-drawing-contract.md#split-and-chop-2026-10-25)). Checked in the UI suite.

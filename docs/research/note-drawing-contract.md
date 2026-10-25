@@ -13,7 +13,7 @@ Status: partial. This follows the reference's manual. No reference output was me
 
 Outside Draw Mode:
 - A click on the grid places the insert marker on the nearest grid line and clears the selection. Dragging selects the notes the box touches and its timespan, on the grid unless snapping is bypassed, with the insert marker at its start; the timespan shows as a band across the editor until a click elsewhere, Escape or another clip.
-- The timespan's commands, as the reference's key list gives them: Cmd+L (or Edit > Loop Selection) loops the clip over it; Cmd+E splits the selected notes, or all of them, at its edges; Cmd+Option+J fits the selected notes into it; Shift+Cmd+E splits an Arrangement clip at its edges, or at the insert marker without one (the reference's hidden-menu Split Clip From Within). Each is one undo step.
+- The timespan's commands, as the reference's key list gives them: Cmd+L (or Edit > Loop Selection) loops the clip over it; with no notes selected, Cmd+E splits every note crossing its edges; Cmd+Option+J fits the selected notes into it; Shift+Cmd+E splits an Arrangement clip at its edges, or at the insert marker without one (the reference's hidden-menu Split Clip From Within). Each is one undo step.
 - Shift-clicking a note adds it to the selection or takes it out; Shift-dragging adds the notes it touches.
 - A double-click on the grid adds a note one grid step long, on the step clicked, at the row's pitch, at the editor's Velocity. It is selected, and the drag that follows moves it. A double-click on a note deletes it. Each is one undo step.
 - With Cmd held at the press (Alt elsewhere), dragging a note up or down changes the selected notes' velocity by one step a pixel, without moving them. Cmd pressed during a drag still bypasses the grid.
@@ -39,11 +39,23 @@ From the MIDI Note Editor section of the reference's key list ([Live keyboard sh
 - **Joining.** Cmd+J joins the selected notes on each key into one, from the first's start to the last's end, keeping the first's velocity. Keys with a single selected note are left alone.
 - With the computer MIDI keyboard on, its keys play it instead.
 
+## Split and Chop (2026-10-25)
+
+The reference's manual ([Editing MIDI](https://www.ableton.com/en/live-manual/12/editing-midi/), sections 10.5.8.1 and 10.5.8.2, consulted 2026-10-25): Split divides notes in two. Holding E, a line drawn across notes splits them, and a drag along inside a note splits it while placing the split; Cmd snaps the split to the grid. With no notes selected, Cmd+E splits every note crossing the insert marker or the edges of the time selection. Chop divides notes into several parts by the grid: with notes selected Cmd+E chops them, and with Cmd still held Up and Down change the number of parts, Shift by a power of two. The Edit and context menus have both. The reference's strings name a chop error for a note too small (`AChopAlgorithm::sErrorNoteTooSmall`).
+
+Halftrack:
+
+- **Chop.** With notes selected, Cmd+E (or Edit > Split, or the note menu's Chop Notes on Grid) divides each into equal parts, as many as whole grid steps it lasts (at least one, at most 128, none shorter than a 960th of a beat), and selects the parts. While Cmd stays held, Up and Down change every note's parts by one, and with Shift double or halve them. It is one undo step, which letting Cmd go or any other edit ends. Notes with per-note expression are refused, as Split refuses them; chopping from the menu notes too short to divide reports it.
+- **Split.** With no notes selected, Cmd+E splits every note crossing the insert marker, or the edges of a timespan when there is one, as before. Holding E, a drag draws a line, and on release every note whose row the line crosses is split where it crosses that row's middle; a drag along a single row splits the note there where the drag ends. With Cmd held at the release the splits fall on the grid. Each is one undo step.
+- **Not followed.** The reference's parts for a note that is not a whole number of grid steps, its limits, and the E with Option drag that changes the chop's parts were not read; Halftrack's defaults are in [open questions](../open-questions.md).
+
+The UI suite chops a four-beat note into grid-long parts that stay selected, leaving another note whole, adds a part with Cmd+Up, halves the parts with Cmd+Shift+Down, and checks one Chop step that one undo reverses; then, holding E, splits two notes with a line drawn across them and one note with a drag along it.
+
 ## Not yet
 
 - Draw Mode in take lanes.
 - The Display & Input setting "Draw Mode with Pitch Lock", which makes pitch-locked drawing the default.
-- The key list's Chop (Cmd+E with a drag), Split at an exact place (hold E), H, note groups (Cmd+G), Apply MIDI Tool (Cmd+Return), Show MIDI Note Filters, and Shift with Left and Right moving the clip region.
+- The key list's E with Option drag changing a chop's parts, H, note groups (Cmd+G), Apply MIDI Tool (Cmd+Return), Show MIDI Note Filters, and Shift with Left and Right moving the clip region.
 
 See [open questions](../open-questions.md) for the defaults taken where the manual is silent.
 
