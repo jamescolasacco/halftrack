@@ -88,7 +88,7 @@ const juce::Identifier launchModeProperty { "halftrackLaunchMode" };
 const juce::Identifier launchQuantisationProperty { "halftrackLaunchQuantisation" };
 const juce::Identifier launchLegatoProperty { "halftrackLaunchLegato" };
 const juce::Identifier launchVelocityProperty { "halftrackLaunchVelocity" }; // The Velocity amount, 0 to 1.
-const juce::Identifier trackHeightProperty { "halftrackHeight" }, trackFoldedProperty { "halftrackFolded" };
+const juce::Identifier trackHeightProperty { "halftrackHeight" }, trackFoldedProperty { "halftrackFolded" }, sessionWidthProperty { "halftrackSessionWidth" };
 // An editing grid: a HALFTRACKGRID child of the Edit for the Arrangement's, or of a clip for its
 // editor's. It is read back through validation, so a damaged or older one reads as the default, and
 // written without an undo manager, so it is neither an undo step nor an unsaved change.
@@ -7104,6 +7104,7 @@ Session::Snapshot Session::snapshot() const
         info.isReturn = isReturn (*t);
         if (const int height = t->state.getProperty (trackHeightProperty, 0); height >= Session::minimumTrackHeight && height <= Session::maximumTrackHeight) info.height = height;
         info.folded = t->state.getProperty (trackFoldedProperty, false);
+        if (const int width = t->state.getProperty (sessionWidthProperty, 0); width >= Session::minimumSessionWidth && width <= Session::maximumSessionWidth) info.sessionWidth = width;
         if (info.isReturn) info.sendMode = sendMode (*t);
         else for (auto* destination : te::getAudioTracks (e))
             if (isReturn (*destination))
@@ -7210,6 +7211,7 @@ Session::Snapshot Session::snapshot() const
             group.numberLabel = String (impl->trackNumber (*folder));
             group.mute = folder->isMuted (false); group.solo = folder->isSolo (false) || static_cast<bool> (folder->state.getProperty (cueProperty, false));
             group.folded = folder->state.getProperty (groupFoldedProperty, false);
+            if (const int width = folder->state.getProperty (sessionWidthProperty, 0); width >= Session::minimumSessionWidth && width <= Session::maximumSessionWidth) group.sessionWidth = width;
             if (auto* parent = folder->getParentFolderTrack()) group.parentId = parent->itemID.toString();
             if (auto* v = folder->getVolumePlugin())
             {
@@ -13573,6 +13575,16 @@ Result Session::setTrackHeight (const String& trackId, int pixels)
     if ((int) track->state.getProperty (trackHeightProperty, 0) == pixels) return Result::ok();
     if (pixels == 0) track->state.removeProperty (trackHeightProperty, nullptr);
     else track->state.setProperty (trackHeightProperty, pixels, nullptr);
+    sendChangeMessage(); return Result::ok();
+}
+Result Session::setSessionWidth (const String& id, int pixels)
+{
+    if (pixels != 0 && (pixels < minimumSessionWidth || pixels > maximumSessionWidth)) return Result::fail ("A Session column is " + String (minimumSessionWidth) + " to " + String (maximumSessionWidth) + " pixels wide.");
+    auto* track = te::findTrackForID (*impl->edit, te::EditItemID::fromVar (id));
+    if (track == nullptr || (dynamic_cast<te::AudioTrack*> (track) == nullptr && dynamic_cast<te::FolderTrack*> (track) == nullptr)) return Result::fail ("Track not found.");
+    if ((int) track->state.getProperty (sessionWidthProperty, 0) == pixels) return Result::ok();
+    if (pixels == 0) track->state.removeProperty (sessionWidthProperty, nullptr);
+    else track->state.setProperty (sessionWidthProperty, pixels, nullptr);
     sendChangeMessage(); return Result::ok();
 }
 Result Session::renameTrack (int index, const String& name)

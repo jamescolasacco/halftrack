@@ -165,6 +165,16 @@ int runTrackOrderTests (const juce::File& artifacts)
             ok (session.saveProject (project), "save the fold"); ok (session.loadProject (project), "reopen");
             check (session.snapshot().tracks[0].folded && session.setTrackFolded ("missing", true).failed(), "the fold is saved; a missing track is refused");
             ok (session.setTrackFolded (id, false), "unfold it");
+            // And Session column widths, likewise.
+            check (session.setSessionWidth (id, Session::minimumSessionWidth - 1).failed() && session.setSessionWidth (id, Session::maximumSessionWidth + 1).failed()
+                       && session.setSessionWidth ("missing", 100).failed(), "widths outside 60 to 400 pixels, or for no track, are refused");
+            ok (session.setSessionWidth (id, 180), "make its Session column 180 pixels wide");
+            check (session.snapshot().tracks[0].sessionWidth == 180 && session.snapshot().tracks[1].sessionWidth == 0 && session.canUndo() == couldUndo && ! session.snapshot().dirty,
+                   "it is that wide, the others default, outside the undo history");
+            ok (session.saveProject (project), "save the width"); ok (session.loadProject (project), "reopen");
+            check (session.snapshot().tracks[0].sessionWidth == 180, "the width is saved with the project");
+            ok (session.setSessionWidth (id, 0), "back to the default");
+            check (session.snapshot().tracks[0].sessionWidth == 0, "0 restores the default width");
         }
         {
             // Return tracks stay after every other track, as in the reference: new tracks go before them,

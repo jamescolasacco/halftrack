@@ -527,6 +527,7 @@ public:
         int inputChannel = 0; // A MIDI track's MIDI From channel, 1 to 16; 0 for All Channels.
         bool frozen = false; // Plays a render of its clips and devices; devices and clips are locked.
         int height = 0;      // Its Arrangement height in pixels, or 0 for the default.
+        int sessionWidth = 0; // Its Session column's width in pixels, or 0 for the default.
         bool folded = false; // Folded in the Arrangement to its header strip.
         CrossfadeAssign crossfade = CrossfadeAssign::none;
         double delayMs = 0; // Track Delay: positive plays later, negative earlier.
@@ -561,6 +562,7 @@ public:
         bool splitPan = false; // As TrackInfo's.
         float leftSplitPan = -1, rightSplitPan = 1;
         bool mute = false, solo = false, folded = false;
+        int sessionWidth = 0; // Its Session column's width in pixels, or 0 for the default.
         juce::String parentId;       // The group it is inside, if any.
         juce::StringArray memberIds; // Its own tracks, in order; groups inside it name it as their parent.
         // Where its header is: before Snapshot::tracks[position], or after every track at tracks.size().
@@ -1381,6 +1383,10 @@ public:
     // reference saves its tracks' heights; 0 restores the default.
     static constexpr int minimumTrackHeight = 20, maximumTrackHeight = 600;
     juce::Result setTrackHeight (const juce::String& trackId, int pixels);
+    // A track's or group's column width in the Session, saved the same way, as the reference saves
+    // its tracks' Session widths (ViewStateSessionTrackWidth); 0 restores the default.
+    static constexpr int minimumSessionWidth = 60, maximumSessionWidth = 400;
+    juce::Result setSessionWidth (const juce::String& trackOrGroupId, int pixels);
     // Folding a track shows only its header strip in the Arrangement; saved the same way.
     juce::Result setTrackFolded (const juce::String& trackId, bool folded);
     juce::Result setMasterGain (float decibels);

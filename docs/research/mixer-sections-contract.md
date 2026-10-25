@@ -73,7 +73,8 @@ The track order suite saves and reopens chosen controls; the UI suite hides and 
 - **The mixer view control.** It sits at the right end of the status bar, lit while the mixer of the view shown shows. Its arrow opens the Mixer Controls.
 - **Focus Mixer** (Option+Shift+M) is the Arrangement's. It shows the Arrangement's mixer and gives it the keys. There Left and Right select the strip beside the selected one. In the Session it is greyed.
 - **Taller faders.** Dragging the top edge of either mixer up makes its faders and meters taller, and dragging it down returns them to their usual height, no shorter; the Session's leaves the clip grid at least a row. Each mixer keeps its own height with the project as view state (`MixerSections::extraVolumeHeight`, up to 600 pixels more), as the reference keeps `ViewStateSessionMixerVolumeSectionHeight` and `ViewStateArrangerMixerVolumeSectionHeight` with its Set (120 at first in its default Set), after its manual's section 18.1.1: "dragging upwards on the top of the mixer will extend the height of the track meters".
-- **Missing.** Track widths, the decibel scale a wider strip shows, Performance Impact and FX Slots.
+- **Column widths.** In the Session, a track's or group's column widens or narrows by dragging its right edge in the title row, from 60 to 400 pixels, the columns after it and the Main column moving along, and its clip slots and mixer strip with it. Each width is kept with its track or group in the project, outside the undo history (`Session::setSessionWidth`), as the reference keeps each track's `ViewStateSessionTrackWidth` (manual section 18.2: tracks' edges drag their width in the Session View).
+- **Missing.** The decibel scale a wider strip shows beside a taller meter, the Arrangement mixer's own strip widths, Performance Impact and FX Slots.
 
 ### Evidence in Halftrack
 
@@ -82,7 +83,8 @@ The track order suite checks:
 - that the Arrangement's mixer starts hidden, with In/Out, Sends and Volume shown and Track Delay and the crossfader hidden;
 - that showing it and choosing its sections is view state, apart from the Session mixer's;
 - that a new project hides it, and a saved choice reopens;
-- that both mixers' faders start at their usual height, a taller one than allowed stops at the limit, and each keeps its own.
+- that both mixers' faders start at their usual height, a taller one than allowed stops at the limit, and each keeps its own;
+- that Session widths outside 60 to 400 pixels, or for no track, are refused, a width is kept with the project outside the undo history, and 0 restores the default.
 
 The UI suite checks:
 
@@ -93,4 +95,5 @@ The UI suite checks:
 - that a title selects its track, and Left and Right step along the strips;
 - that the mixer view control hides it and follows the Session's mixer in the Session;
 - that Focus Mixer is greyed in the Session, and in the Arrangement shows the mixer;
-- that dragging the Session mixer's top edge up makes its strips and faders taller without an undo step, and dragging it far down returns them to their usual height; and that the Arrangement mixer's edge does the same for its own.
+- that dragging the Session mixer's top edge up makes its strips and faders taller without an undo step, and dragging it far down returns them to their usual height; and that the Arrangement mixer's edge does the same for its own;
+- that a column's edge widens it, moving the columns after it and widening its strip, without an undo step, narrows it no further than 60 pixels, and returns to the usual width.

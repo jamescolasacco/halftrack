@@ -2737,3 +2737,7 @@ Engine and UI areas. As the reference's manual describes, a clip dragged over th
 ## Taller mixer faders — 2026-10-24
 
 Engine and UI areas. As the reference's manual describes, dragging the top edge of the Session's mixer or the Arrangement's up makes its faders and meters taller, and dragging it down returns them to their usual height. Each mixer keeps its height with the project as view state (`MixerSections::extraVolumeHeight`), as the reference's Set keeps its two volume section heights ([contract](research/mixer-sections-contract.md#the-arrangements-mixer-2026-10-24)). Checked in the track order and UI suites.
+
+## Session column widths — 2026-10-24
+
+Engine and UI areas. As the reference's manual describes, a Session track's or group's column widens or narrows by dragging its right edge in the title row, its slots and mixer strip with it, the columns after it moving along. Each width is kept with its track or group in the project outside the undo history (`Session::setSessionWidth`, `TrackInfo::sessionWidth`, `GroupInfo::sessionWidth`), as the reference keeps each track's Session width ([contract](research/mixer-sections-contract.md#the-arrangements-mixer-2026-10-24)). Checked in the track order and UI suites.

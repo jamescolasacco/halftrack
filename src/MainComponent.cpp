@@ -5259,15 +5259,44 @@ private:
         }
         // Display columns: a group's column precedes its members, and a folded group hides them.
         using Column = MixerColumn;
-        void buildColumns() { columns = owner.mixerColumns (owner.state.mixerSections.returns); }
+        void buildColumns()
+        {
+            columns = owner.mixerColumns (owner.state.mixerSections.returns);
+            lefts.assign (1, 0);
+            for (int c = 0; c < (int) columns.size(); ++c) lefts.push_back (lefts.back() + widthOf (c));
+        }
         int columnCount() const { return (int) columns.size(); }
         int columnOf (int track) const { for (size_t c = 0; c < columns.size(); ++c) if (columns[c].track == track) return (int) c; return -1; }
         int groupColumnOf (int group) const { for (size_t c = 0; c < columns.size(); ++c) if (columns[c].group == group) return (int) c; return -1; }
-        int columnX (int column) const { return column * columnWidth - (int) offsetX; }
+        // Each column is as wide as its track or group makes it, as the reference's Session tracks are
+        // (Session::setSessionWidth), or the default.
+        int widthOf (int column) const
+        {
+            if (! juce::isPositiveAndBelow (column, (int) columns.size())) return columnWidth;
+            const auto& shown = columns[(size_t) column];
+            const int own = shown.group >= 0 ? owner.state.groups[(size_t) shown.group].sessionWidth : owner.state.tracks[(size_t) shown.track].sessionWidth;
+            return own > 0 ? own : columnWidth;
+        }
+        int columnsWidth() const { return lefts.empty() ? 0 : lefts.back(); }
+        int columnX (int column) const { return (juce::isPositiveAndBelow (column, (int) lefts.size()) ? lefts[(size_t) column] : column * columnWidth) - (int) offsetX; }
         int columnAt (int x) const
         {
-            const int c = (int) std::floor ((x + offsetX) / columnWidth);
-            return x >= 0 && x < tracksWidth() && c >= 0 && c < (int) columns.size() ? c : -1;
+            if (x < 0 || x >= tracksWidth()) return -1;
+            const auto at = x + offsetX;
+            for (int c = 0; c < (int) columns.size(); ++c) if (at >= lefts[(size_t) c] && at < lefts[(size_t) c + 1]) return c;
+            return -1;
+        }
+        // A column's right edge in the title row, which drags its width.
+        int widthEdgeAt (juce::Point<int> at) const
+        {
+            if (at.y < 0 || at.y >= headerHeight) return -1;
+            for (int c = 0; c < (int) columns.size(); ++c) if (std::abs (at.x - (columnX (c) + widthOf (c))) <= 3) return c;
+            return -1;
+        }
+        juce::String columnId (int column) const
+        {
+            const auto& shown = columns[(size_t) column];
+            return shown.group >= 0 ? owner.state.groups[(size_t) shown.group].id : owner.state.tracks[(size_t) shown.track].id;
         }
         void resized() override
         {
@@ -5276,18 +5305,18 @@ private:
             for (int i = 0; i < (int) rows.size(); ++i)
             {
                 const int c = columnOf (i);
-                rows[(size_t) i]->setVisible (c >= 0); rows[(size_t) i]->setBounds (columnX (juce::jmax (0, c)), 0, columnWidth, mixerHeight());
+                rows[(size_t) i]->setVisible (c >= 0); rows[(size_t) i]->setBounds (columnX (juce::jmax (0, c)), 0, widthOf (c), mixerHeight());
             }
             for (int g = 0; g < (int) groupStrips.size(); ++g)
             {
                 const int c = groupColumnOf (g);
-                groupStrips[(size_t) g]->setVisible (c >= 0); groupStrips[(size_t) g]->setBounds (columnX (juce::jmax (0, c)), 0, columnWidth, mixerHeight());
+                groupStrips[(size_t) g]->setVisible (c >= 0); groupStrips[(size_t) g]->setBounds (columnX (juce::jmax (0, c)), 0, widthOf (c), mixerHeight());
             }
             horizontal.setBounds (0, getHeight() - scrollSize, tracksWidth(), scrollSize);
             vertical.setBounds (getWidth() - scrollSize, gridTop, scrollSize, grid.getHeight());
             masterStrip.setBounds (masterX(), grid.getBottom() + stopHeight, sceneWidth, mixerHeight());
             mixers.setVisible (owner.state.mixerSections.shown); masterStrip.setVisible (owner.state.mixerSections.shown);
-            const auto totalWidth = juce::jmax ((double) tracksWidth(), (double) columns.size() * columnWidth);
+            const auto totalWidth = juce::jmax ((double) tracksWidth(), (double) columnsWidth());
             offsetX = juce::jlimit (0.0, juce::jmax (0.0, totalWidth - tracksWidth()), offsetX);
             horizontal.setRangeLimits (0, totalWidth, juce::dontSendNotification); horizontal.setCurrentRange (offsetX, tracksWidth(), juce::dontSendNotification); horizontal.setSingleStepSize (columnWidth);
             const auto visibleRows = (double) grid.getHeight() / rowHeight;
@@ -5313,18 +5342,18 @@ private:
             for (int c = 0; c < (int) columns.size(); ++c)
             {
                 const int x = columnX (c);
-                if (x + columnWidth <= 0 || x >= tracksWidth()) continue;
-                if (columns[(size_t) c].group >= 0) { paintGroupColumn (g, columns[(size_t) c].group, x); continue; }
+                if (x + widthOf (c) <= 0 || x >= tracksWidth()) continue;
+                if (columns[(size_t) c].group >= 0) { paintGroupColumn (g, columns[(size_t) c].group, x, widthOf (c)); continue; }
                 const int t = columns[(size_t) c].track;
                 const auto& track = owner.state.tracks[(size_t) t];
                 const bool selectedTrack = t == owner.selectedTrack;
-                const auto header = juce::Rectangle<int> (x, 0, columnWidth, headerHeight).reduced (1, 0).withTrimmedBottom (1);
+                const auto header = juce::Rectangle<int> (x, 0, widthOf (c), headerHeight).reduced (1, 0).withTrimmedBottom (1);
                 g.setColour (selectedTrack ? track.colour.brighter (0.25f) : track.colour); g.fillRect (header);
                 g.setColour (dark); g.setFont (font (11.0f, selectedTrack));
                 g.drawText (track.name, header.reduced (6, 0), juce::Justification::centredLeft, true);
                 if (track.isReturn)
                 {
-                    g.setColour (slotColour); g.fillRect (x + 1, gridTop, columnWidth - 2, grid.getHeight() + stopHeight);
+                    g.setColour (slotColour); g.fillRect (x + 1, gridTop, widthOf (c) - 2, grid.getHeight() + stopHeight);
                     continue;
                 }
                 g.saveState(); g.reduceClipRegion (grid.withWidth (tracksWidth()));
@@ -5382,7 +5411,7 @@ private:
                     if (selected) { g.setColour (orange); g.drawRect (cell.expanded (1, 0).withTrimmedTop (-1), 2); }
                 }
                 g.restoreState();
-                const auto stop = juce::Rectangle<int> (x, grid.getBottom(), columnWidth, stopHeight).reduced (1, 0).withTrimmedBottom (1);
+                const auto stop = juce::Rectangle<int> (x, grid.getBottom(), widthOf (c), stopHeight).reduced (1, 0).withTrimmedBottom (1);
                 g.setColour (slotColour.darker (0.15f)); g.fillRect (stop);
                 g.setColour (track.launcherActive ? orange : muted); g.fillRect (stop.getCentreX() - 4, stop.getCentreY() - 4, 8, 8);
             }
@@ -5454,12 +5483,12 @@ private:
             { g.setColour (orange); g.fillRect (masterX(), juce::jlimit (gridTop, juce::jmax (gridTop, grid.getBottom() - 2), sceneY (sceneDrop) - 1), sceneWidth, 2); }
         }
         // A group column: header with disclosure triangle, slots that launch the members' row, and a stop button.
-        void paintGroupColumn (juce::Graphics& g, int index, int x)
+        void paintGroupColumn (juce::Graphics& g, int index, int x, int width)
         {
             const auto& group = owner.state.groups[(size_t) index];
             const auto grid = gridArea();
             const auto dark = themes::colour (0xff141414);
-            const auto header = juce::Rectangle<int> (x, 0, columnWidth, headerHeight).reduced (1, 0).withTrimmedBottom (1);
+            const auto header = juce::Rectangle<int> (x, 0, width, headerHeight).reduced (1, 0).withTrimmedBottom (1);
             g.setColour (group.colour); g.fillRect (header);
             juce::Path fold; const auto fx = (float) header.getX() + 7, fy = (float) header.getCentreY();
             if (group.folded) fold.addTriangle (fx, fy - 4, fx, fy + 4, fx + 6, fy);
@@ -5471,7 +5500,7 @@ private:
             g.saveState(); g.reduceClipRegion (grid.withWidth (tracksWidth()));
             for (int scene = 0; scene < (int) owner.state.scenes.size(); ++scene)
             {
-                const auto cell = juce::Rectangle<int> (x, sceneY (scene), columnWidth, rowHeight).reduced (1, 0).withTrimmedBottom (1);
+                const auto cell = juce::Rectangle<int> (x, sceneY (scene), width, rowHeight).reduced (1, 0).withTrimmedBottom (1);
                 if (! cell.intersects (grid)) continue;
                 bool clips = false, playing = false, queued = false;
                 for (int t = 0; t < (int) owner.state.tracks.size(); ++t)
@@ -5494,7 +5523,7 @@ private:
             g.restoreState();
             for (const auto& track : owner.state.tracks)
                 active = active || ((track.groupId == group.id || owner.groupInside (track.groupId, group.id)) && track.launcherActive);
-            const auto stop = juce::Rectangle<int> (x, grid.getBottom(), columnWidth, stopHeight).reduced (1, 0).withTrimmedBottom (1);
+            const auto stop = juce::Rectangle<int> (x, grid.getBottom(), width, stopHeight).reduced (1, 0).withTrimmedBottom (1);
             g.setColour (slotColour.darker (0.15f)); g.fillRect (stop);
             g.setColour (active ? orange : muted); g.fillRect (stop.getCentreX() - 4, stop.getCentreY() - 4, 8, 8);
         }
@@ -5516,7 +5545,7 @@ private:
         // Geometry used by pointer handlers and their tests.
         juce::Point<float> groupFoldPoint (int group) const { return { (float) columnX (groupColumnOf (group)) + 8.0f, headerHeight / 2.0f }; }
         juce::Point<float> groupLaunchPoint (int group, int scene) const { return { (float) columnX (groupColumnOf (group)) + 10.0f, (float) sceneY (scene) + rowHeight / 2.0f }; }
-        juce::Point<float> groupStopPoint (int group) const { return { (float) columnX (groupColumnOf (group)) + columnWidth / 2.0f, (float) (gridArea().getBottom() + stopHeight / 2) }; }
+        juce::Point<float> groupStopPoint (int group) const { return { (float) columnX (groupColumnOf (group)) + widthOf (groupColumnOf (group)) / 2.0f, (float) (gridArea().getBottom() + stopHeight / 2) }; }
         juce::Point<float> slotCentre (int track, int scene) const { return slotBounds (track, scene).getCentre().toFloat(); }
         // Map Mode's targets here: each track's clip slots and clip stop, each scene, and Stop All Clips.
         std::vector<std::pair<juce::Rectangle<int>, juce::String>> mapAreas() const
@@ -5530,7 +5559,7 @@ private:
                 for (int scene = 0; scene < (int) owner.state.scenes.size(); ++scene)
                     if (const auto b = slotBounds (t, scene); b.getBottom() > grid.getY() && b.getY() < grid.getBottom())
                         areas.push_back ({ b.reduced (1).getIntersection (grid), "slot:" + track.id + ":" + owner.state.scenes[(size_t) scene].id });
-                areas.push_back ({ juce::Rectangle<int> (columnX (columnOf (t)), grid.getBottom(), columnWidth, stopHeight).reduced (1, 0), "track:" + track.id + ":stop" });
+                areas.push_back ({ juce::Rectangle<int> (columnX (columnOf (t)), grid.getBottom(), widthOf (columnOf (t)), stopHeight).reduced (1, 0), "track:" + track.id + ":stop" });
             }
             for (int scene = 0; scene < (int) owner.state.scenes.size(); ++scene)
                 if (const auto y = sceneY (scene); y + rowHeight > grid.getY() && y < grid.getBottom())
@@ -5539,7 +5568,7 @@ private:
             return areas;
         }
         juce::Point<float> launchPoint (int track, int scene) const { const auto b = slotBounds (track, scene); return { (float) b.getX() + 10.0f, (float) b.getCentreY() }; }
-        juce::Point<float> trackStopPoint (int track) const { return { (float) (columnX (columnOf (track)) + columnWidth / 2), (float) (gridArea().getBottom() + stopHeight / 2) }; }
+        juce::Point<float> trackStopPoint (int track) const { return { (float) (columnX (columnOf (track)) + widthOf (columnOf (track)) / 2), (float) (gridArea().getBottom() + stopHeight / 2) }; }
         juce::Point<float> stopAllPoint() const { return stopAllBounds().getCentre().toFloat(); }
         void mouseDown (const juce::MouseEvent& event) override
         {
@@ -5548,6 +5577,8 @@ private:
             headerPressed.clear(); collapseHeadersOnUp = false;
             // The mixer's top edge drags its faders and meters taller, as the reference's does.
             if (onMixerEdge (event.getPosition()) && ! event.mods.isPopupMenu()) { volumeAtDown = owner.state.mixerSections.extraVolumeHeight; return; }
+            // A column's right edge in the title row drags its width, as the reference's tracks' edges do.
+            if (const int edge = widthEdgeAt (event.getPosition()); edge >= 0 && ! event.mods.isPopupMenu()) { widthColumn = columnId (edge); widthAtDown = widthOf (edge); return; }
             if (const int column = columnAt (event.x); column >= 0 && columns[(size_t) column].group >= 0)
             {
                 const auto& group = owner.state.groups[(size_t) columns[(size_t) column].group];
@@ -5654,17 +5685,17 @@ private:
                 int last = -1;
                 for (int c = 0; c < (int) columns.size(); ++c)
                     if (columns[(size_t) c].group >= 0 ? ! returns : owner.state.tracks[(size_t) columns[(size_t) c].track].isReturn == returns) last = c;
-                lineX = last >= 0 ? columnX (last) + columnWidth : 0;
+                lineX = last >= 0 ? columnX (last) + widthOf (last) : 0;
                 return Impl::TrackDrop {};
             }
             const auto& shown = columns[(size_t) column];
             const auto id = shown.group >= 0 ? owner.state.groups[(size_t) shown.group].id : owner.state.tracks[(size_t) shown.track].id;
             const int left = columnX (column);
-            const bool after = at.x >= left + columnWidth / 2;
+            const bool after = at.x >= left + widthOf (column) / 2;
             juce::String level;
             if (const auto around = owner.groupsAround (id); ! returns && at.y / 6 < around.size()) level = around[at.y / 6];
             auto drop = owner.dropBeside (id, after, level, returns);
-            if (drop) lineX = after ? left + columnWidth : left;
+            if (drop) lineX = after ? left + widthOf (column) : left;
             return drop;
         }
         // Whether the press now under way is on a column's title.
@@ -5681,7 +5712,8 @@ private:
         // Pointing at a title whose track or group has its own info text gives it to the Info view.
         void mouseMove (const juce::MouseEvent& event) override
         {
-            setMouseCursor (onMixerEdge (event.getPosition()) ? juce::MouseCursor::UpDownResizeCursor : juce::MouseCursor::NormalCursor);
+            setMouseCursor (onMixerEdge (event.getPosition()) ? juce::MouseCursor::UpDownResizeCursor
+                            : widthEdgeAt (event.getPosition()) >= 0 ? juce::MouseCursor::LeftRightResizeCursor : juce::MouseCursor::NormalCursor);
             juce::String title, text;
             if (const int column = columnAt (event.x); column >= 0 && event.y < headerHeight)
             {
@@ -5697,6 +5729,12 @@ private:
         void mouseExit (const juce::MouseEvent&) override { getProperties().set (infoTextProperty, juce::String()); }
         void mouseDrag (const juce::MouseEvent& event) override
         {
+            if (widthColumn.isNotEmpty())
+            {
+                const auto width = juce::jlimit (Session::minimumSessionWidth, Session::maximumSessionWidth, widthAtDown + event.getDistanceFromDragStartX());
+                owner.report (owner.session.setSessionWidth (widthColumn, width == columnWidth ? 0 : width)); owner.refresh();
+                return;
+            }
             if (volumeAtDown >= 0)
             {
                 auto sections = owner.state.mixerSections;
@@ -5744,6 +5782,7 @@ private:
         void mouseUp (const juce::MouseEvent& event) override
         {
             if (std::exchange (volumeAtDown, -1) >= 0) return;
+            if (std::exchange (widthColumn, {}).isNotEmpty()) return;
             if (const auto scene = std::exchange (scenePressed, {}); scene.isNotEmpty())
             {
                 const auto drop = std::exchange (sceneDrop, -1);
@@ -5941,7 +5980,7 @@ private:
             const auto scene = owner.selectedSceneIndex();
             if (scene >= 0) { if (scene < offsetScene) offsetScene = scene; if (scene + 1 > offsetScene + gridArea().getHeight() / (double) rowHeight) offsetScene = scene + 1 - gridArea().getHeight() / (double) rowHeight; }
             if (const int column = columnOf (owner.selectedTrack); column >= 0)
-            { const auto x = column * columnWidth; if (x < offsetX) offsetX = x; if (x + columnWidth > offsetX + tracksWidth()) offsetX = x + columnWidth - tracksWidth(); }
+            { const auto x = columnX (column) + offsetX, width = (double) widthOf (column); if (x < offsetX) offsetX = x; if (x + width > offsetX + tracksWidth()) offsetX = x + width - tracksWidth(); }
             resized(); repaint();
         }
     private:
@@ -5973,11 +6012,14 @@ private:
         // The strips' height (see Impl::mixerStripHeight); View > Mixer hides them, the grid taking their place.
         int mixerHeight() const { return owner.state.mixerSections.shown ? owner.mixerStripHeight (owner.state.mixerSections) : 0; }
         // The Master column follows the last track column, or the right edge once tracks scroll.
-        int masterX() const { return juce::jlimit (0, tracksWidth(), (int) columns.size() * columnWidth - (int) offsetX); }
+        int masterX() const { return juce::jlimit (0, tracksWidth(), columnsWidth() - (int) offsetX); }
         // The mixer's top edge: the bottom of the stop buttons' row.
         int mixerTop() const { return gridArea().getBottom() + stopHeight; }
         bool onMixerEdge (juce::Point<int> at) const { return owner.state.mixerSections.shown && at.y >= mixerTop() - 4 && at.y < mixerTop() && at.x < getWidth() - scrollSize; }
         int volumeAtDown = -1; // The extra fader height when the mixer's edge was pressed, while it drags.
+        juce::String widthColumn; // The track or group whose column's edge drags, and its width then.
+        int widthAtDown = 0;
+        std::vector<int> lefts; // Each column's left edge before scrolling, with the columns' total width last.
     private:
         static inline const juce::Colour gutter { 0xff1a1a1a }, slotColour { 0xff2c2c2c };
         juce::Component mixers;
@@ -5992,7 +6034,7 @@ private:
         int sceneY (int scene) const { return gridTop + (int) std::round ((scene - offsetScene) * rowHeight); }
         juce::Rectangle<int> stopAllBounds() const { return juce::Rectangle<int> (masterX(), gridArea().getBottom(), sceneWidth, stopHeight).reduced (1, 0).withTrimmedBottom (1); }
         juce::Rectangle<int> slotBounds (int track, int scene) const
-        { const int column = columnOf (track); return column < 0 ? juce::Rectangle<int>() : juce::Rectangle<int> { columnX (column), sceneY (scene), columnWidth, rowHeight }; }
+        { const int column = columnOf (track); return column < 0 ? juce::Rectangle<int>() : juce::Rectangle<int> { columnX (column), sceneY (scene), widthOf (column), rowHeight }; }
         const Session::SlotInfo* slotAt (int track, int scene) const
         {
             if (track < 0 || track >= (int) owner.state.tracks.size()) return nullptr;
@@ -24870,6 +24912,31 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
                        "dragging the mixer's top edge up makes its faders taller, kept with the project outside the undo history");
                 launcher.mouseDown (at (launcher.mixerTop() - 2.0f, false)); launcher.mouseDrag (at (launcher.mixerTop() + 400.0f, true)); launcher.mouseUp (at (launcher.mixerTop() + 400.0f, true)); refresh();
                 check (state.mixerSections.extraVolumeHeight == 0 && launcher.mixerHeight() == strips, "and dragging it down returns them to their usual height, no shorter");
+            }
+            {
+                // A column's right edge in the title row drags its width, as the reference's Session tracks' edges do.
+                const int columns = launcher.columnCount();
+                check (columns >= 2 && launcher.widthOf (0) == LauncherGrid::columnWidth, "the columns start at their usual width");
+                const int nextX = launcher.columnX (1), mainX = launcher.masterX();
+                const auto now = juce::Time::getCurrentTime();
+                const juce::Point<float> edge { (float) (launcher.columnX (0) + launcher.widthOf (0)), LauncherGrid::headerHeight / 2.0f };
+                const auto at = [&] (float x, bool dragged)
+                { return juce::MouseEvent (juce::Desktop::getInstance().getMainMouseSource(), { x, edge.y }, juce::ModifierKeys (juce::ModifierKeys::leftButtonModifier), 1.0f, 0, 0, 0, 0,
+                                           &launcher, &launcher, now, edge, now, 1, dragged); };
+                const auto steps = session.undoSteps().size();
+                launcher.mouseDown (at (edge.x, false)); launcher.mouseDrag (at (edge.x + 50, true)); launcher.mouseUp (at (edge.x + 50, true)); refresh();
+                auto* strip = findNamed (launcher, "Track volume") != nullptr ? findNamed (launcher, "Track volume")->getParentComponent() : nullptr;
+                check (launcher.widthOf (0) == LauncherGrid::columnWidth + 50 && launcher.columnX (1) == nextX + 50 && launcher.masterX() == juce::jmin (mainX + 50, launcher.getWidth() - LauncherGrid::sceneWidth - LauncherGrid::scrollSize)
+                           && session.undoSteps().size() == steps, "dragging it right widens the column, the columns after it moving along, outside the undo history");
+                bool wide = false;
+                for (int i = 0; i < launcher.getNumChildComponents(); ++i) if (auto* mixersArea = launcher.getChildComponent (i)) for (int k = 0; k < mixersArea->getNumChildComponents(); ++k)
+                    wide = wide || (mixersArea->getChildComponent (k)->getX() == launcher.columnX (0) && mixersArea->getChildComponent (k)->getWidth() == launcher.widthOf (0));
+                check (strip != nullptr && wide, "the column's mixer strip widens with it");
+                launcher.mouseDown (at ((float) (launcher.columnX (0) + launcher.widthOf (0)), false)); launcher.mouseDrag (at (edge.x - 400, true)); launcher.mouseUp (at (edge.x - 400, true)); refresh();
+                check (launcher.widthOf (0) == Session::minimumSessionWidth, "dragging it far left narrows it to the narrowest");
+                const auto firstId = launcher.columnId (0);
+                check (session.setSessionWidth (firstId, 0).wasOk(), "back to the usual width"); refresh();
+                check (launcher.widthOf (0) == LauncherGrid::columnWidth && launcher.columnX (1) == nextX, "and the columns are back where they were");
             }
         }
         // The Arrangement's mixer, as the reference's View > Mixer shows it at the bottom of the Arrangement,
