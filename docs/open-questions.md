@@ -449,6 +449,10 @@ The reference's colour algorithm was read statically and is followed (see the [t
 - Takes share a random colour while their recordings overlap: an Arrangement pass, and Session takes recording at the same time. The reference clears its shared colour when its recorder's last clip has it, which was read only in part.
 - Dropping a single clip onto empty space does not give the new track the clip's colour, as some of the reference's drop paths do.
 
+### Scene View
+
+The reference's manual describes the Scene View's sections but not their controls' look or what they show for several scenes with different values. Halftrack's Tempo and Signature are number fields like the scene fields in the launcher, showing the scene the selection follows; a change goes to every selected scene. Its title bar reads the scene's number and name ("2   Verse"), or "3 Scenes". Scene Follow Actions, its lower section in the reference, are missing.
+
 ### Follow's pause
 
 The reference's manual says when Follow pauses and resumes, but not how its switch looks while paused, nor whether keyboard edits pause it. Halftrack dims the switch to half while paused, and only edits made with the mouse in the Arrangement (a gesture that changed the undo history) pause it. A click in the Arrangement resumes Follow; Play from a playing transport counts as restarting playback.

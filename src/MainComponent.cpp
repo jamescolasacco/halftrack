@@ -612,7 +612,7 @@ public:
                  &playButton, &stopButton, &recordButton, &overdubButton, &sessionRecordButton, &automationArmButton, &reEnableButton, &captureButton, &punchInButton, &punchOutButton, &followButton, &tempo, &nudgeDown, &nudgeUp, &meterLabel, &extButton, &tapButton, &loopButton, &clickButton, &clickSettingsButton, &positionLabel, &loopStartLabel, &loopLengthLabel, &quantisation, &backToArrangement,
                  &projectLabel, &audioButton, &addTrackButton, &addMidiButton, &newMidiClipButton, &sessionTab, &arrangementTab, &pianoTab, &importButton, &filesButton, &pluginsButton,
                  &folderButton, &upButton, &browserSearch, &browserList, &browserSidebar, &browseBack, &browseForward, &hotSwapLabel, &hotSwapClose, &info, &overview, &ruler, &timeRuler, &viewport,
-                 &horizontalScroll, &gridReadout, &zoomIn, &zoomOut, &fitButton, &launcher, &arrangementMixer, &pianoRoll, &audioClipView, &midiLaunch, &clipLoop, &clipGroove, &clipTitle, &deviceChain,
+                 &horizontalScroll, &gridReadout, &zoomIn, &zoomOut, &fitButton, &launcher, &arrangementMixer, &pianoRoll, &audioClipView, &midiLaunch, &clipLoop, &clipGroove, &clipTitle, &deviceChain, &sceneView,
                  &mixerViewButton, &mixerViewOptions, &clipViewSelector, &deviceViewSelector })
             addAndMakeVisible (child);
         // The Clip View and Device View selectors beside it: a click shows its view, or hides the
@@ -1121,7 +1121,9 @@ public:
         const auto devicesBelow = stacked ? detail.removeFromBottom (juce::jmin (deviceHeight, detail.getHeight() / 2)) : juce::Rectangle<int>();
         if (stacked) detail.removeFromBottom (2);
         const auto clipArea = detail;
-        deviceChain.setBounds (stacked ? devicesBelow : detail); deviceChain.setVisible (showDetail && (! showPiano || stacked));
+        deviceChain.setBounds (stacked ? devicesBelow : detail); deviceChain.setVisible (showDetail && ! sceneViewShown() && (! showPiano || stacked));
+        sceneView.setBounds (detail); sceneView.setVisible (sceneViewShown());
+        if (sceneViewShown()) sceneView.sync();
         auto browser = browserBounds.reduced (6, 6);
         {
             // Browse Back and Forward sit left of the search bar, as the reference's arrows do.
@@ -6225,9 +6227,9 @@ private:
             if (onMixerEdge (event.getPosition()) && ! event.mods.isPopupMenu()) { volumeAtDown = owner.state.mixerSections.extraVolumeHeight; return; }
             // A column's right edge in the title row drags its width, as the reference's tracks' edges do.
             if (const int edge = widthEdgeAt (event.getPosition()); edge >= 0 && ! event.mods.isPopupMenu()) { widthColumn = columnId (edge); widthAtDown = widthOf (edge); return; }
-            // The Main's title selects its chain, and its menu colours it.
+            // The Main's title opens the Scene View, as the reference's does, and its menu colours the Main.
             if (event.y < headerHeight && event.x >= masterX() && event.x < masterX() + sceneWidth)
-            { if (event.mods.isPopupMenu()) owner.showMainMenu(); else owner.selectChain (Session::mainChain); return; }
+            { if (event.mods.isPopupMenu()) owner.showMainMenu(); else owner.showSceneView(); return; }
             if (const int column = columnAt (event.x); column >= 0 && columns[(size_t) column].group >= 0)
             {
                 const auto& group = owner.state.groups[(size_t) columns[(size_t) column].group];
@@ -6943,6 +6945,115 @@ private:
 
     // Audio clip detail: Clip and Sample boxes (warp, tempo, gain, reverse) beside the waveform.
     // The clip view's Launch box for a Session clip: launch mode, legato and launch grid.
+    // The Scene View, as the reference's (its manual, section 7.2.2): selecting scenes, or clicking the Main's title in
+    // the Session view, shows it in the detail view. Its title bar shows the scene's number, name and colour, or how
+    // many scenes are selected, and its menu renames and colours them. Tempo and Signature set the selected scenes'
+    // own, which the fields show dimmed while they follow the song; Delete clears them. The reference's scene Follow
+    // Actions below them are not here, as Halftrack's scenes have none.
+    class SceneView final : public juce::Component
+    {
+    public:
+        static constexpr int titleHeight = 22;
+        explicit SceneView (Impl& o) : owner (o)
+        {
+            setName ("Scene view");
+            for (auto [field, name] : { std::pair<ValueField*, const char*> { &tempo, "Scene View tempo" }, { &signature, "Scene View signature" } })
+            {
+                addAndMakeVisible (field); field->setName (name); field->setEditable (false, true, false);
+                field->setJustificationType (juce::Justification::centred);
+                field->setColour (juce::Label::backgroundColourId, themes::colour (0xff1c1c1c));
+                field->setColour (juce::Label::outlineColourId, line);
+            }
+            tempo.setTooltip ("Tempo: the selected scenes' tempo, 20-999 BPM, which launching them sets. Dimmed, they keep the song's; Delete clears it.");
+            signature.setTooltip ("Signature: the selected scenes' time signature, which launching them sets. Dimmed, they keep the song's; Delete clears it.");
+            signature.finestWithShift = false; // Its numbers do not run from coarse to fine.
+            tempo.onDragStart = [this] { tempoFrom = lead() != nullptr ? lead()->tempo.value_or (owner.state.tempo) : owner.state.tempo; owner.session.beginEditGesture ("Scene tempo"); };
+            tempo.onDrag = [this] (int part, int steps) { setTempos (juce::jlimit (20.0, 999.0, tempoFrom + steps * (part == 0 ? 1.0 : 0.01))); };
+            tempo.onDragEnd = [this] { owner.session.endEditGesture(); owner.refresh(); };
+            tempo.onTextChange = [this]
+            {
+                const auto text = tempo.getText().trim().toStdString(); char* end = nullptr; const double value = std::strtod (text.c_str(), &end);
+                if (! text.empty() && end == text.c_str() + text.size() && std::isfinite (value) && value >= 20.0 && value <= 999.0) setTempos (value, true);
+                owner.refresh();
+            };
+            tempo.onReset = [this] { setTempos (std::nullopt, true); owner.refresh(); };
+            signature.onDragStart = [this] { meterFrom = lead() != nullptr ? lead()->timeSignature.value_or (owner.state.timeSignature) : owner.state.timeSignature; owner.session.beginEditGesture ("Scene time signature"); };
+            signature.onDrag = [this] (int part, int steps) { setMeters (steppedMeter (meterFrom, part, steps)); };
+            signature.onDragEnd = [this] { owner.session.endEditGesture(); owner.refresh(); };
+            signature.onTextChange = [this] { if (const auto meter = parseMeter (signature.getText())) setMeters (*meter, true); owner.refresh(); };
+            signature.onReset = [this] { setMeters (std::nullopt, true); owner.refresh(); };
+        }
+        // The scene the selection follows.
+        const Session::SceneInfo* lead() const
+        {
+            for (const auto& scene : owner.state.scenes) if (scene.id == owner.selectedSceneId) return &scene;
+            return nullptr;
+        }
+        juce::String titleText() const
+        {
+            const auto chosen = owner.sceneSelection();
+            if (chosen.size() > 1) return juce::String (chosen.size()) + " Scenes";
+            for (size_t i = 0; i < owner.state.scenes.size(); ++i)
+                if (owner.state.scenes[i].id == owner.selectedSceneId) return juce::String ((int) i + 1) + "   " + owner.state.scenes[i].name;
+            return {};
+        }
+        void sync()
+        {
+            if (const auto* scene = lead())
+            {
+                if (! tempo.isBeingEdited()) tempo.setText (owner.sceneTempoText (*scene), juce::dontSendNotification);
+                if (! signature.isBeingEdited()) signature.setText (owner.sceneSignatureText (*scene), juce::dontSendNotification);
+                tempo.setColour (juce::Label::textColourId, scene->tempo ? ink : muted.withAlpha (0.6f));
+                signature.setColour (juce::Label::textColourId, scene->timeSignature ? ink : muted.withAlpha (0.6f));
+            }
+            repaint();
+        }
+        juce::Rectangle<int> titleBounds() const { return getLocalBounds().reduced (6, 0).withTrimmedTop (6).withHeight (titleHeight); }
+        void resized() override
+        {
+            const auto top = titleBounds().getBottom() + 10;
+            tempo.setBounds (90, top, 76, 20); signature.setBounds (90, top + 26, 76, 20);
+        }
+        void paint (juce::Graphics& g) override
+        {
+            g.fillAll (themes::colour (0xff303030));
+            const auto title = titleBounds();
+            const auto* scene = lead();
+            const bool coloured = owner.sceneSelection().size() == 1 && scene != nullptr && scene->colour.isOpaque();
+            g.setColour (coloured ? scene->colour : themes::colour (0xff4a4a4a)); g.fillRect (title);
+            g.setColour (coloured ? themes::colour (0xff1a1a1a) : ink); g.setFont (font (11.0f, true));
+            g.drawText (titleText(), title.reduced (6, 0), juce::Justification::centredLeft, true);
+            g.setColour (muted); g.setFont (font (10.0f));
+            g.drawText ("Tempo", 12, tempo.getY(), 74, tempo.getHeight(), juce::Justification::centredLeft);
+            g.drawText ("Signature", 12, signature.getY(), 74, signature.getHeight(), juce::Justification::centredLeft);
+        }
+        // The title bar's menu renames and colours the selected scenes.
+        void mouseDown (const juce::MouseEvent& e) override
+        {
+            if (e.mods.isPopupMenu() && titleBounds().contains (e.getPosition())) owner.showSceneTitleMenu();
+        }
+        ValueField tempo, signature;
+    private:
+        // Each selected scene takes the value, as one undo step: inside a drag's gesture, or one of its own.
+        void setTempos (std::optional<double> bpm, bool own = false)
+        {
+            if (own) owner.session.beginEditGesture ("Scene tempo");
+            for (const auto& id : owner.sceneSelection()) owner.report (owner.session.setSceneTempo (id, bpm));
+            if (own) owner.session.endEditGesture();
+            owner.refresh();
+        }
+        void setMeters (std::optional<Session::TimeSignature> meter, bool own = false)
+        {
+            if (own) owner.session.beginEditGesture ("Scene time signature");
+            for (const auto& id : owner.sceneSelection()) owner.report (owner.session.setSceneTimeSignature (id, meter));
+            if (own) owner.session.endEditGesture();
+            owner.refresh();
+        }
+        Impl& owner;
+        double tempoFrom = 120;
+        Session::TimeSignature meterFrom;
+    };
+    SceneView sceneView { *this };
     class LaunchBox final : public juce::Component
     {
     public:
@@ -12945,7 +13056,7 @@ private:
     void closeClipView() { showPiano = false; resized(); }
     void showArrangementView()
     {
-        showSession = false; showPiano = false; selectedLauncherClipId.clear(); resized();
+        showSession = false; showPiano = false; showScene = false; selectedLauncherClipId.clear(); resized();
     }
     void addSceneFromUI()
     {
@@ -13003,6 +13114,7 @@ private:
         extraSelectedScenes.clear();
         for (const auto& other : chosen) if (other != selectedSceneId) extraSelectedScenes.insert (other);
         extraScenesFor = selectedSceneId;
+        showSceneView(); // As the reference's selecting scenes shows its Scene View.
     }
     // The selected scenes, rearranged to a new order of every scene's id, one move at a time, as one undo step.
     void reorderScenes (const juce::StringArray& order)
@@ -13309,21 +13421,29 @@ private:
             launcher.scrollSelectionIntoView();refresh();
         }
     }
-    void renameSceneDialog (int scene)
+    void renameSceneDialog (int scene) { if (juce::isPositiveAndBelow (scene, (int) state.scenes.size())) renameScenesDialog ({ state.scenes[(size_t) scene].id }); }
+    // Every scene named takes the name typed, as one undo step, as the reference renames several selected scenes.
+    void renameScenesDialog (const juce::StringArray& ids)
     {
-        if (scene < 0 || scene >= (int) state.scenes.size()) return;
-        const auto id = state.scenes[(size_t) scene].id;
-        auto* dialog = new juce::AlertWindow ("Rename Scene", "Enter a scene name.", juce::MessageBoxIconType::NoIcon);
-        dialog->addTextEditor ("name", state.scenes[(size_t) scene].name, "Name");
+        const int first = ids.isEmpty() ? -1 : launcherIndices ({}, ids[0]).second;
+        if (first < 0) return;
+        auto* dialog = new juce::AlertWindow (ids.size() > 1 ? "Rename Scenes" : "Rename Scene", ids.size() > 1 ? "Enter a name for the selected scenes." : "Enter a scene name.", juce::MessageBoxIconType::NoIcon);
+        dialog->addTextEditor ("name", state.scenes[(size_t) first].name, "Name");
         dialog->addButton ("Rename", 1, juce::KeyPress (juce::KeyPress::returnKey)); dialog->addButton ("Cancel", 0, juce::KeyPress (juce::KeyPress::escapeKey));
         dialog->setLookAndFeel (&theme); alerts.emplace_back (dialog);
         auto safe = juce::Component::SafePointer<Impl> (this); auto safeDialog = juce::Component::SafePointer<juce::AlertWindow> (dialog);
-        dialog->enterModalState (true, juce::ModalCallbackFunction::create ([safe, safeDialog, id] (int result)
+        dialog->enterModalState (true, juce::ModalCallbackFunction::create ([safe, safeDialog, ids] (int result)
         {
             if (safe == nullptr || safeDialog == nullptr || result != 1) return;
-            const int index = safe->launcherIndices ({}, id).second; if (index < 0) return;
-            safe->report (safe->session.renameScene (index, safeDialog->getTextEditorContents ("name"))); safe->refresh();
+            safe->renameScenes (ids, safeDialog->getTextEditorContents ("name"));
         }), true);
+    }
+    void renameScenes (const juce::StringArray& ids, const juce::String& name)
+    {
+        if (ids.size() > 1) session.beginEditGesture ("Rename scenes");
+        for (const auto& id : ids) if (const int index = launcherIndices ({}, id).second; index >= 0) report (session.renameScene (index, name));
+        if (ids.size() > 1) session.endEditGesture();
+        refresh();
     }
     // A scene's tempo or time signature; leaving the field empty clears it.
     void sceneSettingsDialog (int scene, bool tempo)
@@ -13577,7 +13697,7 @@ private:
         if (track != nullptr && track->isMidi && currentMidiClip() == nullptr && ! showSession)
             for (int i = 0; i < (int) track->clips.size(); ++i)
                 if (track->clips[(size_t) i].isMidi) { selectedClip = i; break; }
-        showPiano = true; showDetail = true;
+        showPiano = true; showDetail = true; showScene = false;
         pianoRoll.sync(); resized(); pianoRoll.grabKeyboardFocus();
     }
     void createMidiClip (double seconds)
@@ -14894,7 +15014,7 @@ private:
         {
             case sceneDuplicate: duplicateSceneFromUI (sceneId); return;
             case sceneDelete: report (session.removeScene (index)); break;
-            case sceneRename: renameSceneDialog (index); return;
+            case sceneRename: renameScenesDialog (chosen); return;
             case sceneInfo: editInfoTextDialog (sceneId); return;
             case sceneInsert: insertSceneFromUI(); return;
             case sceneCapture: captureSceneFromUI(); return;
@@ -14917,6 +15037,7 @@ private:
     }
     void selectTrack (int track)
     {
+        showScene = false; // The track's devices show again.
         if (selectedTrack != track) { selectedClip = -1; selectedLauncherClipId.clear(); }
         selectedChain.clear(); // The track's own chain shows.
         selectedTrack = track;
@@ -15086,6 +15207,7 @@ private:
         if (clipTitle.isVisible()) clipTitle.sync();
         if (groovePool != nullptr) groovePool->sync();
         if (auto* history = undoHistory()) history->sync();
+        if (sceneViewShown()) sceneView.sync();
         newMidiClipButton.setEnabled (currentTrack() != nullptr && currentTrack()->isMidi && ! currentTrack()->isReturn);
         importButton.setEnabled (currentTrack() == nullptr || ! currentTrack()->isReturn);
         {
@@ -16118,10 +16240,35 @@ private:
         setDetailViews (clip ? ! clipViewOpen() : clipViewOpen(), clip ? deviceViewOpen() : ! deviceViewOpen());
     }
     bool clipViewOpen() const { return showDetail && showPiano; }
-    bool deviceViewOpen() const { return showDetail && (! showPiano || stackDevices); }
+    bool deviceViewOpen() const { return showDetail && ! sceneViewShown() && (! showPiano || stackDevices); }
+    // The Scene View, in the Session's detail view while scenes are its focus (see SceneView).
+    bool showScene = false;
+    bool sceneViewShown() const { return showSession && showScene && showDetail && ! showPiano; }
+    void showSceneView()
+    {
+        if (! showSession || state.scenes.empty()) return;
+        if (sceneSelection().isEmpty()) { selectedSceneId = state.scenes.front().id; extraSelectedScenes.clear(); }
+        showScene = true; showPiano = false; showDetail = true;
+        sceneView.sync(); resized(); launcher.repaint();
+    }
+    // The Scene View title bar's menu, as the reference's: Rename and the colour grid, for every selected scene.
+    void showSceneTitleMenu()
+    {
+        const auto id = selectedSceneId;
+        auto colour = std::make_shared<int> (-1);
+        juce::PopupMenu menu;
+        menu.addItem (sceneRename, "Rename");
+        menu.addSeparator();
+        std::vector<juce::Colour> used;
+        for (const auto& scene : state.scenes) if (isSceneSelected (scene.id) && ! scene.colour.isTransparent()) used.push_back (scene.colour);
+        menu.addCustomItem (sceneColour, std::make_unique<ColourGrid> (used, colour), nullptr, "Scene Colours");
+        menu.showMenuAsync (juce::PopupMenu::Options(), [safe = juce::Component::SafePointer<Impl> (this), id, colour] (int result)
+        { if (safe != nullptr && result != 0) safe->chooseSceneItem (result, id, *colour); });
+    }
     // Opens the views asked for: either alone, both stacked, or neither, hiding the detail view.
     void setDetailViews (bool clip, bool devices)
     {
+        showScene = false;
         clip = clip && canShowClipView();
         if (! clip && ! devices) showDetail = false;
         else { showDetail = true; stackDevices = clip && devices; showClipView (clip); }
@@ -24136,6 +24283,37 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
                 clickedArea = Area::session;
                 clickScene (1, {});
                 check (sceneSelection() == juce::StringArray { a }, "a plain click selects one scene again");
+                {
+                    // The Scene View, as the reference's (its manual, section 7.2.2).
+                    check (sceneViewShown() && sceneView.isVisible() && ! deviceChain.isVisible() && sceneView.titleText() == "2   " + state.scenes[1].name,
+                           "selecting a scene shows the Scene View in the detail view, its title bar naming the scene with its number");
+                    const auto song = state.tempo;
+                    const auto drag = [&] (ValueField& field, int part, int steps) { field.part = part; field.onDragStart(); field.onDrag (part, steps); field.onDragEnd(); refresh(); };
+                    drag (sceneView.tempo, 0, 5);
+                    check (state.scenes[1].tempo == std::optional<double> (song + 5) && session.undoSteps()[0] == "Scene tempo",
+                           "dragging its Tempo up five steps gives the scene a tempo of its own five BPM above the song's, one undo step");
+                    clickScene (3, adds);
+                    check (sceneView.titleText() == "2 Scenes", "with two scenes selected the title bar counts them");
+                    sceneView.signature.setText ("3/4", juce::sendNotificationSync); refresh();
+                    check (state.scenes[1].timeSignature == std::optional<Session::TimeSignature> ({ 3, 4 }) && state.scenes[3].timeSignature == state.scenes[1].timeSignature
+                               && session.undoSteps()[0] == "Scene time signature", "a signature typed there goes to both, one undo step");
+                    sceneView.tempo.onReset(); refresh();
+                    check (! state.scenes[1].tempo && ! state.scenes[3].tempo && session.undoSteps()[0] == "Scene tempo", "and Delete clears their tempo, one undo step");
+                    renameScenes (sceneSelection(), "Verse");
+                    check (state.scenes[1].name == "Verse" && state.scenes[3].name == "Verse" && session.undoSteps()[0] == "Rename scenes", "renaming them names both, one undo step");
+                    for (int i = 0; i < 4; ++i) session.undo();
+                    refresh();
+                    check (! state.scenes[1].tempo && ! state.scenes[1].timeSignature && ! state.scenes[3].timeSignature && state.scenes[1].name != "Verse", "four undos take it all back");
+                    selectTrack (0); refresh(); resized();
+                    check (! sceneView.isVisible() && deviceChain.isVisible(), "selecting a track shows its devices again");
+                    const auto when = juce::Time::getCurrentTime();
+                    const juce::Point<float> mainTitle ((float) launcher.masterX() + 20.0f, 10.0f);
+                    const juce::MouseEvent onMain (juce::Desktop::getInstance().getMainMouseSource(), mainTitle, juce::ModifierKeys (juce::ModifierKeys::leftButtonModifier), 1.0f, 0, 0, 0, 0,
+                                                   &launcher, &launcher, when, mainTitle, when, 1, false);
+                    launcher.mouseDown (onMain); launcher.mouseUp (onMain); refresh();
+                    check (sceneView.isVisible() && ! deviceChain.isVisible(), "clicking the Main's title opens the Scene View, as the reference's does");
+                    selectTrack (0); refresh(); resized();
+                }
                 // The same through the launcher's own clicks, and a drag of them that collapses them where it ends.
                 const auto now = juce::Time::getCurrentTime();
                 const auto scenePoint = [&] (int s) { return juce::Point<float> ((float) launcher.masterX() + 30.0f, (float) launcher.sceneFields (s).first.getCentreY()); };

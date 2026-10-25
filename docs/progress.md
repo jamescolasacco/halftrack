@@ -2905,3 +2905,7 @@ Engine area. Adding a native effect or a Utility made the device before starting
 ## Typing into a position's parts — 2026-10-25
 
 UI area. As the reference's key list has it (section 42.6), typing on a position or length field now replaces the part clicked (bars, beats or sixteenths), and "." or "," moves to the next part; commas read as points in typed positions ([value controls contract](research/value-controls-contract.md#halftrack)). Checked in the UI suite.
+
+## Scene View — 2026-10-25
+
+UI area. As the reference's manual describes (section 7.2.2), selecting scenes or clicking the Main's title in the Session shows a Scene View in the detail view: a title bar with the scene's number, name and colour (or the count of several), whose menu renames and colours them, and Tempo and Signature fields that set every selected scene's, each one undo step ([scene tempo contract](research/scene-tempo-contract.md#scene-view-2026-10-25)). Renaming several selected scenes now renames them all. Scene follow actions remain missing. Checked in the UI suite.
