@@ -8635,7 +8635,7 @@ private:
                 if (semitone == 0)
                 {
                     g.setColour (themes::colour (0xff344149)); g.setFont (font (9.5f, true));
-                    g.drawText (pitchName (pitch), 7, y, 32, rowHeight, juce::Justification::centredLeft); // C3 is note 60, as on the notes.
+                    if (rowHeight >= 9) g.drawText (pitchName (pitch), 7, y, 32, rowHeight, juce::Justification::centredLeft); // C3 is note 60, as on the notes.
                 }
             }
             if (timeRange)
@@ -8768,6 +8768,9 @@ private:
                 // notes to the selection, or takes them out if they all were selected.
                 if (e.y < gridTop || e.y >= gridBounds().getBottom() || e.mods.isPopupMenu()) return;
                 grabKeyboardFocus(); endGesture();
+                // A double-click fits the selected notes, or all of them, into the height (its manual, section 10.2).
+                if (e.getNumberOfClicks() >= 2 && ! e.mods.isShiftDown()) { fitHeight (true); return; }
+                keyZoomFrom = e.position; keyZoomHeight = rowHeight; keyZooming = false;
                 keyPitch = pitchAt ((float) e.y);
                 if (e.mods.isShiftDown())
                 {
@@ -8880,6 +8883,15 @@ private:
         {
             if (keyPitch >= 0)
             {
+                // Dragging across the keys sets the key tracks' height, taller to the right, as the reference's note
+                // ruler does (its manual, section 10.2).
+                const auto across = e.position.x - keyZoomFrom.x, along = e.position.y - keyZoomFrom.y;
+                if (keyZooming || (std::abs (across) > 4 && std::abs (across) > std::abs (along)))
+                {
+                    if (! keyZooming) { keyZooming = true; silence(); }
+                    setRowHeight (keyZoomHeight + juce::roundToInt (across / 4), keyZoomFrom.y);
+                    return;
+                }
                 // Dragging along the keys plays each one it reaches.
                 const auto pitch = pitchAt ((float) juce::jlimit (gridTop, gridBounds().getBottom() - 1, e.y));
                 if (pitch != keyPitch) { keyPitch = pitch; sound ({ { pitch, keyVelocity } }); }
@@ -9005,6 +9017,8 @@ private:
         void mouseWheelMove (const juce::MouseEvent& e, const juce::MouseWheelDetails& details) override
         {
             if (e.mods.isCommandDown()) { zoom (details.deltaY > 0 ? 1.1 : 1.0 / 1.1); return; }
+            // Option-scrolling sets the key tracks' height, as the reference's does (its manual, section 10.2).
+            if (e.mods.isAltDown() && details.deltaY != 0) { setRowHeight (rowHeight + (details.deltaY > 0 ? 1 : -1), e.position.y); return; }
             if (e.mods.isShiftDown() || std::abs (details.deltaX) > std::abs (details.deltaY)) viewBeat = juce::jmax (0.0, viewBeat - (details.deltaX + details.deltaY) * 8.0);
             else topPitch = pitchAtRow (topRow() - (int) std::round (details.deltaY * 20.0));
             updateScroll(); repaint();
@@ -9184,6 +9198,7 @@ private:
                 updateScroll(); repaint(); return true;
             }
             if (! mods.isAnyModifierKeyDown() && (code == 'W' || code == 'w')) { fit(); return true; }
+            if (! mods.isAnyModifierKeyDown() && (code == 'H' || code == 'h')) { fitHeight (false); return true; } // Fit Content to View Height.
             if (! mods.isAnyModifierKeyDown() && (code == 'Z' || code == 'z')) { zoomToNotes(); return true; }
             if (! mods.isAnyModifierKeyDown() && (code == 'X' || code == 'x'))
             { if (zoomBack) { std::tie (viewBeat, pixelsPerBeat, topPitch) = *zoomBack; zoomBack.reset(); updateScroll(); updateGridButton(); repaint(); } return true; }
@@ -9253,7 +9268,10 @@ private:
         }
     private:
         Impl& owner;
-        static constexpr int headerHeight = 37, rulerHeight = 23, gridTop = headerHeight + rulerHeight, keysWidth = 55, rowHeight = 15, scrollSize = 11;
+        static constexpr int headerHeight = 37, rulerHeight = 23, gridTop = headerHeight + rulerHeight, keysWidth = 55, scrollSize = 11;
+        // The key tracks' height, which the note ruler, Option-scrolling, H and double-clicking the keys change.
+        static constexpr int defaultRowHeight = 15, minimumRowHeight = 4, maximumRowHeight = 48;
+        int rowHeight = defaultRowHeight;
         // The Preview switch, drawn as headphones, lit when on.
         struct PreviewSwitch final : juce::Button
         {
@@ -9774,6 +9792,7 @@ private:
         int topPitch = 77;
         float drawVelocity = 0.8f;
         bool gesture = false, resizeNote = false, drawing = false, marquee = false, erasing = false, pitchLocked = false, velocityDrag = false, copyDrag = false, copied = false;
+        juce::Point<float> keyZoomFrom; int keyZoomHeight = defaultRowHeight; bool keyZooming = false; // A drag across the keys.
         // Chop, as the reference's (its manual, section 10.5.8.2): Cmd+E divides each selected note into equal
         // parts, as many as grid steps it lasts; with Cmd still held, Up and Down change every note's parts by
         // one (Shift doubling or halving them). It is one undo step, which letting Cmd go or any other edit ends.
@@ -9848,6 +9867,34 @@ private:
             const auto visibleRows = juce::jmax (1, gridBounds().getHeight() / rowHeight);
             if (rowIndex[(size_t) high] >= 0) topPitch = pitchAtRow (rowIndex[(size_t) high] - juce::jmax (0, (visibleRows - (rowIndex[(size_t) low] - rowIndex[(size_t) high] + 1)) / 2));
             updateScroll(); updateGridButton(); repaint();
+        }
+        // Sets the key tracks' height, keeping the key under a y where it was.
+        void setRowHeight (int height, float anchorY)
+        {
+            height = juce::jlimit ((int) minimumRowHeight, (int) maximumRowHeight, height);
+            if (height == rowHeight) return;
+            const auto anchorRow = topRow() + (anchorY - gridTop) / (float) rowHeight;
+            rowHeight = height;
+            topPitch = pitchAtRow ((int) std::round (anchorRow - (anchorY - gridTop) / (float) rowHeight));
+            updateScroll(); repaint();
+        }
+        // Fits notes into the editor's height: the clip's, as the reference's H, or the selected ones, as a
+        // double-click on its note ruler does (all of them without a selection).
+        void fitHeight (bool selection)
+        {
+            const auto* clip = owner.currentMidiClip();
+            if (clip == nullptr) return;
+            auto notes = selection ? selectedNotes() : clip->notes;
+            if (notes.empty()) notes = clip->notes;
+            if (notes.empty()) return;
+            int high = 0, low = 127;
+            for (const auto& n : notes) { high = std::max (high, n.pitch); low = std::min (low, n.pitch); }
+            if (rowIndex[(size_t) high] < 0 || rowIndex[(size_t) low] < 0) return;
+            const int span = rowIndex[(size_t) low] - rowIndex[(size_t) high] + 1;
+            rowHeight = juce::jlimit ((int) minimumRowHeight, (int) maximumRowHeight, gridBounds().getHeight() / span);
+            const int visible = juce::jmax (1, gridBounds().getHeight() / rowHeight);
+            topPitch = pitchAtRow (rowIndex[(size_t) high] - juce::jmax (0, (visible - span) / 2));
+            updateScroll(); repaint();
         }
         // Cmd+J: on each key, the selected notes become one, from the first's start to the last's end.
         void joinSelectedNotes()
@@ -10256,6 +10303,10 @@ private:
         }
         double visibleStartBeat() const noexcept { return viewBeat; }
         juce::Rectangle<float> shownNoteBounds (const Session::MidiNoteInfo& note) const { return noteBounds (note); }
+        int keyTrackHeight() const noexcept { return rowHeight; }
+        // Shows the key tracks from a pitch at a height, as a view restored.
+        void setKeyTracks (int top, int height)
+        { rowHeight = juce::jlimit ((int) minimumRowHeight, (int) maximumRowHeight, height); topPitch = juce::jlimit (0, 127, top); updateScroll(); repaint(); }
         // A note of another shown clip, placed against the edited clip's start.
         juce::Rectangle<float> ghostBounds (const Session::ClipInfo& other, const Session::MidiNoteInfo& note) const
         {
@@ -25911,6 +25962,23 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
                "in the note editor Cmd+G groups the selected notes Play All for chance, not the tracks");
         check (handleKey (juce::KeyPress ('G', juce::ModifierKeys (juce::ModifierKeys::commandModifier | juce::ModifierKeys::shiftModifier), 0))
                    && noteById (splitSource[0]).chanceGroup.isEmpty() && noteById (splitSource[1]).chanceGroup.isEmpty(), "and Cmd+Shift+G ungroups them");
+    }
+    {
+        // H fits the clip's notes into the editor's height; a drag across the keys and Option-scrolling set the key
+        // tracks' height (its manual, sections 10.2 and 42.12).
+        const auto top = pianoRoll.topShownPitch(), height = pianoRoll.keyTrackHeight();
+        const auto inView = [&] (const juce::String& id)
+        { const auto b = pianoRoll.shownNoteBounds (noteById (id)); return b.getY() >= 60 && b.getBottom() <= (float) pianoRoll.getHeight(); };
+        check (pianoRoll.keyPressed (juce::KeyPress ('h')) && inView (splitSource[0]) && inView (splitSource[2]), "H fits the clip's notes into the editor's height");
+        const auto fitted = pianoRoll.keyTrackHeight();
+        const juce::Point<float> from (40, pianoRoll.shownNoteBounds (noteById (splitSource[0])).getCentreY()), to = from - juce::Point<float> (40, 0);
+        pianoRoll.mouseDown (groupEvent (from, from, false, 0)); pianoRoll.mouseDrag (groupEvent (to, from, true, 0)); pianoRoll.mouseUp (groupEvent (to, from, true, 0));
+        const auto shorter = juce::jmax (4, fitted - 10);
+        check (pianoRoll.keyTrackHeight() == shorter, "dragging left across the keys makes the key tracks shorter");
+        const auto over = from + juce::Point<float> (100, 0);
+        pianoRoll.mouseWheelMove (groupEvent (over, over, false, juce::ModifierKeys::altModifier), juce::MouseWheelDetails { 0.0f, 1.0f, false, false, false });
+        check (pianoRoll.keyTrackHeight() == shorter + 1, "and Option-scrolling up makes them a pixel taller");
+        pianoRoll.setKeyTracks (top, height);
     }
     {
         juce::TextEditor editor;juce::DocumentWindow focusWindow("Halftrack split shortcut test",panel,juce::DocumentWindow::closeButton);

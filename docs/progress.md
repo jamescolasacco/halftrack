@@ -2829,3 +2829,7 @@ UI area. As the reference's manual describes, Cmd+E with notes selected now chop
 ## Probability groups — 2026-10-25
 
 Engine and UI areas. Notes can now form probability groups, as the reference's manual describes: a Play All group plays all its notes or none on each pass, and a Play One group one of them at random, at the group's one chance. Cmd+G and Cmd+Shift+G group and ungroup in the note editor (elsewhere Cmd+G still groups tracks), and the note menu has both kinds; grouped notes, like notes left to chance, show a corner triangle. Groups are saved and validated on load ([note chance contract](research/note-chance-contract.md#probability-groups-2026-10-25)). Checked by the note chance and UI suites.
+
+## Key track height and H — 2026-10-25
+
+UI area. The note editor's key tracks now have a height of their own, as the reference's manual describes: dragging across the keys sets it, Option-scrolling changes it, a double-click on the keys fits the selected notes into the height, and H fits the clip's notes (Fit Content to View Height) ([note drawing contract](research/note-drawing-contract.md#keys)). Checked in the UI suite.

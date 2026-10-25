@@ -35,7 +35,8 @@ In the lanes, Draw Mode draws too:
 From the MIDI Note Editor section of the reference's key list ([Live keyboard shortcuts](https://www.ableton.com/en/live-manual/12/live-keyboard-shortcuts/), consulted 2026-10-24):
 - **Velocity, range and chance.** Cmd+Up and Cmd+Down move the selected notes' velocity a step; with Shift, their velocity range; with Option, their chance by 1%. Typing a velocity (up to three digits, shown in the header) and Return gives it to the selected notes; Escape or another key drops it. A 0 typed first still deactivates the notes.
 - **Moving through notes.** Option+Up and Option+Down select the previous and next note in time; Option+Left and Option+Right the previous and next on the selected note's key. The view follows, and the note sounds with Preview on.
-- **The view.** Home and End take the insert marker to the content's start and end. Page Up and Page Down scroll a page of rows, a row with Shift, and a page of beats with Cmd. W fits the clip's width; Z zooms to the selected notes, or all of them, and X zooms back.
+- **The view.** Home and End take the insert marker to the content's start and end. Page Up and Page Down scroll a page of rows, a row with Shift, and a page of beats with Cmd. W fits the clip's width; Z zooms to the selected notes, or all of them, and X zooms back. H fits the clip's notes into the editor's height (Fit Content to View Height).
+- **Key track height** (2026-10-25), as the reference's manual describes it ([Editing MIDI](https://www.ableton.com/en/live-manual/12/editing-midi/), section 10.2): dragging across the note ruler (the keys) sets the key tracks' height, taller to the right, a pixel for every 4 pixels of drag; Option-scrolling in the editor changes it a pixel a step; and a double-click on the keys fits the selected notes, or all of them, into the height. Heights run from 4 to 48 pixels (15 at first), the key under the pointer stays put, and key names show from 9 pixels up. Dragging along the keys still plays them. The height belongs to the editor and is not saved.
 - **Joining.** Cmd+J joins the selected notes on each key into one, from the first's start to the last's end, keeping the first's velocity. Keys with a single selected note are left alone.
 - With the computer MIDI keyboard on, its keys play it instead.
 
@@ -55,7 +56,7 @@ The UI suite chops a four-beat note into grid-long parts that stay selected, lea
 
 - Draw Mode in take lanes.
 - The Display & Input setting "Draw Mode with Pitch Lock", which makes pitch-locked drawing the default.
-- The key list's E with Option drag changing a chop's parts, H, note groups (Cmd+G), Apply MIDI Tool (Cmd+Return), Show MIDI Note Filters, and Shift with Left and Right moving the clip region.
+- The key list's Cmd+E drag and E with Option drag changing a chop's parts, Apply MIDI Tool (Cmd+Return), Show MIDI Note Filters, and Shift with Left and Right moving the clip region.
 
 See [open questions](../open-questions.md) for the defaults taken where the manual is silent.
 
@@ -71,4 +72,5 @@ The UI suite checks:
 - velocities drawn over three grid steps, and along a straight line with Option, each one undo step; and steps drawn in a clip envelope lane;
 - that a double-click's note sounds while the button is held with Preview on;
 - a background drag's timespan on the grid, looping, splitting and fitting notes over it, splitting the Arrangement clip at its edges, and a click dropping it;
-- the keys above: velocity, range and chance nudges, a typed velocity, moving through notes, Home and End, the page keys, Z and X, and Cmd+J joining a key's notes, all undone after.
+- the keys above: velocity, range and chance nudges, a typed velocity, moving through notes, Home and End, the page keys, Z and X, and Cmd+J joining a key's notes, all undone after;
+- H fitting three notes into the height, a drag left across the keys making the key tracks 10 pixels shorter, and Option-scrolling making them a pixel taller.
