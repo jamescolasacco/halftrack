@@ -6063,8 +6063,7 @@ private:
             // Master column: scene launchers, with Stop All Clips under them.
             const int sceneX = masterX();
             const auto master = juce::Rectangle<int> (sceneX, 0, sceneWidth, headerHeight).reduced (1, 0).withTrimmedBottom (1);
-            g.setColour (themes::colour (0xff4a4a4a)); g.fillRect (master);
-            g.setColour (ink); g.setFont (font (11.0f, true)); g.drawText ("Main", master.reduced (6, 0), juce::Justification::centredLeft);
+            owner.paintMainTitle (g, master);
             g.saveState(); g.reduceClipRegion (sceneX, gridTop, sceneWidth, grid.getHeight());
             for (int scene = 0; scene < (int) owner.state.scenes.size(); ++scene)
             {
@@ -6218,6 +6217,9 @@ private:
             if (onMixerEdge (event.getPosition()) && ! event.mods.isPopupMenu()) { volumeAtDown = owner.state.mixerSections.extraVolumeHeight; return; }
             // A column's right edge in the title row drags its width, as the reference's tracks' edges do.
             if (const int edge = widthEdgeAt (event.getPosition()); edge >= 0 && ! event.mods.isPopupMenu()) { widthColumn = columnId (edge); widthAtDown = widthOf (edge); return; }
+            // The Main's title selects its chain, and its menu colours it.
+            if (event.y < headerHeight && event.x >= masterX() && event.x < masterX() + sceneWidth)
+            { if (event.mods.isPopupMenu()) owner.showMainMenu(); else owner.selectChain (Session::mainChain); return; }
             if (const int column = columnAt (event.x); column >= 0 && columns[(size_t) column].group >= 0)
             {
                 const auto& group = owner.state.groups[(size_t) columns[(size_t) column].group];
@@ -6856,8 +6858,7 @@ private:
             }
             g.restoreState();
             const auto main = juce::Rectangle<int> (mainX(), 0, mainWidth, titleHeight).reduced (1, 0).withTrimmedBottom (1);
-            g.setColour (themes::colour (0xff4a4a4a)); g.fillRect (main);
-            g.setColour (ink); g.setFont (font (11.0f, true)); g.drawText ("Main", main.reduced (6, 0), juce::Justification::centredLeft);
+            owner.paintMainTitle (g, main);
         }
         // A title selects its track, Shift adding it to the selection, or its group, whose triangle
         // folds it; its menu is the track's header menu. Main's selects the Main track.
@@ -6871,7 +6872,7 @@ private:
             const int column = columnAt (e.x);
             if (column < 0)
             {
-                if (e.x >= mainX() && e.x < mainX() + mainWidth && ! e.mods.isPopupMenu()) owner.selectChain (Session::mainChain);
+                if (e.x >= mainX() && e.x < mainX() + mainWidth) { if (e.mods.isPopupMenu()) owner.showMainMenu(); else owner.selectChain (Session::mainChain); }
                 return;
             }
             if (const int index = columns[(size_t) column].group; index >= 0)
@@ -14243,6 +14244,22 @@ private:
         else if (const auto* current = currentTrack(); current != nullptr && current->id != id) multiSelectedTracks.insert (current->id);
         selectedChain.clear(); selectTrack (t); return true;
     }
+    // The Main's title, in its colour once it has one (Session::setMainColour), grey before.
+    void paintMainTitle (juce::Graphics& g, juce::Rectangle<int> title) const
+    {
+        const bool coloured = state.mainColour.isOpaque();
+        g.setColour (coloured ? state.mainColour : themes::colour (0xff4a4a4a)); g.fillRect (title);
+        g.setColour (coloured ? themes::colour (0xff1a1a1a) : ink); g.setFont (font (11.0f, true)); g.drawText ("Main", title.reduced (6, 0), juce::Justification::centredLeft);
+    }
+    // The Main title's menu: the colour grid, as the reference's Main track header offers it.
+    void showMainMenu()
+    {
+        auto colour = std::make_shared<int> (-1);
+        juce::PopupMenu menu;
+        menu.addCustomItem (1, std::make_unique<ColourGrid> (std::vector<juce::Colour> { state.mainColour }, colour), nullptr, "Main Colours");
+        menu.showMenuAsync (juce::PopupMenu::Options(), [safe = juce::Component::SafePointer<Impl> (this), colour] (int) { if (safe != nullptr) safe->chooseMainColour (*colour); });
+    }
+    void chooseMainColour (int colour) { if (colour >= 0) { report (session.setMainColour (paletteColour (colour))); refresh(); } }
     void showHeaderMenu (const juce::String& id, bool arrangement)
     {
         if (! selectForHeaderMenu (id)) return;
@@ -26631,10 +26648,14 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
                                                       0, 0, 0, 0, masterStrip, masterStrip, now, { 10.0f, 10.0f }, now, 1, false));
             refresh();
             check (selectedChain == Session::mainChain && chainTitle() == "Main" && findNamed (deviceChain, "Device on") == nullptr, "clicking the Main's strip shows its empty chain");
+            chooseMainColour (40);
+            check (state.mainColour == paletteColour (40), "a colour chosen from the Main title's menu colours the Main");
+            session.undo(); refresh();
             insertDeviceSelection (state.projectGeneration, deviceChainId(), 100002 + (int) Session::EffectKind::channelEq, {}); refresh();
             check (state.mainPlugins.size() == 1 && state.groups[0].plugins.size() == 1, "and devices added go to the Main");
             selectTrack (0); refresh();
             check (selectedChain.isEmpty() && deviceChainId() == state.tracks[0].id, "selecting a track shows its own chain again");
+            check (session.undoSteps()[0] == "Add Channel EQ" && session.undoSteps()[1] == "Add channel utility", "each device added is one undo step, named for it, even after an undo");
             session.undo(); session.undo(); refresh();
             check (state.mainPlugins.empty() && state.groups[0].plugins.empty(), "two undo steps remove both devices");
         }

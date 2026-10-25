@@ -2893,3 +2893,11 @@ Engine and UI areas. As the reference's manual describes (sections 6.1 and 6.3),
 ## Automatic track and clip colours — 2026-10-25
 
 Engine, UI and root areas. A research agent read the reference's colour assignment statically; Halftrack now follows it with its own palette: a per-project colour sequence index chooses one of the reference's eight sequences, two pickers walk it (forward for tracks, backward for returns and the Main), new projects recolour every track, groups take their first track's colour and grouped tracks the group's, and Theme & Colors gains Auto-Assign Track Colors, Default Track Color, Reduced Automatic Colors and Clip Color (random clip colours avoid the last two; takes recorded together share one). The new track-colours suite reproduces the reference's built-in default Set's colours from its stored sequence index ([track colours contract](research/track-colours-contract.md)). Cross-area: `Session` (engine), `MainComponent` (UI), `CMakeLists.txt` and `Main.cpp` (the suite).
+
+## The Main's colour — 2026-10-25
+
+Engine and UI areas. The Main's titles in the Session view and the mixer now show the colour a new project gives it, and a right-click on them opens the colour grid (`Session::setMainColour`, one undo step) ([track colours contract](research/track-colours-contract.md#halftracks-behaviour)). Checked in the track-colours and UI suites.
+
+## Device undo steps — 2026-10-25
+
+Engine area. Adding a native effect or a Utility made the device before starting its undo step, so the engine's setting up of the device was recorded in the step before it, or, right after an undo, in an unnamed step of its own, and one undo then left the device in place. Each now starts its step first, as adding a plug-in already did. Checked in the UI suite (each device added is one undo step, named for it, even after an undo).

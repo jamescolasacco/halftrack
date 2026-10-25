@@ -1174,6 +1174,9 @@ public:
     // As the reference's clips keep the colour they were made with, a recoloured track's clips without
     // a colour of their own keep the one they showed.
     juce::Result setTrackColours (const juce::StringArray& trackAndGroupIds, juce::Colour);
+    // The Main's colour (Snapshot::mainColour), as the reference's Main track takes one from its header's colour
+    // grid; opaque, one undo step.
+    juce::Result setMainColour (juce::Colour);
     // Assign Track Color to Clips, as the reference's header command: the tracks in a chosen group take
     // its colour, then the chosen tracks' and those tracks' clips show their track's colour again,
     // Arrangement clips (main lane) from the Arrangement, Session clips from the Session view. One

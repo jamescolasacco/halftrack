@@ -443,7 +443,7 @@ The device's patch is encrypted and was not opened, and the manual describes onl
 
 The reference's colour algorithm was read statically and is followed (see the [track colours contract](research/track-colours-contract.md)); these are Halftrack's defaults where it was not:
 
-- The Main keeps a colour from the return picker, as the reference's does, but Halftrack still draws the Main in grey.
+- The Main takes its colour from the return picker, as the reference's does, and shows it in its titles; its title menu offers only the colour grid.
 - Undo puts the pickers back with the command that stepped them. Turning Reduced Automatic Colors on or off restarts the open project's pickers outside the undo history.
 - Default Track Color's swatch is dimmed while Auto-Assign Track Colors is on, since only new tracks with it off use it.
 - Takes share a random colour while their recordings overlap: an Arrangement pass, and Session takes recording at the same time. The reference clears its shared colour when its recorder's last clip has it, which was read only in part.

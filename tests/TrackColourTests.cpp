@@ -57,6 +57,10 @@ int runTrackColourTests (const juce::File& artifacts)
         check (snap.mainColour == palette (4) && snap.tracks[4].colour == palette (1) && snap.tracks[5].colour == palette (14),
                "the Main, then the returns, take slots 2, 1 and 0: palette places 4, 1 and 14");
         check (! snap.dirty && ! s.canUndo(), "the new project is unchanged, without history");
+        ok (s.setMainColour (palette (40)), "colour the Main");
+        check (s.snapshot().mainColour == palette (40) && s.undoSteps()[0] == "Set track colour", "the Main takes the colour, one undo step");
+        s.undo();
+        check (s.snapshot().mainColour == palette (4), "undo gives it back its own");
 
         // New tracks step on: the track picker forward, the return picker back.
         ok (s.addAudioTrack(), "insert an audio track");

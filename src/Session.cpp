@@ -11538,6 +11538,15 @@ Result Session::setTrackColours (const juce::StringArray& ids, juce::Colour colo
     for (auto* t : tracks) { impl->keepClipColours (*t); t->setColour (colour.withAlpha (1.0f)); }
     impl->changed(); return Result::ok();
 }
+Result Session::setMainColour (juce::Colour colour)
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    const auto value = colour.withAlpha (1.0f).toString();
+    if (impl->edit->state[mainColourProperty].toString() == value) return Result::ok();
+    impl->transaction ("Set track colour");
+    impl->edit->state.setProperty (mainColourProperty, value, &impl->edit->getUndoManager());
+    impl->changed(); return Result::ok();
+}
 Result Session::assignTrackColourToClips (const juce::StringArray& ids, bool arrangement)
 {
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
@@ -16383,10 +16392,10 @@ Result Session::addNativeEffect (int index, EffectKind kind)
     if (effectIsInstrument (kind)) return Result::fail ("Choose instruments from the track's instrument menu.");
     auto* instrument = Impl::instrument (*track);
     if (effectIsMidi (kind) && instrument == nullptr) return Result::fail ("MIDI effects need a MIDI track.");
+    impl->transaction ("Add " + String (effectName (kind))); // Before the device is made, whose setting up is part of the step.
     auto plugin = impl->edit->getPluginCache().createNewPlugin (state);
     if (! plugin) return Result::fail ("The native effect could not be created.");
     const int insertion = Impl::chainEnd (*track, effectIsMidi (kind) ? instrument : nullptr);
-    impl->transaction ("Add " + String (effectName (kind)));
     track->pluginList.insertPlugin (plugin, insertion, nullptr);
     impl->changed(); return Result::ok();
 }
@@ -16471,10 +16480,10 @@ Result Session::addUtility (int index)
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
     auto* track = impl->track (index); if (! track) return Result::fail ("Track not found.");
     if (! track->pluginList.canInsertPlugin()) return Result::fail ("This track's device chain is full.");
+    impl->transaction ("Add channel utility"); // Before the device is made, whose setting up is part of the step.
     auto plugin = impl->edit->getPluginCache().createNewPlugin (UtilityPlugin::xmlTypeName, {});
     if (! plugin) return Result::fail ("The channel utility could not be created.");
     const int insertion = Impl::chainEnd (*track);
-    impl->transaction ("Add channel utility");
     track->pluginList.insertPlugin (plugin, insertion, nullptr);
     impl->changed(); return Result::ok();
 }
@@ -17292,9 +17301,9 @@ Result Session::addNativeEffect (const String& chainId, EffectKind kind)
     juce::ValueTree state (te::IDs::PLUGIN);
     state.setProperty (te::IDs::type, NativeEffectPlugin::xmlTypeName, nullptr);
     state.setProperty ("effectKind", static_cast<int> (kind), nullptr);
+    impl->transaction ("Add " + String (effectName (kind))); // Before the device is made, whose setting up is part of the step.
     auto plugin = impl->edit->getPluginCache().createNewPlugin (state);
     if (! plugin) return Result::fail ("The native effect could not be created.");
-    impl->transaction ("Add " + String (effectName (kind)));
     list->insertPlugin (plugin, Impl::listEnd (*list), nullptr);
     impl->changed(); return Result::ok();
 }
@@ -17304,9 +17313,9 @@ Result Session::addUtility (const String& chainId)
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
     auto* list = impl->effectChain (chainId); if (list == nullptr) return Result::fail ("Device chain not found.");
     if (! list->canInsertPlugin()) return Result::fail ("This device chain is full.");
+    impl->transaction ("Add channel utility"); // Before the device is made, whose setting up is part of the step.
     auto plugin = impl->edit->getPluginCache().createNewPlugin (UtilityPlugin::xmlTypeName, {});
     if (! plugin) return Result::fail ("The channel utility could not be created.");
-    impl->transaction ("Add channel utility");
     list->insertPlugin (plugin, Impl::listEnd (*list), nullptr);
     impl->changed(); return Result::ok();
 }
