@@ -8896,14 +8896,26 @@ private:
         }
         void fit()
         {
-            const auto* clip = owner.currentMidiClip();
-            viewBeat = 0;
-            // Fits the edited clip and the shown clips after it.
-            auto length = clip != nullptr ? contentEndBeat (*clip) : 16.0;
-            if (clip != nullptr) for (const auto* other : owner.extraMidiClips()) length = juce::jmax (length, other->startBeat - clip->startBeat + other->lengthBeats);
-            pixelsPerBeat = juce::jlimit (12.0, 240.0, gridBounds().getWidth() / juce::jmax (4.0, length));
+            // Fits the edited clip and the other shown clips, before and after it.
+            const auto [low, high] = shownSpan();
+            viewBeat = low;
+            pixelsPerBeat = juce::jlimit (12.0, 240.0, gridBounds().getWidth() / juce::jmax (4.0, high - low));
             updateScroll(); updateGridButton(); repaint();
         }
+        // The beats the editor scrolls over, in the edited clip's: its content, and the other shown clips where they play.
+        std::pair<double, double> shownSpan() const
+        {
+            const auto* clip = owner.currentMidiClip();
+            if (clip == nullptr) return { 0.0, 16.0 };
+            double low = 0, high = contentEndBeat (*clip);
+            for (const auto* other : owner.extraMidiClips())
+            {
+                const auto from = other->startBeat - clip->startBeat + clip->contentStartBeat;
+                low = std::min (low, from); high = std::max (high, from + other->lengthBeats);
+            }
+            return { low, high };
+        }
+        double earliestBeat() const { return shownSpan().first; }
         void resized() override
         {
             // The header flows left to right: the tabs and the lane they choose from, Fold and Scale, as the
@@ -9210,7 +9222,7 @@ private:
                             // The clicked note stays under the pointer in its own clip's beats.
                             const auto shift = ghost.beat - ghost.note->startBeat;
                             owner.focusMidiClip (otherId);
-                            viewBeat = juce::jmax (0.0, viewBeat - shift);
+                            viewBeat = juce::jmax (earliestBeat(), viewBeat - shift);
                             selectedNoteIds = { noteId }; selectedNoteId = noteId;
                             updateScroll(); repaint(); return;
                         }
@@ -9283,7 +9295,7 @@ private:
             {
                 const auto [from, beat, row] = *panView;
                 owner.pauseFollow();
-                viewBeat = juce::jmax (0.0, beat - (e.position.x - from.x) / pixelsPerBeat);
+                viewBeat = juce::jmax (earliestBeat(), beat - (e.position.x - from.x) / pixelsPerBeat);
                 topPitch = pitchAtRow (row - juce::roundToInt ((e.position.y - from.y) / (float) rowHeight));
                 updateScroll(); repaint();
                 return;
@@ -9430,7 +9442,7 @@ private:
             if (e.mods.isCommandDown()) { zoom (details.deltaY > 0 ? 1.1 : 1.0 / 1.1); return; }
             // Option-scrolling sets the key tracks' height, as the reference's does (its manual, section 10.2).
             if (e.mods.isAltDown() && details.deltaY != 0) { setRowHeight (rowHeight + (details.deltaY > 0 ? 1 : -1), e.position.y); return; }
-            if (e.mods.isShiftDown() || std::abs (details.deltaX) > std::abs (details.deltaY)) viewBeat = juce::jmax (0.0, viewBeat - (details.deltaX + details.deltaY) * 8.0);
+            if (e.mods.isShiftDown() || std::abs (details.deltaX) > std::abs (details.deltaY)) viewBeat = juce::jmax (earliestBeat(), viewBeat - (details.deltaX + details.deltaY) * 8.0);
             else topPitch = pitchAtRow (topRow() - (int) std::round (details.deltaY * 20.0));
             updateScroll(); repaint();
         }
@@ -9609,7 +9621,7 @@ private:
             if (code == juce::KeyPress::pageUpKey || code == juce::KeyPress::pageDownKey)
             {
                 const auto sign = code == juce::KeyPress::pageUpKey ? -1 : 1;
-                if (mods.isCommandDown()) { viewBeat = juce::jmax (0.0, viewBeat + sign * gridBounds().getWidth() / pixelsPerBeat); owner.pauseFollow(); }
+                if (mods.isCommandDown()) { viewBeat = juce::jmax (earliestBeat(), viewBeat + sign * gridBounds().getWidth() / pixelsPerBeat); owner.pauseFollow(); }
                 else topPitch = pitchAtRow (topRow() + sign * (mods.isShiftDown() ? 1 : juce::jmax (1, gridBounds().getHeight() / rowHeight)));
                 updateScroll(); repaint(); return true;
             }
@@ -10318,7 +10330,7 @@ private:
                                : next ? *(std::next (at) == notes.end() ? at : std::next (at)) : *(at == notes.begin() ? at : std::prev (at));
             selectOnly (chosen.id);
             const auto visibleBeats = gridBounds().getWidth() / pixelsPerBeat;
-            if (chosen.startBeat < viewBeat || chosen.startBeat > viewBeat + visibleBeats) viewBeat = juce::jmax (0.0, chosen.startBeat - visibleBeats / 4);
+            if (chosen.startBeat < viewBeat || chosen.startBeat > viewBeat + visibleBeats) viewBeat = juce::jmax (earliestBeat(), chosen.startBeat - visibleBeats / 4);
             const auto visibleRows = juce::jmax (1, gridBounds().getHeight() / rowHeight);
             if (rowIndex[(size_t) chosen.pitch] >= 0 && (rowIndex[(size_t) chosen.pitch] < topRow() || rowIndex[(size_t) chosen.pitch] >= topRow() + visibleRows))
                 topPitch = pitchAtRow (rowIndex[(size_t) chosen.pitch] - visibleRows / 2);
@@ -10757,9 +10769,10 @@ private:
         {
             const auto grid = gridBounds(); const auto* clip = owner.currentMidiClip();
             const auto visibleBeats = grid.getWidth() / pixelsPerBeat;
-            const auto totalBeats = juce::jmax (visibleBeats, clip != nullptr ? contentEndBeat (*clip) : 16.0);
-            viewBeat = juce::jlimit (0.0, juce::jmax (0.0, totalBeats - visibleBeats), viewBeat);
-            horizontal.setRangeLimits (0.0, totalBeats, juce::dontSendNotification); horizontal.setCurrentRange (viewBeat, visibleBeats, juce::dontSendNotification);
+            const auto [low, high] = clip != nullptr ? shownSpan() : std::pair { 0.0, 16.0 };
+            const auto last = juce::jmax (high, low + visibleBeats);
+            viewBeat = juce::jlimit (low, last - visibleBeats, viewBeat);
+            horizontal.setRangeLimits (low, last, juce::dontSendNotification); horizontal.setCurrentRange (viewBeat, visibleBeats, juce::dontSendNotification);
             const auto visible = juce::jmax (1, grid.getHeight() / rowHeight);
             const auto top = juce::jlimit (0, juce::jmax (0, (int) rows.size() - visible), topRow());
             topPitch = pitchAtRow (top);
@@ -23022,6 +23035,12 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
             for (const auto& ghost : pianoRoll.ghostNotes (*extraMidiClips().front())) beats.push_back (ghost.beat);
             check (beats == std::vector<double> { -4, -3, -2, -1 }, "the shown clip's note shows at each of its four passes, against the edited clip's beats");
             session.undo(); refresh();
+            // The shown clip starts before the edited one, and the editor scrolls back over it.
+            pianoRoll.fit();
+            const auto* earlier = extraMidiClips().front();
+            const auto ghost = pianoRoll.ghostBounds (*earlier, earlier->notes.front()).getCentre();
+            check (std::abs (pianoRoll.visibleStartBeat() + 4) < 1e-9 && getComponentAt (getLocalPoint (&pianoRoll, ghost.toInt())) == &pianoRoll,
+                   "Fit shows the clip before the edited one too, the view starting four beats before it");
         }
         clipClick (firstId, 0);
         check (currentMidiClip()->id == firstId && extraMidiClipIds.empty() && extraMidiClips().empty(), "a plain click edits one clip again");

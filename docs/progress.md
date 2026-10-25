@@ -2958,5 +2958,5 @@ Engine and UI areas. MIDI files dropped on a MIDI track's Session slot now go in
 
 ## Shown clips' loops in the note editor — 2026-10-25
 
-UI area. In multi-clip editing, the notes of the other shown clips now show where the Arrangement plays them: from each clip's start marker, and at each pass of a looped clip's loop. Before, each note showed once at its content beat. Clicking any of them still edits its clip with the note selected, keeping it under the pointer.
+UI area. In multi-clip editing, the notes of the other shown clips now show where the Arrangement plays them: from each clip's start marker, and at each pass of a looped clip's loop. Before, each note showed once at its content beat. Clicking any of them still edits its clip with the note selected, keeping it under the pointer. The view now scrolls back over shown clips that start before the edited one, and Fit covers them all.
 
