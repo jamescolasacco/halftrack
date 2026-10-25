@@ -127,6 +127,8 @@ include(cmake/PatchGroupOutputs.cmake)
 halftrack_patch_group_outputs("${tracktion_SOURCE_DIR}")
 include(cmake/PatchStretchPriming.cmake)
 halftrack_patch_stretch_priming("${tracktion_SOURCE_DIR}")
+include(cmake/PatchRenderJobs.cmake)
+halftrack_patch_render_jobs("${tracktion_SOURCE_DIR}")
 
 juce_add_gui_app(Halftrack
     PRODUCT_NAME "Halftrack"

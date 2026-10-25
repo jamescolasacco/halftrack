@@ -2789,3 +2789,7 @@ Engine and UI areas. As the reference's manual describes, a toggle to the right 
 ## Take lane source highlights — 2026-10-25
 
 Engine and UI areas. As the reference's manual describes, take lanes show the material the comp plays from them in the clip's colour and the rest desaturated, only where the main lane still plays it at the same place. Dragging a highlight's edge moves the split between two audio comp parts, and in Draw Mode a drag across a lane comps it, each one undo step ([contract](research/take-lanes-contract.md#source-highlights-and-drawing-comps-2026-10-25)). Checked in the UI suite.
+
+## Render job crash — 2026-10-25
+
+Root area (dependency patch). The UI suite's intermittent crash in `juce::ThreadPool::runNextJob` came from Tracktion's RenderManager: a render job cancelled while it waited in the background job pool, as when an undo deletes a just-reversed clip, released itself while the pool still held it, and the pool's next pick read the freed job. An AddressSanitizer build reproduced it as a heap use after free in `ThreadPool::pickNextJobToRun`. `cmake/PatchRenderJobs.cmake` now keeps a job cancelled before it starts out of the pool and takes a finished or cancelled job out of the queue before releasing it ([dependencies](dependencies.md#tracktion-render-job-lifetimes-patch)). The audio clips suite cancels waiting renders round after round; the sanitizer build runs it clean with the patch and reports the use after free without it.

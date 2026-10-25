@@ -9,6 +9,8 @@
 namespace halftrack
 {
 void useHardClipEdges();
+std::unique_ptr<juce::AudioIODeviceType> makeSyntheticTestDeviceType();
+float pumpSyntheticTestDevice (Session&, int blocks);
 namespace
 {
 void check(bool value,const juce::String& text){if(!value)throw std::runtime_error(text.toStdString());std::cout<<"PASS audio clips: "<<text<<std::endl;}
@@ -208,6 +210,54 @@ void clipboardTests(const juce::File& root,const juce::File& sourceFile,const ju
     check(session.snapshot().tracks[0].clips[0].id==pasted,"undo after saving restores cut clip identity");
     ok(session.exportWav(render),"render restored Cut after Save");compare(read(render),crossProject,"cut media survives save and undo");
 }
+// Reversed clips render in the background job pool, each reverse starting a render of its source at once
+// (one already rendered is reused). With more renders than the pool has threads, some wait; deleting the
+// clips a moment later cancels the waiting renders, which the engine must take out of the pool before
+// releasing them, or a pool thread later picks a deleted job. Each round imports and reverses sixteen new
+// sources, then undoes it all.
+void cancelledRenderTests(const juce::File& root)
+{
+    Session s(false,makeSyntheticTestDeviceType());
+    pumpSyntheticTestDevice(s,8);
+    juce::Array<juce::File> written;
+    int placed=0;
+    for(const int wait:{0,2,5})
+    {
+        juce::StringArray ids;
+        for(int k=0;k<16;++k)
+        {
+            const auto file=root.getChildFile("waiting-"+juce::String(placed)+".wav");
+            juce::AudioBuffer<float> x(2,48000*5);
+            for(int n=0;n<x.getNumSamples();++n)for(int c=0;c<2;++c)x.setSample(c,n,(float)std::sin(.003*(placed+1)*n+c)*.25f);
+            {juce::WavAudioFormat wav;std::unique_ptr<juce::OutputStream>stream(file.createOutputStream());auto writer=wav.createWriterFor(stream,juce::AudioFormatWriterOptions().withSampleRate(48000).withNumChannels(2).withBitsPerSample(24));check(writer&&writer->writeFromAudioSampleBuffer(x,0,x.getNumSamples()),"write a source to reverse");}
+            written.add(file);
+            const auto before=s.snapshot();
+            ok(s.importAudio(file,0,placed*6.0),"import it");
+            for(const auto& track:s.snapshot().tracks)for(const auto& clip:track.clips)
+            {
+                bool known=false;
+                for(const auto& old:before.tracks)for(const auto& o:old.clips)known=known||o.id==clip.id;
+                if(!known)ids.add(clip.id);
+            }
+            ++placed;
+        }
+        check(ids.size()==16,"sixteen new clips, twice the pool's threads");
+        for(const auto& id:ids)ok(s.setAudioClipReversed(id,true),"reverse every new clip");
+        if(wait>0)juce::MessageManager::getInstance()->runDispatchLoopUntil(wait);
+        // Undoing the reverses and then the imports deletes the clips, which cancels their renders.
+        for(int k=0;k<32;++k)s.undo();
+        for(int settle=0;settle<15;++settle){pumpSyntheticTestDevice(s,2);juce::MessageManager::getInstance()->runDispatchLoopUntil(20);}
+    }
+    // The pool then renders another reversed clip as usual.
+    ok(s.importAudio(written.getFirst(),0,0),"import a source again");
+    const auto last=s.snapshot();
+    juce::String again;
+    for(const auto& track:last.tracks)for(const auto& clip:track.clips)again=clip.id;
+    ok(s.setAudioClipReversed(again,true),"reverse it");
+    ok(s.exportWav(root.getChildFile("waiting.wav")),"render it after the cancelled renders");
+    check(read(root.getChildFile("waiting.wav")).getMagnitude(0,48000*4)>.2f,"cancelling renders still waiting in the pool, round after round, leaves the engine rendering");
+    for(const auto& file:written)file.deleteFile();
+}
 juce::ValueTree audioState(juce::ValueTree tree)
 {
     if(tree.hasType("AUDIOCLIP"))return tree;for(auto child:tree)if(auto found=audioState(child);found.isValid())return found;return {};
@@ -225,6 +275,7 @@ int runAudioClipTests(const juce::File& artifacts)
         {juce::WavAudioFormat wav;std::unique_ptr<juce::OutputStream>stream(file.createOutputStream());auto writer=wav.createWriterFor(stream,juce::AudioFormatWriterOptions().withSampleRate(48000).withNumChannels(2).withBitsPerSample(24));check(writer&&writer->writeFromAudioSampleBuffer(source,0,48000),"write original signal");}
         juce::MemoryBlock originalBytes;check(file.loadFileAsData(originalBytes),"read original source bytes");source=read(file);
         reversalTests(root,file,source);
+        cancelledRenderTests(root);
         Session s(false);ok(s.importAudio(file,0),"import immutable source");const auto id=s.snapshot().tracks[0].clips[0].id;
         ok(s.saveProject(project),"save baseline");ok(s.loadProject(project),"reopen clean baseline");
         auto defaults=s.snapshot().tracks[0].clips[0].audio;ok(s.setAudioClipSettings(id,defaults),"identical settings no-op");check(!s.snapshot().dirty&&!s.canUndo(),"identical settings preserve clean history");
