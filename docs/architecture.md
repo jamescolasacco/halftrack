@@ -267,7 +267,7 @@ Draw Mode is window state (`Impl::drawMode`), not saved with the project. The pi
 
 ## Browser index
 
-`ValueSlider` (in `src/ValueControls.h`) is every knob and fader in the interface: a `juce::Slider` that drags at a tenth of its rate with Shift. `MainComponent::Impl` remembers the slider clicked last and gives it the value keys (`valueKey`): arrow steps, Delete to its default or its `onReset`, and typed values in a field over it, each as one drag gesture. See the [value controls contract](research/value-controls-contract.md).
+`ValueSlider` (in `src/ValueControls.h`) is every knob and fader in the interface: a `juce::Slider` that drags at a tenth of its rate with Shift. `MainComponent::Impl` remembers the slider clicked last and gives it the value keys (`valueKey`): arrow steps, Delete to its default or its `onReset`, and typed values in a field over it, each as one drag gesture. `ValueField` is a number field: a `juce::Label` whose parts, the runs of digits in its text, drag by steps that its owner turns into values (`onDrag`), within one edit gesture. See the [value controls contract](research/value-controls-contract.md).
 
 `themes` (in `src/Theme.*`) maps every interface colour, authored for Dark, into the current theme. Named palette colours are `themes::Colour` values that resolve when used; literal colours go through `themes::colour`. `themes::apply` recolours the colours components set on themselves, keeping their Dark originals. `MainComponent` sets the saved theme before building its components, and `Impl::applyInterfaceLook` follows the preferences' theme and zoom. See the [themes contract](research/themes-contract.md).
 

@@ -66,7 +66,7 @@ juce::Font font (float size = 12.0f, bool bold = false)
 
 // A Control Bar field that shows an automation LED in its upper left corner while what it edits
 // changes along the Arrangement, as the reference's do.
-class AutomatedField final : public juce::Label
+class AutomatedField final : public ValueField
 {
 public:
     void setAutomated (bool on) { if (on != automated) { automated = on; repaint(); } }
@@ -690,14 +690,25 @@ public:
                 session.setTempo (value);
             refresh();
         };
-        for (auto* display : { &positionLabel, &loopStartLabel, &loopLengthLabel })
+        for (auto* display : { static_cast<juce::Label*> (&positionLabel), static_cast<juce::Label*> (&loopStartLabel), static_cast<juce::Label*> (&loopLengthLabel) })
         {
             display->setFont (juce::Font (juce::FontOptions (juce::Font::getDefaultMonospacedFontName(), 12.5f, juce::Font::plain)));
             display->setJustificationType (juce::Justification::centred);
             display->setColour (juce::Label::backgroundColourId, background);
             display->setColour (juce::Label::outlineColourId, line);
         }
-        positionLabel.setTooltip ("Song position in bars, beats and sixteenths");
+        // The song position drags by its bars, beats or sixteenths and takes the arrow keys and typing, each
+        // moving the insert marker, as the reference's Arrangement Position fields do (manual section 6.3).
+        positionLabel.setName ("Song position");
+        positionLabel.setTooltip ("Song position in bars, beats and sixteenths. Drag a part, or double-click to type a position, to move the insert marker.");
+        positionLabel.onDragStart = [this] { fieldDragFrom = beatsAt (juce::jmax (0.0, state.position)); };
+        positionLabel.onDrag = [this] (int part, int steps) { session.setInsertMarker (secondsAt (juce::jmax (0.0, steppedPosition (fieldDragFrom, part, steps)))); refresh(); };
+        positionLabel.onDragEnd = [this] { refresh(); };
+        positionLabel.onTextChange = [this]
+        {
+            if (const auto beats = parsePosition (positionLabel.getText())) session.setInsertMarker (secondsAt (*beats));
+            refresh();
+        };
         loopStartLabel.setName ("Loop start"); loopLengthLabel.setName ("Loop length");
         quantisation.setName ("Global launch quantization");
         for (const auto& [name, value] : Session::launchQuantisations()) quantisation.addItem (name, (int) value + 1); // In the reference's order.
@@ -729,6 +740,40 @@ public:
                 session.setLoop (state.looping, state.loopStart, secondsAt (beatsAt (state.loopStart) + *beats));
             refresh();
         };
+        // Dragging a part of the tempo, the time signature or the loop's start or length steps it, as the
+        // reference's fields drag: the tempo's whole beats or hundredths, the signature's numerator or
+        // denominator, and a position's bars, beats or sixteenths. Each drag is one undo step.
+        tempo.onDragStart = [this] { fieldDragFrom = state.tempo; session.beginEditGesture ("Tempo"); };
+        tempo.onDrag = [this] (int part, int steps) { session.setTempo (juce::jlimit (20.0, 999.0, fieldDragFrom + steps * (part == 0 ? 1.0 : 0.01))); refresh(); };
+        meterLabel.finestWithShift = false;
+        meterLabel.onDragStart = [this] { meterDragFrom = state.timeSignature; session.beginEditGesture ("Time signature"); };
+        meterLabel.onDrag = [this] (int part, int steps)
+        {
+            auto meter = meterDragFrom;
+            if (part == 0) meter.numerator = juce::jlimit (1, 99, meter.numerator + steps);
+            else
+            {
+                int power = 0;
+                while ((1 << power) < meter.denominator && power < 4) ++power;
+                meter.denominator = 1 << juce::jlimit (0, 4, power + steps);
+            }
+            report (session.setTimeSignature (meter.numerator, meter.denominator)); refresh();
+        };
+        loopStartLabel.onDragStart = [this] { fieldDragFrom = beatsAt (state.loopStart); fieldDragLength = state.loopEnd - state.loopStart; session.beginEditGesture ("Loop start"); };
+        loopStartLabel.onDrag = [this] (int part, int steps)
+        {
+            const auto start = secondsAt (juce::jmax (0.0, steppedPosition (fieldDragFrom, part, steps)));
+            session.setLoop (state.looping, start, start + fieldDragLength); refresh();
+        };
+        loopLengthLabel.onDragStart = [this] { fieldDragFrom = beatsAt (state.loopEnd) - beatsAt (state.loopStart); session.beginEditGesture ("Loop length"); };
+        loopLengthLabel.onDrag = [this] (int part, int steps)
+        {
+            const auto meter = barAt (beatsAt (state.loopStart)).meter;
+            const auto length = juce::jmax (0.25, fieldDragFrom + steps * (part == 0 ? meter.beatsPerBar() : part == 1 ? 4.0 / meter.denominator : 0.25));
+            session.setLoop (state.looping, state.loopStart, secondsAt (beatsAt (state.loopStart) + length)); refresh();
+        };
+        for (auto* field : { &tempo, static_cast<ValueField*> (&meterLabel), &loopStartLabel, &loopLengthLabel })
+            field->onDragEnd = [this] { session.endEditGesture(); refresh(); };
         projectLabel.setFont (font (12.0f));
         projectLabel.setJustificationType (juce::Justification::centredRight);
         playButton.setTooltip ("Play from the insert marker  |  Space;  continue  |  Shift+Space");
@@ -2146,10 +2191,11 @@ private:
         static bool within (const juce::Component* c, const juce::Component& area) { return c != nullptr && (c == &area || area.isParentOf (c)); }
         Impl& owner;
     } headerFocusWatcher { *this };
-    // The knob or fader clicked last takes the reference's value keys until a click elsewhere (its
-    // manual, section 42.6, Adjusting Values): Up and Down step it, Delete returns it to its default,
-    // and typing a digit, a minus sign or a point starts entering a value in a field over it.
-    juce::Component::SafePointer<juce::Slider> valueControl;
+    // The knob, fader or number field clicked last takes the reference's value keys until a click
+    // elsewhere (its manual, section 42.6, Adjusting Values): Up and Down step it, Delete returns it to
+    // its default, and typing a digit, a minus sign or a point starts entering a value, in a field over
+    // a knob or fader and in the number field itself.
+    juce::Component::SafePointer<juce::Component> valueControl;
     juce::TextEditor valueEntry { "Value entry" };
     juce::Component::SafePointer<juce::Slider> enteringValue;
     juce::Component::SafePointer<juce::Component> focusBeforeEntry;
@@ -2157,9 +2203,10 @@ private:
     {
         if (c != nullptr && (c == &valueEntry || valueEntry.isParentOf (c))) return;
         endValueEntry (true);
-        auto* slider = dynamic_cast<juce::Slider*> (c);
-        if (slider == nullptr && c != nullptr) slider = c->findParentComponentOfClass<juce::Slider>();
-        valueControl = slider;
+        juce::Component* control = nullptr;
+        for (auto* at = c; at != nullptr && at != this && control == nullptr; at = at->getParentComponent())
+            if (dynamic_cast<juce::Slider*> (at) != nullptr || dynamic_cast<ValueField*> (at) != nullptr) control = at;
+        valueControl = control;
     }
     // Whether a component shows in the window: it and everything it sits in, up to this, are visible.
     bool shownHere (const juce::Component* c) const
@@ -2169,9 +2216,12 @@ private:
     }
     bool valueKey (const juce::KeyPress& key)
     {
-        auto* slider = valueControl.getComponent();
+        auto* control = valueControl.getComponent();
         const auto mods = key.getModifiers();
-        if (slider == nullptr || ! slider->isEnabled() || ! shownHere (slider) || mods.isCommandDown() || mods.isCtrlDown() || mods.isAltDown()) return false;
+        if (control == nullptr || ! control->isEnabled() || ! shownHere (control) || mods.isCommandDown() || mods.isCtrlDown() || mods.isAltDown()) return false;
+        if (auto* field = dynamic_cast<ValueField*> (control)) return fieldKey (*field, key);
+        auto* slider = dynamic_cast<juce::Slider*> (control);
+        if (slider == nullptr) return false;
         const auto code = key.getKeyCode();
         if (code == juce::KeyPress::deleteKey || code == juce::KeyPress::backspaceKey)
         {
@@ -2192,6 +2242,26 @@ private:
             return true;
         }
         return false;
+    }
+    // A number field's value keys: Up and Down step the part clicked last (the last part with Shift, for
+    // a fine adjustment), and typing starts editing its text with what is typed.
+    static bool fieldKey (ValueField& field, const juce::KeyPress& key)
+    {
+        if (field.isBeingEdited() || ! field.isEditable()) return false;
+        const auto code = key.getKeyCode();
+        const auto shift = key.getModifiers().isShiftDown();
+        if (code == juce::KeyPress::deleteKey || code == juce::KeyPress::backspaceKey)
+        {
+            if (shift) return false;
+            if (field.onReset != nullptr) field.onReset();
+            return true;
+        }
+        if (code == juce::KeyPress::upKey || code == juce::KeyPress::downKey) { field.step (code == juce::KeyPress::upKey ? 1 : -1, shift); return true; }
+        const auto typed = key.getTextCharacter();
+        if (! (juce::CharacterFunctions::isDigit (typed) || typed == '-' || typed == '.')) return false;
+        field.showEditor();
+        if (auto* editor = field.getCurrentTextEditor()) { editor->setText (juce::String::charToString (typed), false); editor->moveCaretToEnd(); }
+        return true;
     }
     // A value set from the keys as one gesture, so it is one undo step as a drag is.
     static void setValueByKey (juce::Slider& slider, double value)
@@ -6458,9 +6528,13 @@ private:
         explicit LoopBox (Impl& o) : owner (o)
         {
             setName ("Loop box");
-            for (auto [field, name] : { std::pair<juce::Label*, const char*> { &start, "Clip start" }, { &end, "Clip end" }, { &position, "Loop position" }, { &length, "Loop length" } })
+            for (auto [field, name] : { std::pair<ValueField*, const char*> { &start, "Clip start" }, { &end, "Clip end" }, { &position, "Loop position" }, { &length, "Loop length" } })
             {
-                addAndMakeVisible (field); field->setName (name); field->setEditable (true);
+                addAndMakeVisible (field); field->setName (name); field->setEditable (false, true, false);
+                // Dragging a part steps its bars, beats or sixteenths, as the reference's fields drag; each drag is one undo step.
+                field->onDragStart = [this, field] { dragFrom = clip; owner.session.beginEditGesture (field->getName()); };
+                field->onDrag = [this, field] (int part, int steps) { drag (*field, part, steps); };
+                field->onDragEnd = [this] { owner.session.endEditGesture(); owner.refresh(); };
                 field->setJustificationType (juce::Justification::centred);
                 field->setColour (juce::Label::backgroundColourId, themes::colour (0xff1c1c1c));
                 field->setColour (juce::Label::outlineColourId, line);
@@ -6533,8 +6607,8 @@ private:
         }
     private:
         Impl& owner;
-        Session::ClipInfo clip;
-        juce::Label start, end, position, length;
+        Session::ClipInfo clip, dragFrom;
+        ValueField start, end, position, length;
         juce::TextButton loop { "Loop" };
         std::array<juce::TextButton, 4> set { juce::TextButton ("Set"), juce::TextButton ("Set"), juce::TextButton ("Set"), juce::TextButton ("Set") };
         void edit (juce::Label& field)
@@ -6542,20 +6616,36 @@ private:
             const auto& meter = owner.state.timeSignature;
             const auto value = readBarsBeats (field.getText(), meter, &field != &length);
             if (! value) { owner.report (juce::Result::fail ("Enter beats as bar.beat.sixteenth.")); setClip (clip); return; }
+            apply (field, *value);
+        }
+        void apply (juce::Label& field, double value)
+        {
             auto next = clip.loop;
             auto from = clip.contentStartBeat;
-            if (&field == &start) from = *value;
+            if (&field == &start) from = value;
             else if (&field == &end)
             {
-                owner.report (owner.session.setClipBeats (clip.id, clip.startBeat, *value - clip.contentStartBeat, clip.contentStartBeat)); owner.refresh(); return;
+                owner.report (owner.session.setClipBeats (clip.id, clip.startBeat, value - clip.contentStartBeat, clip.contentStartBeat)); owner.refresh(); return;
             }
             else
             {
-                if (&field == &position) next.start = *value; else next.length = *value;
+                if (&field == &position) next.start = value; else next.length = value;
                 // The start stays in the loop.
                 if (from < next.start || from >= next.start + next.length) from = next.start;
             }
             owner.report (owner.session.setClipLoop (clip.id, next, from)); owner.refresh();
+        }
+        // A drag on a field's bars, beats or sixteenths (or the fraction of a sixteenth after them), from
+        // the value it had when the drag began. Values stay at least a 64th of a beat long and after the start.
+        void drag (ValueField& field, int part, int steps)
+        {
+            const auto& meter = owner.state.timeSignature;
+            const auto unit = part == 0 ? meter.numerator * 4.0 / meter.denominator : part == 1 ? 4.0 / meter.denominator : 0.25;
+            const auto moved = steps * unit, shortest = 1.0 / 64;
+            if (&field == &start) apply (field, juce::jmax (0.0, dragFrom.contentStartBeat + moved));
+            else if (&field == &end) apply (field, juce::jmax (clip.contentStartBeat + shortest, dragFrom.contentStartBeat + dragFrom.lengthBeats + moved));
+            else if (&field == &position) apply (field, juce::jmax (0.0, dragFrom.loop.start + moved));
+            else apply (field, juce::jmax (shortest, dragFrom.loop.length + moved));
         }
         void toggle()
         {
@@ -7337,6 +7427,11 @@ private:
                 if (! text.empty() && end == text.c_str() + text.size() && std::isfinite (value)) { auto next = clip.warp; next.bpm = value; apply (next); }
                 else sync();
             };
+            // Dragging its whole beats or hundredths steps them, a tenth as fast with Shift, as the reference's
+            // BPM field drags (its manual, section 9.2.4.1). Each drag is one undo step.
+            bpm.onDragStart = [this] { bpmAtDrag = clip.warp.bpm; owner.session.beginEditGesture ("Clip tempo"); gesture = true; };
+            bpm.onDrag = [this] (int part, int steps) { auto next = clip.warp; next.bpm = juce::jlimit (20.0, 999.0, bpmAtDrag + steps * (part == 0 ? 1.0 : 0.01)); apply (next); };
+            bpm.onDragEnd = [this] { if (gesture) owner.session.endEditGesture(); gesture = false; };
             halve.setTooltip ("Halve the clip tempo (plays twice as long)"); twice.setTooltip ("Double the clip tempo (plays twice as fast)");
             halve.onClick = [this] { auto next = clip.warp; next.bpm /= 2; apply (next); };
             twice.onClick = [this] { auto next = clip.warp; next.bpm *= 2; apply (next); };
@@ -7626,7 +7721,8 @@ private:
         ValueSlider transientEnvelope, grainSize, flux, formants, transpose, detune;
         Session::WarpMode laidOutMode = Session::WarpMode::off;
         bool laidOutFolded = false;
-        juce::Label bpm;
+        ValueField bpm;
+        double bpmAtDrag = 0;
         ValueSlider gain;
         LaunchBox launch { owner };
         LoopBox loopBox { owner };
@@ -10919,7 +11015,12 @@ private:
                      sessionTab { "Session" }, arrangementTab { "Arrange" }, pianoTab { "Clip" }, importButton { "Import Audio" },
                      filesButton { "Files" }, pluginsButton { "Plug-ins" }, folderButton { "Choose Folder..." }, upButton { "Up" }, previewButton { "Preview" },
                      zoomIn { "+" }, zoomOut { "-" }, fitButton { "Fit" }, browseBack { "<" }, browseForward { ">" };
-    juce::Label tempo, positionLabel, projectLabel, loopStartLabel, loopLengthLabel;
+    ValueField tempo, positionLabel, loopStartLabel, loopLengthLabel;
+    juce::Label projectLabel;
+    // Where a number field's drag began: a tempo, a position or length in beats, the loop's length in
+    // seconds, or a time signature.
+    double fieldDragFrom = 0, fieldDragLength = 0;
+    Session::TimeSignature meterDragFrom;
     AutomatedField meterLabel; // Lit while the Arrangement has time signature changes.
     NudgeButton nudgeDown { false }, nudgeUp { true };
     juce::ComboBox quantisation;
@@ -13799,6 +13900,14 @@ private:
         const auto bar = barAt (beats);
         return formatMusicalTime (bar.number * bar.meter.beatsPerBar() + (beats - bar.start), true, bar.meter);
     }
+    // A position some bars, beats or sixteenths on, as dragging a part of it steps it. A bar step keeps
+    // the place within the bar, through meter changes.
+    double steppedPosition (double beats, int part, int steps) const
+    {
+        const auto bar = barAt (beats);
+        if (part == 0) return Session::barStart (state.timeSignatures, juce::jmax (0, bar.number + steps)) + (beats - bar.start);
+        return beats + steps * (part == 1 ? 4.0 / bar.meter.denominator : 0.25);
+    }
     std::optional<double> parsePosition (const juce::String& text) const
     {
         const auto number = juce::StringArray::fromTokens (text.trim(), ".", "")[0].trim();
@@ -13888,9 +13997,11 @@ private:
         if (! meterLabel.isBeingEdited()) meterLabel.setText (juce::String (state.timeSignature.numerator) + " / " + juce::String (state.timeSignature.denominator), juce::dontSendNotification);
         meterLabel.setAutomated (meterLaneShown());
         const auto beatPosition = beatsAt (juce::jmax (0.0, state.position));
-        positionLabel.setText (state.countInBeatsRemaining>0
-            ? "Count in " + juce::String((int)std::ceil(state.countInBeatsRemaining))
-            : formatPosition (beatPosition), juce::dontSendNotification);
+        positionLabel.setEditable (false, state.countInBeatsRemaining <= 0, false);
+        if (! positionLabel.isBeingEdited())
+            positionLabel.setText (state.countInBeatsRemaining>0
+                ? "Count in " + juce::String((int)std::ceil(state.countInBeatsRemaining))
+                : formatPosition (beatPosition), juce::dontSendNotification);
         if (! loopStartLabel.isBeingEdited()) loopStartLabel.setText (formatPosition (beatsAt (state.loopStart)), juce::dontSendNotification);
         if (! loopLengthLabel.isBeingEdited()) loopLengthLabel.setText (formatMusicalTime (beatsAt (state.loopEnd) - beatsAt (state.loopStart), false, barAt (beatsAt (state.loopStart)).meter), juce::dontSendNotification);
         projectLabel.setText (state.name + (state.dirty ? "  *" : ""), juce::dontSendNotification);
@@ -23122,6 +23233,23 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         tempoLabel->setText (juce::String (estimate / 2), juce::sendNotificationSync);
         check (std::abs (state.tracks[0].clips[0].warp.bpm - estimate / 2) < 1e-9 && std::abs (state.tracks[0].clips[0].length - warpedLength / 2) < 1e-6,
                "a slower source tempo makes the warped clip play twice as fast");
+        if (auto* tempoField = dynamic_cast<ValueField*> (tempoLabel))
+        {
+            // Its whole beats drag, one undo step, as the reference's BPM field does.
+            const auto parts = tempoField->partBounds();
+            const auto from = parts.empty() ? juce::Point<float>() : parts.front().getCentre();
+            const auto when = juce::Time::getCurrentTime();
+            const auto at = [&] (float y, bool dragged)
+            { return juce::MouseEvent (juce::Desktop::getInstance().getMainMouseSource(), { from.x, y }, juce::ModifierKeys (juce::ModifierKeys::leftButtonModifier), 1.0f, 0, 0, 0, 0,
+                                       tempoField, tempoField, when, from, when, 1, dragged); };
+            const auto steps = session.undoSteps().size();
+            const auto before = state.tracks[0].clips[0].warp.bpm;
+            tempoField->mouseDown (at (from.y, false)); tempoField->mouseDrag (at (from.y - 2 * ValueField::pixelsPerStep, true)); tempoField->mouseUp (at (from.y - 2 * ValueField::pixelsPerStep, true)); refresh();
+            check (parts.size() == 2 && std::abs (state.tracks[0].clips[0].warp.bpm - (before + 2)) < 1e-9 && session.undoSteps().size() == steps + 1,
+                   "dragging the clip tempo's whole beats up two steps adds 2 BPM, one undo step");
+            session.undo(); refresh();
+            check (std::abs (state.tracks[0].clips[0].warp.bpm - before) < 1e-9, "and undo returns it");
+        }
         clipGain->setValue (-6, juce::sendNotificationSync);
         check (std::abs (state.tracks[0].clips[0].audio.gainDb + 6) < 1e-4, "the clip view gain knob edits clip gain");
         {
@@ -23282,6 +23410,22 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
                    "moving the loop past the start takes the start with it");
             startField->setText ("1.1.1", juce::sendNotificationSync); refresh();
             check (loopClip().contentStartBeat == 1 && startField->getText() == "1.2.1", "a start outside the loop is refused");
+            if (auto* lengthDrag = dynamic_cast<ValueField*> (lengthField))
+            {
+                // Dragging the Length field's beats up steps them, one undo step, as the reference's fields drag.
+                const auto parts = lengthDrag->partBounds();
+                const auto when = juce::Time::getCurrentTime();
+                const auto from = parts.size() == 3 ? parts[1].getCentre() : juce::Point<float>();
+                const auto at = [&] (float y, bool dragged)
+                { return juce::MouseEvent (juce::Desktop::getInstance().getMainMouseSource(), { from.x, y }, juce::ModifierKeys (juce::ModifierKeys::leftButtonModifier), 1.0f, 0, 0, 0, 0,
+                                           lengthDrag, lengthDrag, when, from, when, 1, dragged); };
+                const auto steps = session.undoSteps().size();
+                lengthDrag->mouseDown (at (from.y, false)); lengthDrag->mouseDrag (at (from.y - 3 * ValueField::pixelsPerStep, true)); lengthDrag->mouseUp (at (from.y - 3 * ValueField::pixelsPerStep, true)); refresh();
+                check (parts.size() == 3 && loopClip().loop == Session::ClipLoop { true, 1, 5 } && lengthField->getText() == "1.1.0" && session.undoSteps().size() == steps + 1,
+                       "dragging the Length field's beats up three steps lengthens the loop by three beats, one undo step");
+                session.undo(); refresh();
+                check (loopClip().loop == Session::ClipLoop { true, 1, 2 }, "and undo shortens it again");
+            }
             {
                 // In the note editor's ruler, the loop brace and the start marker drag on the note grid.
                 pianoRoll.fit();
@@ -24242,6 +24386,66 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
     {
         tempo.setText(invalid,juce::sendNotificationSync);
         check(state.tempo==120&&tempo.getText()=="120.00"&&session.canRedo(),"invalid tempo text restores display without discarding redo");
+    }
+    {
+        // The tempo, time signature and loop fields drag by their parts, as the reference's do (see ValueField).
+        const auto stepsBefore = session.undoSteps().size();
+        const auto when = juce::Time::getCurrentTime();
+        const auto dragField = [&] (ValueField& field, int part, float up, bool shift)
+        {
+            const auto parts = field.partBounds();
+            const auto from = juce::isPositiveAndBelow (part, (int) parts.size()) ? parts[(size_t) part].getCentre() : juce::Point<float>();
+            const juce::ModifierKeys mods (juce::ModifierKeys::leftButtonModifier | (shift ? juce::ModifierKeys::shiftModifier : 0));
+            const auto at = [&] (float y, bool dragged)
+            { return juce::MouseEvent (juce::Desktop::getInstance().getMainMouseSource(), { from.x, y }, mods, 1.0f, 0, 0, 0, 0, &field, &field, when, from, when, 1, dragged); };
+            headerFocusWatcher.mouseDown (at (from.y, false));
+            field.mouseDown (at (from.y, false)); field.mouseDrag (at (from.y - up, true)); field.mouseUp (at (from.y - up, true)); refresh();
+        };
+        const auto press = [&] (const juce::KeyPress& key) { const bool handled = handleKey (key); refresh(); return handled; };
+        const auto px = ValueField::pixelsPerStep;
+        check (tempo.partBounds().size() == 2 && loopStartLabel.partBounds().size() == 3 && meterLabel.partBounds().size() == 2,
+               "the tempo field has its whole beats and hundredths, the loop start its bars, beats and sixteenths, and the signature its two numbers");
+        dragField (tempo, 0, 2 * px, false);
+        check (state.tempo == 122 && session.undoSteps().size() == stepsBefore + 1 && ! tempo.isBeingEdited(),
+               "dragging the tempo's whole beats up two steps adds 2 BPM, one undo step, without editing the text");
+        dragField (tempo, 1, 5 * px, false);
+        check (std::abs (state.tempo - 122.05) < 1e-9, "dragging its hundredths up five steps adds 0.05 BPM");
+        dragField (tempo, 0, 10 * px, true);
+        check (std::abs (state.tempo - 123.05) < 1e-9, "with Shift a drag steps a tenth as fast");
+        check (valueControl == &tempo && press (juce::KeyPress (juce::KeyPress::downKey)) && std::abs (state.tempo - 122.05) < 1e-9,
+               "after the click, Down steps the part clicked, the whole beats");
+        check (press (juce::KeyPress (juce::KeyPress::upKey, juce::ModifierKeys::shiftModifier, 0)) && std::abs (state.tempo - 122.06) < 1e-9,
+               "and Shift+Up the hundredths, a fine adjustment");
+        check (press (juce::KeyPress ('9', juce::ModifierKeys(), '9')) && tempo.isBeingEdited() && tempo.getCurrentTextEditor() != nullptr && tempo.getCurrentTextEditor()->getText() == "9",
+               "typing a digit edits the field, starting with what is typed");
+        if (auto* typing = tempo.getCurrentTextEditor()) typing->setText ("96", false);
+        tempo.hideEditor (false); refresh();
+        check (state.tempo == 96 && tempo.getText() == "96.00", "and confirming sets the tempo typed");
+        session.setLoop (false, 0, secondsAt (16)); refresh();
+        dragField (loopStartLabel, 1, 2 * px, false);
+        check (std::abs (beatsAt (state.loopStart) - 2) < 1e-6 && std::abs (beatsAt (state.loopEnd) - 18) < 1e-6 && loopStartLabel.getText() == "1. 3. 1",
+               "dragging the loop start's beats up two steps moves the loop two beats later, keeping its length");
+        dragField (loopLengthLabel, 0, px, false);
+        check (std::abs (beatsAt (state.loopEnd) - beatsAt (state.loopStart) - 20) < 1e-6, "and dragging the loop length's bars up a step adds a bar");
+        session.setInsertMarker (0); refresh();
+        dragField (positionLabel, 0, 2 * px, false);
+        check (std::abs (beatsAt (state.position) - 8) < 1e-6 && positionLabel.getText() == "3. 1. 1",
+               "dragging the song position's bars up two steps moves the insert marker to bar 3, as the reference's Arrangement Position does");
+        check (press (juce::KeyPress (juce::KeyPress::upKey)) && std::abs (beatsAt (state.position) - 12) < 1e-6, "and Up a bar further");
+        check (press (juce::KeyPress ('2', juce::ModifierKeys(), '2')) && positionLabel.isBeingEdited(), "typing starts a position");
+        if (auto* typing = positionLabel.getCurrentTextEditor()) typing->setText ("2.2.1", false);
+        positionLabel.hideEditor (false); refresh();
+        check (std::abs (beatsAt (state.position) - 5) < 1e-6 && positionLabel.getText() == "2. 2. 1", "and confirming moves the insert marker to 2.2.1");
+        session.setInsertMarker (0); refresh();
+        dragField (meterLabel, 0, px, false);
+        check (state.timeSignature == Session::TimeSignature { 5, 4 }, "dragging the signature's numerator up a step makes it 5/4");
+        dragField (meterLabel, 1, px, false);
+        check (state.timeSignature == Session::TimeSignature { 5, 8 }, "and its denominator up a step makes it 5/8");
+        check (press (juce::KeyPress (juce::KeyPress::upKey, juce::ModifierKeys::shiftModifier, 0)) && state.timeSignature == Session::TimeSignature { 5, 16 },
+               "Shift+Up steps the part clicked, as the signature's numbers do not run from coarse to fine");
+        while (session.undoSteps().size() > stepsBefore) session.undo();
+        refresh(); valueClicked (nullptr);
+        check (state.tempo == 120 && state.timeSignature == Session::TimeSignature { 4, 4 }, "undo returns the tempo and signature");
     }
     auto* master=dynamic_cast<juce::Slider*>(findNamed(*this,"Main volume"));
     check(master&&master->isVisible(),"master strip exposes a real output fader");

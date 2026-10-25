@@ -1,6 +1,6 @@
 # Value controls contract
 
-Halftrack's knobs and faders take the reference's value gestures: a finer drag with Shift, and keys for the control clicked last.
+Halftrack's knobs, faders and number fields take the reference's value gestures: a finer drag with Shift, number fields dragged by their parts, and keys for the control clicked last.
 
 ## Evidence
 
@@ -16,6 +16,15 @@ Halftrack's knobs and faders take the reference's value gestures: a finer drag w
 ## Halftrack
 
 - **Fine drag.** While Shift is held, every knob and fader (`ValueSlider`, `src/ValueControls.h`) moves at a tenth of its usual rate, whatever its style. A fader that jumps to the click still jumps there, and then moves finely.
+- **Number fields** (`ValueField`) drag by their parts, the runs of digits in their text, as the reference's fields do: 3 pixels up or down a step, a tenth as fast with Shift. Each drag is one undo step.
+  - The Control Bar's tempo steps its whole beats or hundredths, from 20 to 999 BPM.
+  - Its time signature steps its numerator (1 to 99) or its denominator (1, 2, 4, 8 or 16).
+  - Its loop start steps bars, beats or sixteenths, keeping the loop's length; a bar keeps the place within the bar through meter changes.
+  - Its loop length steps bars, beats or sixteenths, at least a sixteenth.
+  - Its song position steps bars, beats or sixteenths and moves the insert marker, as do the arrow keys and a typed position, as the reference's Arrangement Position fields do (manual section 6.3: drag up or down, type a number and press Enter, or use the up and down arrow keys; adjusting them moves the insert marker). While playing, playback goes on and the insert marker moves. Neither is an undo step. During a count-in the field shows the count and does not drag.
+  - The clip's Start, End, Loop Position and Loop Length step bars, beats or sixteenths. End stays after the start, and a length at least a 64th of a beat.
+  - An audio clip's tempo steps its whole beats or hundredths, from 20 to 999 BPM, a tenth as fast with Shift, as the manual describes its BPM field (section 9.2.4.1: type the BPM, or "hold Shift while dragging" for fine increments).
+  - A click without a drag selects the field, a double-click edits its text, and an uneditable field (the tempo while it is automated) does not drag. The clip's fields, edited before on a single click, now take a double-click, as the Control Bar's do.
 - **The control clicked last** takes the value keys until a click elsewhere in the window (`MainComponent`'s `valueKey`):
   - **Up and Down** step it.
     - A value in semitones moves a semitone, or an octave with Shift: the clip's Transpose, a Drum Rack pad's tune, and device controls in semitones.
@@ -23,9 +32,10 @@ Halftrack's knobs and faders take the reference's value gestures: a finer drag w
     - Any other value moves a hundredth of its travel, or a thousandth with Shift, and at least one step.
   - **Delete or Backspace** returns it to its default. A track's mixer controls reset as double-clicking them does, with the controls linked to them (`Session::resetTrackControl`).
   - **Typing** a digit, a minus sign or a point opens a field over the control showing what is typed. Return, or a click elsewhere, sets the value, read as the control reads its own text box. Escape leaves it.
+  - **On a number field**, Up and Down step the part clicked; with Shift, the last part, for a fine adjustment, except the time signature's, whose numbers do not run from coarse to fine. Typing starts editing its text with what is typed, which Return sets and Escape leaves.
   - Each change from the keys is one undo step, as a drag is.
   - Keys with Cmd, Ctrl or Option, and any other key, go on to the window.
-- **Missing.** The number fields (the Control Bar's tempo, signature and loop, and the clip's positions) are still text fields that neither drag nor take the value keys. Neither do "." and "," move between a position's fields. Halftrack draws no mark on the control clicked last.
+- **Missing.** The scenes' tempo and signature are not number fields yet. Neither do "." and "," move between a position's fields while typing. Halftrack draws no mark on the control clicked last.
 
 ## Evidence in Halftrack
 
@@ -37,4 +47,12 @@ The UI suite checks:
 - that Up raises the volume fader a hundredth of its travel, and Shift+Up by a finer step;
 - that typing a minus sign opens the field, and Return sets the -12 dB typed in one undo step;
 - that Escape leaves the value, and a click elsewhere sets what was typed and ends the value keys, so Up no longer moves the fader;
-- that after a click on the clip's Transpose knob, Up steps it a semitone and Shift+Up an octave.
+- that after a click on the clip's Transpose knob, Up steps it a semitone and Shift+Up an octave;
+- that the tempo field has two parts, the loop start three and the signature two;
+- that dragging the tempo's whole beats up two steps adds 2 BPM in one undo step without editing its text, its hundredths add 0.05 BPM in five steps, and Shift steps a tenth as fast;
+- that after the click Down steps the whole beats, Shift+Up the hundredths, and typing a digit edits the field, whose confirmed text sets the tempo;
+- that dragging the loop start's beats moves the loop two beats later keeping its length, and the length's bars add a bar;
+- that dragging the song position's bars up two steps moves the insert marker to bar 3, Up a bar further, and a typed 2.2.1 moves it there;
+- that dragging the signature's numerator and denominator up makes 5/4 and then 5/8, and Shift+Up steps the denominator clicked;
+- that dragging the clip's Length field's beats up three steps lengthens its loop three beats in one undo step;
+- that dragging an audio clip's tempo's whole beats up two steps adds 2 BPM in one undo step.

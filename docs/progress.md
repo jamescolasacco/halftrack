@@ -2761,3 +2761,7 @@ Engine and UI areas. The Record page's Launch section gains the reference's Sele
 ## Value controls — 2026-10-24
 
 UI and root areas. Every knob and fader is now a `ValueSlider` (`src/ValueControls.h`) and takes the reference's value gestures (manual section 42.6): with Shift a drag moves at a tenth of its rate, and the control clicked last takes the value keys until a click elsewhere. Up and Down step it, by the octave with Shift for values in semitones. Delete returns it to its default, and a track's mixer controls reset with the controls linked to them, as double-clicking them does. Typing a value opens a field over it, which Return sets and Escape leaves. Each change from the keys is one undo step ([contract](research/value-controls-contract.md)). Checked in the UI suite. The number fields are still edited as text.
+
+## Number fields — 2026-10-25
+
+UI area. The Control Bar's tempo, time signature, song position, loop start and loop length, and the clip's Start, End, Loop Position, Loop Length and audio tempo, are now `ValueField`s that drag by their parts as the reference's fields do: a tempo's whole beats or hundredths, a signature's numbers, and a position's bars, beats or sixteenths, a tenth as fast with Shift, each drag one undo step; the song position moves the insert marker, as the reference's Arrangement Position does. The field clicked last takes the arrow keys (Shift steps the last part) and typing ([contract](research/value-controls-contract.md)). Checked in the UI suite.
