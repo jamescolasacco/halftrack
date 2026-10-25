@@ -152,5 +152,4 @@ The UI suite drags along a group's lane and checks the group selected and the ti
 - Dragging the clip bar with Shift to stretch a warped clip (section 42.16).
 - Selecting time on the ruler.
 - Pasting automation onto controls the destination lacks: such shapes are skipped.
-- Crop.
 - Any comparison with reference output.
