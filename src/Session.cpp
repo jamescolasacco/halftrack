@@ -333,6 +333,7 @@ Session::PluginInfo describeDevice (NativeEffectPlugin& native)
 {
     Session::PluginInfo info { native.itemID.toString(), native.getName(), native.isEnabled() };
     info.isNativeEffect = true; info.effect = native.readSettings(); info.automation = deviceAutomation (native);
+    info.compareB = static_cast<bool> (native.state.getProperty (compareBProperty, false));
     if (native.getKind() == Session::EffectKind::sampler) info.sample = native.sampleFile();
     if (native.getKind() == Session::EffectKind::drumSampler)
         for (int pad = 0; pad < Session::drumPadCount; ++pad) info.padSamples.push_back (native.sampleFile (pad));
@@ -16135,6 +16136,58 @@ Result Session::setNativeEffectSettings (const String& id, const EffectSettings&
     for (size_t i = 0; i < controls; ++i)
         if (previous.values[i] != settings.values[i]) impl->overrideLane (Impl::deviceKey (id, (int) i));
     effect->writeSettings (settings); impl->changed(); return Result::ok();
+}
+// The device's state not shown: its stored values, or a copy of the shown ones before any switch.
+static Session::EffectSettings otherCompareState (const NativeEffectPlugin& device, const Session::EffectSettings& shown)
+{
+    auto other = shown;
+    const auto stored = device.state.getChildWithName (compareStateType);
+    const auto fields = effectParameters (shown.kind);
+    if (stored.isValid()) for (size_t i = 0; i < fields.size(); ++i) other.values[i] = static_cast<float> (static_cast<double> (stored.getProperty (fields[i].key, shown.values[i])));
+    return validEffectSettings (other) ? other : shown;
+}
+static juce::ValueTree compareState (const Session::EffectSettings& settings)
+{
+    juce::ValueTree tree (compareStateType);
+    const auto fields = effectParameters (settings.kind);
+    for (size_t i = 0; i < fields.size(); ++i) tree.setProperty (fields[i].key, settings.values[i], nullptr);
+    return tree;
+}
+Result Session::switchDeviceCompareState (const String& id)
+{
+    te::Track* owner = nullptr;
+    auto* device = impl->nativeDevice (id, &owner);
+    if (device == nullptr) return Result::fail ("Native device not found.");
+    if (auto frozen = impl->unfrozen (owner); frozen.failed()) return frozen;
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    const auto shown = device->readSettings();
+    const auto other = otherCompareState (*device, shown);
+    const bool toB = ! static_cast<bool> (device->state.getProperty (compareBProperty, false));
+    beginEditGesture (toB ? "Compare: Switch to B" : "Compare: Switch to A");
+    auto* undo = &impl->edit->getUndoManager();
+    if (const auto stored = device->state.getChildWithName (compareStateType); stored.isValid()) device->state.removeChild (stored, undo);
+    device->state.appendChild (compareState (shown), undo);
+    if (toB) device->state.setProperty (compareBProperty, true, undo); else device->state.removeProperty (compareBProperty, undo);
+    auto result = setNativeEffectSettings (id, other);
+    if (result.wasOk() && other.values == shown.values) impl->changed();
+    endEditGesture();
+    return result;
+}
+Result Session::copyDeviceCompareState (const String& id)
+{
+    te::Track* owner = nullptr;
+    auto* device = impl->nativeDevice (id, &owner);
+    if (device == nullptr) return Result::fail ("Native device not found.");
+    if (auto frozen = impl->unfrozen (owner); frozen.failed()) return frozen;
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    const auto shown = device->readSettings();
+    const bool b = static_cast<bool> (device->state.getProperty (compareBProperty, false));
+    if (otherCompareState (*device, shown).values == shown.values && device->state.getChildWithName (compareStateType).isValid()) return Result::ok();
+    impl->transaction (b ? "Compare: Copy B to A" : "Compare: Copy A to B");
+    auto* undo = &impl->edit->getUndoManager();
+    if (const auto stored = device->state.getChildWithName (compareStateType); stored.isValid()) device->state.removeChild (stored, undo);
+    device->state.appendChild (compareState (shown), undo);
+    impl->changed(); return Result::ok();
 }
 Result Session::addUtility (int index)
 {

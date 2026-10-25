@@ -40,6 +40,9 @@ double effectLatencySeconds (Session::EffectKind, double sampleRate) noexcept;
 int effectParameterIndex (Session::EffectKind, const char* key) noexcept;
 // A Sampler's sample path: absolute in a live edit, project-relative in a saved file.
 inline constexpr const char* samplerSampleProperty = "halftrackSample";
+// A device's A/B comparison (see Session::switchDeviceCompareState): whether B is shown, and a child holding
+// the state not shown, its controls by key.
+inline const juce::Identifier compareBProperty { "halftrackCompareB" }, compareStateType { "HALFTRACKCOMPARESTATE" };
 // A Drum Sampler pad's sample path, pads numbered from zero.
 inline juce::Identifier drumPadSampleProperty (int pad) { return juce::Identifier ("halftrackPad" + juce::String (pad + 1)); }
 // Sample slots an instrument kind holds: one for the Sampler, one per pad for the Drum Sampler.

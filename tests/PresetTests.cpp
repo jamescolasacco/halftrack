@@ -131,6 +131,55 @@ int runPresetTests (const juce::File& artifacts)
             check (s.hotSwapDevice ("missing", arpId, chord, swapped).failed() && s.hotSwapDevice (leadId, "missing", chord, swapped).failed(), "unknown chains and devices are refused");
         }
 
+        // Device A/B comparison, as the reference's (its manual, section 23.2.2): two states of a built-in device's
+        // controls, B starting as a copy of A; switching and copying are each one undo step.
+        {
+            ok (s.addNativeEffect (second, Kind::saturator), "a Saturator to compare");
+            const auto id = last (s, second).id;
+            const auto drive = (size_t) effectParameterIndex (Kind::saturator, "driveDb");
+            const auto driveOf = [&] { return last (s, second).effect.values[drive]; };
+            auto a = last (s, second).effect; a.values[drive] = 6; ok (s.setNativeEffectSettings (id, a), "A drives 6 dB");
+            check (! last (s, second).compareB && s.switchDeviceCompareState ("missing").failed() && s.copyDeviceCompareState ("missing").failed(),
+                   "a device shows A at first, and unknown devices are refused");
+            ok (s.switchDeviceCompareState (id), "switch to B");
+            check (last (s, second).compareB && driveOf() == 6 && s.undoDescription() == "Compare: Switch to B", "B starts as a copy of A, one undo step");
+            auto b = a; b.values[drive] = 18; ok (s.setNativeEffectSettings (id, b), "B drives 18 dB");
+            ok (s.switchDeviceCompareState (id), "switch back to A");
+            check (! last (s, second).compareB && driveOf() == 6 && s.undoDescription() == "Compare: Switch to A", "A keeps its 6 dB");
+            ok (s.switchDeviceCompareState (id), "and to B again");
+            check (last (s, second).compareB && driveOf() == 18, "B keeps its 18 dB");
+            s.undo(); check (! last (s, second).compareB && driveOf() == 6, "one undo returns to A");
+            s.redo();
+            ok (s.copyDeviceCompareState (id), "copy B to A");
+            check (s.undoDescription() == "Compare: Copy B to A", "as one step");
+            ok (s.switchDeviceCompareState (id), "switch to A");
+            check (! last (s, second).compareB && driveOf() == 18, "A now has B's 18 dB");
+            // An automated control's lane is overridden by a switch, as by a change by hand.
+            ok (s.copyDeviceCompareState (id), "copy A to B");
+            b.values[drive] = 3; ok (s.switchDeviceCompareState (id), "to B"); ok (s.setNativeEffectSettings (id, b), "B drives 3 dB");
+            Session::AutomationLane lane; lane.points = { { 0, 0 }, { 4, 12 } };
+            ok (s.setDeviceAutomation (id, (int) drive, lane), "automate the drive");
+            ok (s.switchDeviceCompareState (id), "switch to A with the drive automated");
+            check (! last (s, second).automation.empty() && ! last (s, second).automation[0].lane.enabled && s.snapshot().automationOverridden,
+                   "switching overrides the automated drive's lane until Re-Enable Automation");
+            // Both states reopen with the project; a damaged comparison is refused.
+            const auto project = root.getChildFile ("Compare").getChildFile ("Compare.halftrack");
+            ok (project.getParentDirectory().createDirectory(), "a folder for the project");
+            ok (s.saveProject (project), "save"); ok (s.loadProject (project), "reopen");
+            check (! last (s, second).compareB && driveOf() == 18, "A reopens shown");
+            ok (s.switchDeviceCompareState (id), "switch to B after reopening");
+            check (last (s, second).compareB && driveOf() == 3, "and B kept its 3 dB");
+            auto xml = juce::XmlDocument::parse (project);
+            juce::XmlElement* stored = nullptr;
+            std::function<void (juce::XmlElement&)> find = [&] (juce::XmlElement& e) { if (e.hasTagName ("HALFTRACKCOMPARESTATE")) stored = &e; for (auto* c : e.getChildIterator()) find (*c); };
+            if (xml != nullptr) find (*xml);
+            check (stored != nullptr && stored->hasAttribute ("driveDb"), "the project keeps the state not shown");
+            stored->setAttribute ("driveDb", 900.0);
+            const auto broken = root.getChildFile ("Compare broken.halftrack");
+            check (xml->writeTo (broken), "write a comparison out of range");
+            check (s.loadProject (broken).failed() && last (s, second).compareB, "it is refused, keeping the open project");
+        }
+
         // Damaged presets.
         const auto corrupt = [&] (const juce::String& name, const std::function<void (juce::XmlElement&)>& change)
         {

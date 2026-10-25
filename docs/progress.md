@@ -2845,3 +2845,7 @@ UI area. As the reference's key list and manual describe, a Cmd-drag up or down 
 ## Draw Mode with Pitch Lock — 2026-10-25
 
 UI area. The Display & Input page has the reference's Draw Mode with Pitch Lock preference (off, as its song preference data has it): on, Draw Mode draws at one pitch and Alt melodically ([preferences contract](research/preferences-contract.md)). Checked by the preferences and UI suites.
+
+## Device A/B comparison — 2026-10-25
+
+Engine and UI areas. Built-in devices keep two states, A and B, as the reference's manual describes: P or the title menu's Compare: Switch to B shows the other state (overriding automated controls, as a change by hand would), Compare: Copy A to B copies the shown state to the other, and "(B)" follows the name while B shows. Each is one undo step, and both states are saved and validated on load ([native effects contract](research/native-effects-contract.md#device-ab-comparison-2026-10-25)). Checked by the presets and UI suites.

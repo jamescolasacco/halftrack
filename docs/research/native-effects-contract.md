@@ -399,3 +399,14 @@ Halftrack's model:
 
 The Hi-Quality mode and measured comparison with the reference are missing.
 
+## Device A/B comparison (2026-10-25)
+
+The reference's manual ([Working with Instruments and Effects](https://www.ableton.com/en/live-manual/12/working-with-instruments-and-effects/), section 23.2.2, consulted 2026-10-25): every built-in device has two device states, A and B, holding separate parameter values. Compare: Copy A to B copies (from the Edit menu, the device's context menu or its options), and Compare: Switch to B, or P, switches; "(B)" follows the device's name in its title bar while B shows. Automation belongs to each state, so switching disables it until Re-Enable Automation. Copying a device copies only the shown state's values, and a preset saves the shown state's values for both.
+
+Halftrack:
+
+- **The model.** `Session::switchDeviceCompareState` shows a built-in device's other state: the shown values are kept as the state not shown and the other values take the controls' places through `setNativeEffectSettings`, so an automated control's lane is overridden as by a change by hand. B starts as a copy of A. `copyDeviceCompareState` gives the shown state's values to the other (Copy A to B, or Copy B to A while B shows). Each is one undo step. The device's state keeps `halftrackCompareB` while B shows and a `HALFTRACKCOMPARESTATE` child holding the state not shown, saved with the project; a comparison with a value outside its control's range, or a shown state other than 0 or 1, is refused before the project replaces the open one. `PluginInfo::compareB` reports it.
+- **The interface.** A built-in device's title menu has Compare: Switch to B (or to A) and Compare: Copy A to B (or B to A), P switches the selected device, and "(B)" follows its name while B shows. Presets save the shown values, so a loaded preset starts with A and B alike.
+- **Not followed.** The Edit menu's Compare commands, a device's options toggle, the Utility and racks' own comparison, and copied devices keeping only the shown state (Halftrack's copies keep both) are missing.
+
+`tests/PresetTests.cpp` switches a Saturator to B (a copy of A), changes B's drive, switches back and forth keeping each state's drive, undoes a switch in one step, copies B to A, and finds a switch overriding the automated drive's lane. Both states reopen with the project, and a comparison out of range is refused, keeping the open project. The UI suite switches the selected Saturator with P and back.

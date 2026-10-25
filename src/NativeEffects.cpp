@@ -1110,6 +1110,18 @@ juce::Result NativeEffectPlugin::validateState (const juce::ValueTree& tree)
             if (! parse (f.key, f.initial, v) || v < f.minimum || v > f.maximum || ((f.choices || f.integer) && std::floor (v) != v))
                 return juce::Result::fail ("The project contains invalid native effect settings.");
         }
+        // A/B comparison: B shown or not, and the state not shown within its controls' ranges.
+        if (tree.hasProperty (compareBProperty) && tree[compareBProperty].toString().trim() != "0" && tree[compareBProperty].toString().trim() != "1")
+            return juce::Result::fail ("The project contains an invalid device comparison.");
+        if (const auto other = tree.getChildWithName (compareStateType); other.isValid())
+            for (const auto& f : effectParameters (static_cast<Kind> (static_cast<int> (type))))
+            {
+                if (! other.hasProperty (f.key)) continue;
+                const auto text = other[f.key].toString().trim().toStdString(); char* end = nullptr;
+                const auto v = std::strtod (text.c_str(), &end);
+                if (text.empty() || end != text.c_str() + text.size() || ! std::isfinite (v) || v < f.minimum || v > f.maximum || ((f.choices || f.integer) && std::floor (v) != v))
+                    return juce::Result::fail ("The project contains an invalid device comparison.");
+            }
         // Control automation: a known control, at most 4096 ordered points of knob positions.
         for (const auto& curve : tree)
         {

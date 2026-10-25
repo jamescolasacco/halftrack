@@ -502,6 +502,7 @@ public:
         SidechainSettings sidechain;
         // Racks: chains in order, a Drum Rack's return chains and the macro mappings.
         bool isRack = false;
+        bool compareB = false; // A built-in device showing its B state (see switchDeviceCompareState).
         int visibleMacros = 8;
         std::array<juce::String, rackMacroCount> macroNames; // Names given to macros; empty for automatic names.
         std::vector<RackChainInfo> chains, returns;
@@ -1860,6 +1861,13 @@ public:
     std::optional<juce::PluginDescription> pluginDescription (const juce::String& pluginId) const;
     // Devices inside racks share these commands and setDeviceAutomation with track devices.
     juce::Result setNativeEffectSettings (const juce::String& pluginId, const EffectSettings&);
+    // Device A/B comparison, as the reference's (its manual, section 23.2.2): a built-in device keeps two
+    // states of its controls, A and B, B starting as a copy of A. Switching shows the other state, its
+    // values taking the controls' places as a change by hand would (an automated control's lane is
+    // overridden until Re-Enable Automation); copying gives the shown state's values to the other. Each
+    // is one undo step. Presets and saved projects carry the shown state's values as the controls'.
+    juce::Result switchDeviceCompareState (const juce::String& deviceId);
+    juce::Result copyDeviceCompareState (const juce::String& deviceId);
     // Racks: each command is one undo step and validates everything before changing the project.
     juce::Result addRackChain (const juce::String& rackId, const juce::String& name, juce::String& chainId, int index = -1);
     juce::Result removeRackChain (const juce::String& chainId);

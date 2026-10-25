@@ -11399,7 +11399,7 @@ private:
         int preferredWidth() const { return native && body ? body->getWidth() + 2 : controls != nullptr && ! missing ? controls->preferredWidth() + 2 : 184; }
         void sync (const Session::PluginInfo& info)
         {
-            name = info.name; enabled = info.enabled; chains = (int) info.chains.size();
+            name = info.name; enabled = info.enabled; chains = (int) info.chains.size(); compareB = info.isNativeEffect && info.compareB;
             midi = info.isNativeEffect && effectIsMidi (info.effect.kind);
             missing = info.missing; loadError = info.loadError;
             power.setToggleState (info.enabled, juce::dontSendNotification);
@@ -11422,7 +11422,8 @@ private:
             g.fillAll (themes::colour (0xff303030));
             g.setColour (selected ? themes::colour (0xff5e5e5e) : enabled ? themes::colour (0xff4a4a4a) : themes::colour (0xff383838)); g.fillRect (0, 0, getWidth(), titleHeight);
             g.setColour (enabled ? ink : muted); g.setFont (font (11.0f, true));
-            g.drawText (name, 24, 0, getWidth() - 92, titleHeight, juce::Justification::centredLeft, true);
+            // "(B)" follows the name while the B state shows, as the reference's title bar has it (its manual, section 23.2.2).
+            g.drawText (compareB ? name + " (B)" : name, 24, 0, getWidth() - 92, titleHeight, juce::Justification::centredLeft, true);
             if (! native && missing)
             {
                 g.setColour (red); g.setFont (font (10.5f, true));
@@ -11456,6 +11457,14 @@ private:
             menu.addItem (5, "Group", native && trackChain); if (rack) menu.addItem (6, "Ungroup", chains <= 1 && trackChain);
             const auto& info = (*devices)[(size_t) p];
             menu.addItem (7, "Save Preset...", trackChain && owner.userLibrary != juce::File() && (info.isNativeEffect || info.isUtility || ! info.missing));
+            // Device A/B comparison, as the reference's (its manual, section 23.2.2).
+            if (info.isNativeEffect)
+            {
+                menu.addSeparator();
+                menu.addItem (8, info.compareB ? "Compare: Switch to A" : "Compare: Switch to B");
+                menu.addItem (9, info.compareB ? "Compare: Copy B to A" : "Compare: Copy A to B");
+                menu.addSeparator();
+            }
             menu.addItem (4, "Delete");
             const auto chainId = owner.deviceChainId(), id = pluginId;
             juce::Component::SafePointer<Impl> safe (&owner);
@@ -11477,6 +11486,8 @@ private:
                             safe->savePresetDialog (id, device.isUtility ? juce::String ("Utility") : device.isNativeEffect ? juce::String (effectName (device.effect.kind)) : device.name);
                             return;
                         }
+                        else if (choice == 8) safe->report (safe->session.switchDeviceCompareState (id));
+                        else if (choice == 9) safe->report (safe->session.copyDeviceCompareState (id));
                         else safe->report (safe->session.removePlugin (chainId, p));
                         safe->refresh(); return;
                     }
@@ -11492,7 +11503,7 @@ private:
         }
         Impl& owner;
         juce::String pluginId, name, loadError;
-        bool native = false, enabled = true, midi = false, rack = false, missing = false;
+        bool native = false, enabled = true, midi = false, rack = false, missing = false, compareB = false;
         int chains = 0;
         juce::TextButton power { "" }, open { "^" }, remove { "x" };
         HotSwapButton swap;
@@ -17988,6 +17999,13 @@ private:
         const auto code = key.getKeyCode(); const auto mods = key.getModifiers();
         if (mods.isCommandDown() && (code == 'G' || code == 'g')) { if (mods.isShiftDown()) ungroupSelectedRack(); else groupSelectedDevices(); return true; }
         if (! mods.isCommandDown() && (code == juce::KeyPress::deleteKey || code == juce::KeyPress::backspaceKey)) { deleteSelectedDevices(); return true; }
+        // P switches the selected built-in device between its A and B states, as the reference's key does (its manual, section 23.2.2).
+        if (! mods.isAnyModifierKeyDown() && (code == 'P' || code == 'p') && selectedDevices.size() == 1)
+        {
+            if (const auto* devices = chainDevices())
+                for (const auto& device : *devices)
+                    if (device.id == selectedDevices[0] && device.isNativeEffect) { report (session.switchDeviceCompareState (device.id)); refresh(); return true; }
+        }
         return false;
     }
     void addPluginMenu()
@@ -23315,6 +23333,13 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         check (hotSwapping (devices()[0].id), "the button links its device");
         hotSwapClose.onClick();
         check (! hotSwap, "and the bar's X ends it");
+        {
+            // P switches the selected built-in device between its A and B states (its manual, section 23.2.2).
+            selectedDevices.clear(); selectDevice (devices()[0].id, {});
+            check (deviceKey (juce::KeyPress ('p')) && devices()[0].compareB, "P shows the selected Saturator's B state");
+            check (deviceKey (juce::KeyPress ('p')) && ! devices()[0].compareB, "and P again its A state");
+            session.undo(); session.undo(); refresh();
+        }
         check (session.addMidiTrack ("Swap Keys").wasOk(), "a MIDI track"); refresh();
         selectTrack ((int) state.tracks.size() - 1); selectedDevices.clear(); refresh();
         check (handleKey (juce::KeyPress ('q', {}, 'q')) && hotSwap && hotSwap->pluginId == currentTrack()->instrument.id && browserCategory == BrowserCategory::instruments,
