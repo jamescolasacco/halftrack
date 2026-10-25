@@ -2865,3 +2865,7 @@ UI area. The File menu has the reference's Collect All and Save after Save a Cop
 ## Probability groups in the editor — 2026-10-25
 
 UI area. Pointing at a grouped note now outlines its group's notes, and the Chance lane shows one marker per group, a diamond for Play All and a triangle for Play One, as the reference's manual describes ([note chance contract](research/note-chance-contract.md#probability-groups-2026-10-25)). Checked in the UI suite.
+
+## Group Track Delay — 2026-10-25
+
+Engine and UI areas. Groups now have a Track Delay, as the reference's manual says every track does: in milliseconds or samples, positive or negative, saved and validated, with a field on the group's mixer strip ([track delay contract](research/track-delay-contract.md#groups-2026-10-25)). Checked by the track delay and UI suites.

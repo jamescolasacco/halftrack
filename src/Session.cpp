@@ -1618,7 +1618,7 @@ Result validateTrackDelays (const juce::ValueTree& state)
         int count = 0;
         for (const auto& sibling : state.getParent())
             if (sibling.hasType (te::IDs::PLUGIN) && sibling[te::IDs::type].toString() == TrackDelayPlugin::xmlTypeName) ++count;
-        if (! state.getParent().hasType (te::IDs::TRACK) || count != 1
+        if (! (state.getParent().hasType (te::IDs::TRACK) || state.getParent().hasType (te::IDs::FOLDERTRACK)) || count != 1
             || ! finiteProperty (state.getProperty (trackDelayProperty, 0), -Session::maximumTrackDelayMs, Session::maximumTrackDelayMs)
             || ! finiteProperty (state.getProperty (trackDelaySamplesProperty, 0), -Session::maximumTrackDelaySamples, Session::maximumTrackDelaySamples)
             || (state.hasProperty (trackDelayInSamplesProperty) && state[trackDelayInSamplesProperty].toString() != "0" && state[trackDelayInSamplesProperty].toString() != "1"))
@@ -5925,7 +5925,7 @@ struct Session::Impl
     {
         const bool on = edit->state.getProperty (delayCompensationProperty, true);
         bool changed = false;
-        for (auto* t : te::getAudioTracks (*edit))
+        for (auto* t : te::getAllTracks (*edit))
             for (auto* p : t->pluginList)
                 if (auto* d = dynamic_cast<TrackDelayPlugin*> (p)) changed = d->compensated.exchange (on, std::memory_order_relaxed) != on || changed;
         edit->setLatencyCompensationEnabled (on); // Rebuilds the graph when it changes.
@@ -7382,6 +7382,11 @@ Session::Snapshot Session::snapshot() const
             }
             for (auto* member : te::getAudioTracks (e)) if (member->getParentFolderTrack() == folder) group.memberIds.add (member->itemID.toString());
             group.output = impl->describeOutput (*folder);
+            if (auto* delay = folder->pluginList.findFirstPluginOfType<TrackDelayPlugin>())
+            {
+                group.delayInSamples = delay->inSamples.get(); group.delaySamples = delay->samples.get();
+                group.delayMs = group.delayInSamples ? group.delaySamples * 1000.0 / impl->sampleRate() : delay->milliseconds.get();
+            }
             s.groups.push_back (std::move (group));
         }
     for (auto* p : Impl::devicesIn (e.getMasterPluginList())) s.mainPlugins.push_back (describe (*p));
@@ -13994,9 +13999,9 @@ Result Session::setTrackCrossfade (const String& trackId, CrossfadeAssign side)
     track->state.setProperty (crossfadeProperty, static_cast<int> (side), &impl->edit->getUndoManager());
     impl->refreshCrossfade(); impl->changed(); return Result::ok();
 }
-// A track's Track Delay, made where it belongs if it has none: after the devices and before the sends
-// and the mixer, so sends hear it too.
-TrackDelayPlugin* trackDelayOf (te::AudioTrack& track)
+// A track's or group's Track Delay, made where it belongs if it has none: after the devices and before
+// the sends and the mixer, so sends hear it too.
+TrackDelayPlugin* trackDelayOf (te::Track& track)
 {
     if (auto* delay = track.pluginList.findFirstPluginOfType<TrackDelayPlugin>()) return delay;
     auto plugin = track.edit.getPluginCache().createNewPlugin (TrackDelayPlugin::xmlTypeName, {});
@@ -14011,7 +14016,8 @@ Result Session::setTrackDelay (const String& trackId, double milliseconds)
 {
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
     if (impl->edit->getTransport().isRecording()) return Result::fail ("Stop recording before changing track delay.");
-    auto* track = impl->track (trackId);
+    // Every track has a Track Delay, as the reference's manual says (section 18.7): groups too.
+    te::Track* track = impl->track (trackId); if (track == nullptr) track = impl->group (trackId);
     if (! track) return Result::fail ("Track not found.");
     if (auto frozen = impl->unfrozen (track); frozen.failed()) return frozen;
     if (! std::isfinite (milliseconds) || std::abs (milliseconds) > maximumTrackDelayMs) return Result::fail ("Track delay runs from -1000 to +1000 ms.");
@@ -14029,7 +14035,8 @@ Result Session::setTrackDelaySamples (const String& trackId, double samples)
 {
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
     if (impl->edit->getTransport().isRecording()) return Result::fail ("Stop recording before changing track delay.");
-    auto* track = impl->track (trackId);
+    // Every track has a Track Delay, as the reference's manual says (section 18.7): groups too.
+    te::Track* track = impl->track (trackId); if (track == nullptr) track = impl->group (trackId);
     if (! track) return Result::fail ("Track not found.");
     if (auto frozen = impl->unfrozen (track); frozen.failed()) return frozen;
     if (! std::isfinite (samples) || std::abs (samples) > maximumTrackDelaySamples || samples != std::round (samples))
@@ -14046,7 +14053,8 @@ Result Session::setTrackDelayInSamples (const String& trackId, bool inSamples)
 {
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
     if (impl->edit->getTransport().isRecording()) return Result::fail ("Stop recording before changing track delay.");
-    auto* track = impl->track (trackId);
+    // Every track has a Track Delay, as the reference's manual says (section 18.7): groups too.
+    te::Track* track = impl->track (trackId); if (track == nullptr) track = impl->group (trackId);
     if (! track) return Result::fail ("Track not found.");
     if (auto frozen = impl->unfrozen (track); frozen.failed()) return frozen;
     auto* delay = track->pluginList.findFirstPluginOfType<TrackDelayPlugin>();

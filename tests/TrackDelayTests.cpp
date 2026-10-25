@@ -137,6 +137,28 @@ int runTrackDelayTests (const juce::File& artifacts)
         corruptSamples (*inSamples);
         check (inSamples->writeTo (broken), "write an out-of-range delay in samples");
         check (s.loadProject (broken).failed() && s.snapshot().tracks[0].delaySamples == 600, "an out-of-range delay in samples rejects the load and keeps the open project");
+        // A group's Track Delay: every track has one, as the reference's manual says (section 18.7).
+        {
+            Session g (false);
+            ok (g.importAudio (a, 0, 0), "track 1 plays an impulse at 1.5 s"); ok (g.importAudio (b, 1, 0), "track 2 plays an impulse at 2 s");
+            juce::String group;
+            ok (g.groupTracks ({ g.snapshot().tracks[0].id }, group), "put track 1 in a group");
+            ok (g.setTrackDelay (group, 10), "delay the group by 10 ms");
+            check (g.snapshot().groups[0].delayMs == 10, "the group reports its delay");
+            x = render (g, file);
+            check (x.first == first + 480 && x.second == second && std::abs (x.energy - .3125f) < 1e-4f, "a group's delay plays its track 480 samples later and leaves the other");
+            ok (g.setTrackDelay (group, -10), "pre-delay the group by 10 ms");
+            x = render (g, file);
+            check (x.first == first - 480 && x.second == second, "a negative group delay plays its track early and keeps the other on time");
+            ok (g.setTrackDelaySamples (group, 240), "keep the group's delay in samples");
+            check (g.snapshot().groups[0].delayInSamples && render (g, file).first == first + 240, "in samples it plays 240 samples later");
+            g.undo(); check (! g.snapshot().groups[0].delayInSamples && g.snapshot().groups[0].delayMs == -10, "one undo returns to -10 ms");
+            g.redo();
+            const auto grouped = root.getChildFile ("Group").getChildFile ("Group.halftrack");
+            ok (grouped.getParentDirectory().createDirectory(), "create the group project's folder");
+            ok (g.saveProject (grouped), "save the delayed group"); ok (g.loadProject (grouped), "reopen it");
+            check (g.snapshot().groups[0].delaySamples == 240 && render (g, file).first == first + 240, "the group's delay reopens and renders the same");
+        }
         ok (s.setTrackFrozen (id, true), "freeze track 1");
         check (s.setTrackDelay (id, 0).failed(), "a frozen track's delay is locked");
         std::cout << "Track delay passed: " << root.getFullPathName() << std::endl; return 0;

@@ -3569,6 +3569,22 @@ private:
                 pan.setSliderStyle (juce::Slider::RotaryHorizontalVerticalDrag); pan.setTextBoxStyle (juce::Slider::TextBoxBelow, false, 42, 15);
                 pan.setRotaryParameters (juce::MathConstants<float>::pi * 1.25f, juce::MathConstants<float>::pi * 2.75f, true);
                 fold.setVisible (false); name.setVisible (false);
+                // Track Delay, as on the tracks' strips: every track has one, as the reference's manual says (section 18.7).
+                addChildComponent (delay); addChildComponent (delayUnit);
+                delay.setName ("Group delay"); delayUnit.setName ("Group delay unit");
+                delay.setSliderStyle (juce::Slider::LinearBar); delay.setRange (-Session::maximumTrackDelayMs, Session::maximumTrackDelayMs, .1);
+                delay.setDoubleClickReturnValue (true, 0); delay.setWantsKeyboardFocus (false);
+                delay.setColour (juce::Slider::trackColourId, themes::colour (0xff4a4a4a)); delay.setColour (juce::Slider::textBoxTextColourId, ink);
+                delay.textFromValueFunction = [this] (double v) { return delayInSamples ? juce::String (juce::roundToInt (v)) + " smp" : juce::String (v, 1) + " ms"; };
+                delay.valueFromTextFunction = [] (const juce::String& text) { return text.retainCharacters ("-.0123456789").getDoubleValue(); };
+                delay.setTooltip ("Track delay: positive values play this group later, negative values earlier. Double-click for 0.");
+                delay.onDragStart = [this] { owner.session.beginEditGesture ("Track delay"); };
+                delay.onDragEnd = [this] { owner.session.endEditGesture(); };
+                delay.onValueChange = [this]
+                { owner.report (delayInSamples ? owner.session.setTrackDelaySamples (groupId, std::round (delay.getValue())) : owner.session.setTrackDelay (groupId, delay.getValue())); };
+                delayUnit.setWantsKeyboardFocus (false); delayUnit.setMouseClickGrabsKeyboardFocus (false);
+                delayUnit.setTooltip ("Track Delay's unit: milliseconds, or samples, which stay the same number of samples at any sample rate");
+                delayUnit.onClick = [this] { owner.report (owner.session.setTrackDelayInSamples (groupId, ! delayInSamples)); owner.refresh(); };
             }
             gain.updateText(); pan.updateText();
         }
@@ -3603,6 +3619,16 @@ private:
                 for (auto* c : std::initializer_list<juce::Component*> { &gain, &activator, &solo }) c->setVisible (shown.mixer);
                 for (auto& send : sends) send->setVisible (shown.sends);
                 mixerShown = shown.mixer;
+                if (g->delayInSamples != delayInSamples || delayRangeRate != owner.runningSampleRate())
+                {
+                    delayInSamples = g->delayInSamples; delayRangeRate = owner.runningSampleRate();
+                    if (delayInSamples) delay.setRange (-delayRangeRate, delayRangeRate, 1); else delay.setRange (-Session::maximumTrackDelayMs, Session::maximumTrackDelayMs, .1);
+                    delayUnit.setButtonText (delayInSamples ? "smp" : "ms");
+                }
+                if (! delay.isMouseButtonDown()) delay.setValue (delayInSamples ? g->delaySamples : g->delayMs, juce::dontSendNotification);
+                delay.updateText();
+                delay.setVisible (shown.trackDelay); delayUnit.setVisible (shown.trackDelay);
+                delay.setEnabled (! owner.session.isExporting() && owner.session.delayCompensation()); delayUnit.setEnabled (delay.isEnabled());
                 if (shown != laidOut) { laidOut = shown; resized(); }
             }
             else
@@ -3660,7 +3686,11 @@ private:
                 if (shown.sends && ! sends.empty()) top += (int) ((sends.size() + 2) / 3) * 40;
                 pan.setBounds ((getWidth() - 46) / 2, top + 2, 46, 50);
                 leftSplit.setBounds (5, top + 8, getWidth() - 10, 16); rightSplit.setBounds (5, top + 27, getWidth() - 10, 16);
-                gain.setBounds (6, top + 58, 54, juce::jmax (20, getHeight() - 34 - (top + 58)));
+                // The delay sits where the tracks' does, above their crossfader buttons and their mixer buttons.
+                const int delayY = getHeight() - (shown.mixer ? 28 : 0) - (shown.crossfader ? 24 : 0) - 22;
+                delay.setBounds (5, delayY, getWidth() - 38, 19); delayUnit.setBounds (getWidth() - 31, delayY, 26, 19);
+                const int fadersEnd = shown.trackDelay ? delayY - 4 : getHeight() - 34;
+                gain.setBounds (6, top + 58, 54, juce::jmax (20, fadersEnd - (top + 58)));
                 const int buttons = getHeight() - 28, half = (getWidth() - 12) / 2;
                 activator.setBounds (5, buttons, half, 22); solo.setBounds (7 + half, buttons, half, 22);
                 return;
@@ -3745,6 +3775,10 @@ private:
         juce::Label name;
         ValueSlider gain, pan, leftSplit, rightSplit;
         bool splitPan = false, dragArmed = false, headerDrag = false;
+        juce::Slider delay;
+        juce::TextButton delayUnit { "ms" };
+        bool delayInSamples = false;
+        double delayRangeRate = 0;
         std::vector<std::unique_ptr<ValueSlider>> sends;
         juce::StringArray sendReturnIds;
         juce::TextButton automationLane { "+" };
@@ -27245,6 +27279,15 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         check (! session.delayCompensation() && ! trackDelay->isEnabled(), "Options > Delay Compensation switches it off, and Track Delay is unavailable meanwhile");
         menuItemSelected (menuDelayCompensation, 0);
         check (session.delayCompensation() && trackDelay->isEnabled(), "and on again");
+        {
+            // A group's strip has its Track Delay too, as every track has one (the reference's manual, section 18.7).
+            if (state.groups.empty()) { juce::String made; check (session.groupTracks ({ state.tracks[0].id }, made).wasOk(), "a group for its delay"); refresh(); }
+            auto* groupDelay = dynamic_cast<juce::Slider*> (findNamed (launcher, "Group delay"));
+            check (groupDelay != nullptr && groupDelay->isVisible() && groupDelay->getTextFromValue (0) == "0.0 ms", "group strips show their Track Delay with the tracks'");
+            groupDelay->setValue (20, juce::sendNotificationSync); refresh();
+            check (std::abs (state.groups[0].delayMs - 20) < 1e-9, "the group's field edits its delay");
+            session.undo(); refresh();
+        }
         session.stop(); check (session.newProject().wasOk(), "reset after the group checks"); refresh();
         // Audio To, edited from the strip.
         auto* output = dynamic_cast<juce::ComboBox*> (findNamed (launcher, "Track output"));

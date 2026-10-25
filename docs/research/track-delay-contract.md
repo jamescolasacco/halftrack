@@ -4,7 +4,7 @@ Track Delay follows the reference mixer's per-track delay ([Mixing: Track Delays
 
 ## Interface
 
-- `setTrackDelay(trackId, milliseconds)` accepts −1000 to +1000 ms on any audio, MIDI or return track. It is one undo step.
+- `setTrackDelay(trackId, milliseconds)` accepts −1000 to +1000 ms on any audio, MIDI or return track, and on groups (2026-10-25), as the reference's manual says "A Track Delay control is available for every track in Live" (section 18.7, consulted 2026-10-25). It is one undo step.
 - Frozen tracks, non-finite values, out-of-range values and unknown tracks are rejected, as are changes while recording or exporting.
 - `TrackInfo::delayMs` reports the delay.
 - Each Session mixer strip shows the delay above its crossfader buttons. Dragging or typing edits it, and double-click resets it to 0.
@@ -45,6 +45,12 @@ The UI suite edits a strip's delay field, and switches its unit toggle to sample
 ## Not implemented
 
 - Delays in beats. The reference's toggle labels and its range in samples are not read; Halftrack's are ms and smp, and ±192000 samples.
-- Delays on the master or group tracks.
+- A delay on the Main track.
 - Clearing the buffer on seek, so for up to the delay time after a jump a positively delayed track can play audio from before the jump.
 - Any comparison with reference output.
+
+## Groups (2026-10-25)
+
+A group's Track Delay works as a track's: its delay device sits after the group's devices and before its sends and mixer, so the group's summed tracks play later, or earlier with delay compensation holding every other path back. `setTrackDelay`, `setTrackDelaySamples` and `setTrackDelayInSamples` take a group's id, `GroupInfo` reports `delayMs`, `delayInSamples` and `delaySamples`, the project keeps the device in the group, and loading accepts one delay in a group as in a track. The Session mixer's group strips show the delay field and its unit toggle where the tracks' show theirs, with the Track Delay section.
+
+`tests/TrackDelayTests.cpp` groups the first track and finds its impulse 480 samples later with a +10 ms group delay and 480 samples earlier with −10 ms, the other track on time; a group delay of 240 samples plays 240 samples later, undo returns it to milliseconds, and it reopens and renders the same. The UI suite edits a group strip's delay field.

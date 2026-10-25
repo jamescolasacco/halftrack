@@ -598,6 +598,10 @@ public:
         std::vector<SendInfo> sends;     // One per return, as a track's.
         AutomationLane volumeAutomation, panAutomation, leftSplitAutomation, rightSplitAutomation; // As a track's.
         TrackOutput output; // Its Audio To, as a track's.
+        // Its Track Delay, as a track's (see setTrackDelay, which takes a group's id).
+        double delayMs = 0;
+        bool delayInSamples = false;
+        double delaySamples = 0;
     };
     // A point on the tempo map: the tempo ramps linearly from each point to the next and holds after the last.
     struct TempoPoint
