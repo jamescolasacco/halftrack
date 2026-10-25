@@ -2733,3 +2733,7 @@ UI area. As the reference's Clip View has one, a title bar runs over the clip's 
 ## Dragging clips between the views — 2026-10-24
 
 Engine and UI areas. As the reference's manual describes, a clip dragged over the other view's selector switches the view and the drag goes on there: a slot clip lands on the Arrangement lane under the pointer, at the snapped time, and an Arrangement clip, its move so far taken back, lands in the slot under the pointer. The drop leaves a copy in one undo step without touching the clipboard (`Session::copySlotClipToArrangement`, `copyClipToSlot`), the clip it came from staying ([contract](research/session-clip-editing-contract.md#dragging-between-the-views-2026-10-24)). Checked in the slot clips and UI suites.
+
+## Taller mixer faders — 2026-10-24
+
+Engine and UI areas. As the reference's manual describes, dragging the top edge of the Session's mixer or the Arrangement's up makes its faders and meters taller, and dragging it down returns them to their usual height. Each mixer keeps its height with the project as view state (`MixerSections::extraVolumeHeight`), as the reference's Set keeps its two volume section heights ([contract](research/mixer-sections-contract.md#the-arrangements-mixer-2026-10-24)). Checked in the track order and UI suites.

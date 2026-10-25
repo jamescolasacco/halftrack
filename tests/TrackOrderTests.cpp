@@ -195,7 +195,7 @@ int runTrackOrderTests (const juce::File& artifacts)
             check (tracks.size() == 3 && ! tracks[0].isReturn && ! tracks[1].isReturn && tracks[2].isReturn && ! s.canUndo(), "the return opens last, outside the undo history");
             // The Session mixer's sections are kept with the project as view state.
             check (s.mixerSections() == Session::MixerSections {}, "the mixer's sections start as the reference's default Set has them");
-            Session::MixerSections shown; shown.inOut = false; shown.crossfader = true;
+            Session::MixerSections shown; shown.inOut = false; shown.crossfader = true; shown.extraVolumeHeight = 90;
             s.setMixerSections (shown);
             check (s.snapshot().mixerSections == shown && ! s.canUndo() && s.snapshot().dirty, "choosing them marks the project changed, outside the undo history");
             ok (s.saveProject (mixed), "save them"); ok (s.newProject(), "a new project");
@@ -238,11 +238,16 @@ int runTrackOrderTests (const juce::File& artifacts)
                 check (! first.shown && first.inOut && first.sends && first.mixer && ! first.trackDelay && ! first.crossfader && s.arrangementMixerSections() == first,
                        "the Arrangement's mixer is hidden at first, with In/Out, Sends and Volume and without Track Delay or the crossfader");
                 const auto sessionSections = s.mixerSections();
-                auto arranged = first; arranged.shown = true; arranged.sends = false; arranged.trackDelay = true; arranged.returns = false;
+                check (first.extraVolumeHeight == 0 && sessionSections.extraVolumeHeight == 0, "both mixers' faders start at their usual height");
+                auto taller = sessionSections; taller.extraVolumeHeight = Session::MixerSections::maximumExtraVolume + 50;
+                s.setMixerSections (taller);
+                check (s.mixerSections().extraVolumeHeight == Session::MixerSections::maximumExtraVolume, "a taller fader than allowed stops at the limit");
+                s.setMixerSections (sessionSections);
+                auto arranged = first; arranged.shown = true; arranged.sends = false; arranged.trackDelay = true; arranged.returns = false; arranged.extraVolumeHeight = 40;
                 ok (s.saveProject (mixed), "save before showing it");
                 s.setArrangementMixerSections (arranged);
                 const auto kept = s.snapshot().arrangementMixerSections;
-                check (kept.shown && ! kept.sends && kept.trackDelay && kept.returns && s.mixerSections() == sessionSections && ! s.canUndo() && s.snapshot().dirty,
+                check (kept.shown && ! kept.sends && kept.trackDelay && kept.returns && kept.extraVolumeHeight == 40 && s.mixerSections() == sessionSections && ! s.canUndo() && s.snapshot().dirty,
                        "showing it and choosing its sections is view state apart from the Session mixer's, its returns following the Arrangement's");
                 ok (s.saveProject (mixed), "save the Arrangement's mixer"); ok (s.newProject(), "a new project for the mixer");
                 check (s.arrangementMixerSections() == first, "which hides it again");

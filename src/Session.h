@@ -625,6 +625,10 @@ public:
     {
         bool inOut = true, sends = true, returns = true, mixer = true, trackDelay = false, crossfader = false;
         bool shown = true; // The whole mixer in its view, as the reference's View > Mixer.
+        // How much taller than at first its faders and meters are, in pixels (0 to maximumExtraVolume),
+        // as dragging the reference's mixer's top edge makes its volume section taller.
+        int extraVolumeHeight = 0;
+        static constexpr int maximumExtraVolume = 600;
         bool operator== (const MixerSections&) const = default;
     };
     // View > Arrangement Track Controls, as the reference's: the Arrangement headers' routing (In/Out),

@@ -5228,7 +5228,7 @@ private:
     {
         int returns = 0; for (const auto& track : state.tracks) returns += track.isReturn;
         return (shown.inOut ? TrackRow::inOutHeight : 4) + (shown.sends ? (returns + 2) / 3 * 40 : 0)
-             + (shown.mixer ? 158 : 4) + (shown.trackDelay ? 22 : 0) + (shown.crossfader ? 24 : 0);
+             + (shown.mixer ? 158 + shown.extraVolumeHeight : 4) + (shown.trackDelay ? 22 : 0) + (shown.crossfader ? 24 : 0);
     }
 
     class LauncherGrid final : public juce::Component, private juce::ScrollBar::Listener
@@ -5546,6 +5546,8 @@ private:
             if (owner.session.isExporting()) return;
             grabKeyboardFocus();
             headerPressed.clear(); collapseHeadersOnUp = false;
+            // The mixer's top edge drags its faders and meters taller, as the reference's does.
+            if (onMixerEdge (event.getPosition()) && ! event.mods.isPopupMenu()) { volumeAtDown = owner.state.mixerSections.extraVolumeHeight; return; }
             if (const int column = columnAt (event.x); column >= 0 && columns[(size_t) column].group >= 0)
             {
                 const auto& group = owner.state.groups[(size_t) columns[(size_t) column].group];
@@ -5679,6 +5681,7 @@ private:
         // Pointing at a title whose track or group has its own info text gives it to the Info view.
         void mouseMove (const juce::MouseEvent& event) override
         {
+            setMouseCursor (onMixerEdge (event.getPosition()) ? juce::MouseCursor::UpDownResizeCursor : juce::MouseCursor::NormalCursor);
             juce::String title, text;
             if (const int column = columnAt (event.x); column >= 0 && event.y < headerHeight)
             {
@@ -5694,6 +5697,14 @@ private:
         void mouseExit (const juce::MouseEvent&) override { getProperties().set (infoTextProperty, juce::String()); }
         void mouseDrag (const juce::MouseEvent& event) override
         {
+            if (volumeAtDown >= 0)
+            {
+                auto sections = owner.state.mixerSections;
+                const int room = juce::jmax (0, gridArea().getHeight() + sections.extraVolumeHeight - rowHeight);
+                sections.extraVolumeHeight = juce::jlimit (0, room, volumeAtDown - event.getDistanceFromDragStartY());
+                owner.session.setMixerSections (sections); owner.refresh(); resized(); repaint();
+                return;
+            }
             // A scene dragged in the scene column moves to where its line shows, as the reference's scenes do.
             if (scenePressed.isNotEmpty())
             {
@@ -5732,6 +5743,7 @@ private:
         }
         void mouseUp (const juce::MouseEvent& event) override
         {
+            if (std::exchange (volumeAtDown, -1) >= 0) return;
             if (const auto scene = std::exchange (scenePressed, {}); scene.isNotEmpty())
             {
                 const auto drop = std::exchange (sceneDrop, -1);
@@ -5962,6 +5974,10 @@ private:
         int mixerHeight() const { return owner.state.mixerSections.shown ? owner.mixerStripHeight (owner.state.mixerSections) : 0; }
         // The Master column follows the last track column, or the right edge once tracks scroll.
         int masterX() const { return juce::jlimit (0, tracksWidth(), (int) columns.size() * columnWidth - (int) offsetX); }
+        // The mixer's top edge: the bottom of the stop buttons' row.
+        int mixerTop() const { return gridArea().getBottom() + stopHeight; }
+        bool onMixerEdge (juce::Point<int> at) const { return owner.state.mixerSections.shown && at.y >= mixerTop() - 4 && at.y < mixerTop() && at.x < getWidth() - scrollSize; }
+        int volumeAtDown = -1; // The extra fader height when the mixer's edge was pressed, while it drags.
     private:
         static inline const juce::Colour gutter { 0xff1a1a1a }, slotColour { 0xff2c2c2c };
         juce::Component mixers;
@@ -6109,6 +6125,8 @@ private:
         {
             if (owner.session.isExporting()) return;
             if (isShowing()) grabKeyboardFocus();
+            // Its top edge drags its faders and meters taller, as the reference's does.
+            if (e.y < edgeHeight && ! e.mods.isPopupMenu()) { volumeAtDown = owner.state.arrangementMixerSections.extraVolumeHeight; return; }
             if (e.y >= titleHeight) return;
             const int column = columnAt (e.x);
             if (column < 0)
@@ -6129,6 +6147,17 @@ private:
             owner.pressTrackHeader (track, e.mods.isShiftDown(), false);
             owner.refresh();
         }
+        void mouseDrag (const juce::MouseEvent& e) override
+        {
+            if (volumeAtDown < 0) return;
+            auto sections = owner.state.arrangementMixerSections;
+            sections.extraVolumeHeight = juce::jmax (0, volumeAtDown - e.getDistanceFromDragStartY());
+            owner.session.setArrangementMixerSections (sections); owner.refresh();
+        }
+        void mouseUp (const juce::MouseEvent&) override { volumeAtDown = -1; }
+        void mouseMove (const juce::MouseEvent& e) override { setMouseCursor (e.y < edgeHeight ? juce::MouseCursor::UpDownResizeCursor : juce::MouseCursor::NormalCursor); }
+        static constexpr int edgeHeight = 4;
+        int volumeAtDown = -1;
         // While it has the keys, Left and Right select the track or group beside the selected one.
         bool keyPressed (const juce::KeyPress& key) override
         {
@@ -24826,6 +24855,22 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
                        && launcher.mixerHeight() == 0 && ! input->isShowing(), "Cmd/Ctrl+Option+M hides the Session mixer, as View > Mixer does");
             check (handleKey (juce::KeyPress ('M', juce::ModifierKeys::commandModifier | juce::ModifierKeys::altModifier, 0)) && state.mixerSections.shown
                        && launcher.mixerHeight() > 0 && ! midiMapMode, "and shows it again, leaving MIDI Map Mode alone");
+            {
+                // The mixer's top edge drags its faders taller, as the reference's does.
+                auto* fader = dynamic_cast<juce::Slider*> (findNamed (launcher, "Track volume"));
+                const int strips = launcher.mixerHeight(), faderHigh = fader != nullptr ? fader->getHeight() : 0;
+                const auto steps = session.undoSteps().size();
+                const auto now = juce::Time::getCurrentTime();
+                const juce::Point<float> edge { 20.0f, (float) launcher.mixerTop() - 2.0f };
+                const auto at = [&] (float y, bool dragged)
+                { return juce::MouseEvent (juce::Desktop::getInstance().getMainMouseSource(), { edge.x, y }, juce::ModifierKeys (juce::ModifierKeys::leftButtonModifier), 1.0f, 0, 0, 0, 0,
+                                           &launcher, &launcher, now, edge, now, 1, dragged); };
+                launcher.mouseDown (at (edge.y, false)); launcher.mouseDrag (at (edge.y - 30, true)); launcher.mouseUp (at (edge.y - 30, true)); refresh();
+                check (state.mixerSections.extraVolumeHeight == 30 && launcher.mixerHeight() == strips + 30 && fader != nullptr && fader->getHeight() == faderHigh + 30 && session.undoSteps().size() == steps,
+                       "dragging the mixer's top edge up makes its faders taller, kept with the project outside the undo history");
+                launcher.mouseDown (at (launcher.mixerTop() - 2.0f, false)); launcher.mouseDrag (at (launcher.mixerTop() + 400.0f, true)); launcher.mouseUp (at (launcher.mixerTop() + 400.0f, true)); refresh();
+                check (state.mixerSections.extraVolumeHeight == 0 && launcher.mixerHeight() == strips, "and dragging it down returns them to their usual height, no shorter");
+            }
         }
         // The Arrangement's mixer, as the reference's View > Mixer shows it at the bottom of the Arrangement,
         // with sections of its own and the returns as the Arrangement shows them.
@@ -24848,6 +24893,19 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
                    "Cmd/Ctrl+Option+M shows it there, leaving the Session's mixer as it was");
             check (viewport.getHeight() < lanesHigh && arrangementMixer.getY() >= viewport.getBottom() && (! showDetail || arrangementMixer.getBottom() <= deviceChain.getY()),
                    "it sits under the tracks, above the detail view, taking its height from them");
+            {
+                // Its top edge drags its faders taller too, apart from the Session mixer's.
+                const int mixerHigh = arrangementMixer.getHeight(), wanted = arrangementMixer.preferredHeight();
+                const auto now = juce::Time::getCurrentTime();
+                const auto at = [&] (float y, bool dragged)
+                { return juce::MouseEvent (juce::Desktop::getInstance().getMainMouseSource(), { 30.0f, y }, juce::ModifierKeys (juce::ModifierKeys::leftButtonModifier), 1.0f, 0, 0, 0, 0,
+                                           &arrangementMixer, &arrangementMixer, now, { 30.0f, 1.0f }, now, 1, dragged); };
+                arrangementMixer.mouseDown (at (1.0f, false)); arrangementMixer.mouseDrag (at (-24.0f, true)); arrangementMixer.mouseUp (at (-24.0f, true)); refresh();
+                check (state.arrangementMixerSections.extraVolumeHeight == 25 && state.mixerSections.extraVolumeHeight == sessionSections.extraVolumeHeight
+                           && arrangementMixer.preferredHeight() == wanted + 25 && arrangementMixer.getHeight() >= mixerHigh,
+                       "dragging the Arrangement mixer's top edge up makes its faders taller");
+                auto restored = state.arrangementMixerSections; restored.extraVolumeHeight = 0; session.setArrangementMixerSections (restored); refresh();
+            }
             int returns = 0; for (const auto& track : state.tracks) returns += track.isReturn;
             check (returns > 0 && arrangementMixer.columnCount() == launcher.columnCount(), "it has a strip for each track, group and return, as the Session's mixer has");
             auto* volume = dynamic_cast<juce::Slider*> (findNamed (arrangementMixer, "Track volume"));

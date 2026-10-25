@@ -63,6 +63,7 @@ const juce::Identifier firstClipNameProperty { "halftrackFirstClipName" }, first
 // The Session mixer's sections shown, as view state.
 const juce::Identifier mixerInOutProperty { "halftrackMixerInOut" }, mixerSendsProperty { "halftrackMixerSends" }, mixerReturnsProperty { "halftrackMixerReturns" }, mixerVolumeProperty { "halftrackMixerVolume" },
                        mixerTrackDelayProperty { "halftrackMixerTrackDelay" }, mixerCrossfaderProperty { "halftrackMixerCrossfader" }, mixerShownProperty { "halftrackMixerInSession" },
+                       mixerVolumeHeightProperty { "halftrackMixerVolumeHeight" }, arrangementMixerVolumeHeightProperty { "halftrackArrangementMixerVolumeHeight" },
                        arrangementOverviewProperty { "halftrackArrangementOverview" }, timeRulerFormatProperty { "halftrackTimeRulerFormat" },
                        snapAutomationProperty { "halftrackSnapAutomationToGrid" }, delayCompensationProperty { "halftrackDelayCompensation" }, arrangementInOutProperty { "halftrackArrangementInOut" },
                        arrangementVolumeProperty { "halftrackArrangementVolume" }, arrangementTrackOptionsProperty { "halftrackArrangementTrackOptions" },
@@ -14279,12 +14280,15 @@ Session::MixerSections Session::mixerSections() const
     const auto& s = impl->edit->state;
     const MixerSections fallback;
     return { s.getProperty (mixerInOutProperty, fallback.inOut), s.getProperty (mixerSendsProperty, fallback.sends), s.getProperty (mixerReturnsProperty, fallback.returns), s.getProperty (mixerVolumeProperty, fallback.mixer),
-             s.getProperty (mixerTrackDelayProperty, fallback.trackDelay), s.getProperty (mixerCrossfaderProperty, fallback.crossfader), s.getProperty (mixerShownProperty, fallback.shown) };
+             s.getProperty (mixerTrackDelayProperty, fallback.trackDelay), s.getProperty (mixerCrossfaderProperty, fallback.crossfader), s.getProperty (mixerShownProperty, fallback.shown),
+             juce::jlimit (0, MixerSections::maximumExtraVolume, (int) s.getProperty (mixerVolumeHeightProperty, 0)) };
 }
-void Session::setMixerSections (const MixerSections& sections)
+void Session::setMixerSections (const MixerSections& asked)
 {
+    auto sections = asked; sections.extraVolumeHeight = juce::jlimit (0, MixerSections::maximumExtraVolume, sections.extraVolumeHeight);
     if (sections == mixerSections()) return;
     auto s = impl->edit->state;
+    s.setProperty (mixerVolumeHeightProperty, sections.extraVolumeHeight, nullptr);
     s.setProperty (mixerInOutProperty, sections.inOut, nullptr); s.setProperty (mixerSendsProperty, sections.sends, nullptr); s.setProperty (mixerReturnsProperty, sections.returns, nullptr);
     s.setProperty (mixerVolumeProperty, sections.mixer, nullptr); s.setProperty (mixerTrackDelayProperty, sections.trackDelay, nullptr);
     s.setProperty (mixerCrossfaderProperty, sections.crossfader, nullptr); s.setProperty (mixerShownProperty, sections.shown, nullptr);
@@ -14296,13 +14300,16 @@ Session::MixerSections Session::arrangementMixerSections() const
     const MixerSections fallback { .shown = false };
     return { s.getProperty (arrangementMixerInOutProperty, fallback.inOut), s.getProperty (arrangementMixerSendsProperty, fallback.sends), fallback.returns,
              s.getProperty (arrangementMixerVolumeProperty, fallback.mixer), s.getProperty (arrangementMixerTrackDelayProperty, fallback.trackDelay),
-             s.getProperty (arrangementMixerCrossfaderProperty, fallback.crossfader), s.getProperty (arrangementMixerShownProperty, fallback.shown) };
+             s.getProperty (arrangementMixerCrossfaderProperty, fallback.crossfader), s.getProperty (arrangementMixerShownProperty, fallback.shown),
+             juce::jlimit (0, MixerSections::maximumExtraVolume, (int) s.getProperty (arrangementMixerVolumeHeightProperty, 0)) };
 }
 void Session::setArrangementMixerSections (const MixerSections& sections)
 {
     auto kept = sections; kept.returns = MixerSections().returns;
+    kept.extraVolumeHeight = juce::jlimit (0, MixerSections::maximumExtraVolume, kept.extraVolumeHeight);
     if (kept == arrangementMixerSections()) return;
     auto s = impl->edit->state;
+    s.setProperty (arrangementMixerVolumeHeightProperty, kept.extraVolumeHeight, nullptr);
     s.setProperty (arrangementMixerInOutProperty, kept.inOut, nullptr); s.setProperty (arrangementMixerSendsProperty, kept.sends, nullptr);
     s.setProperty (arrangementMixerVolumeProperty, kept.mixer, nullptr); s.setProperty (arrangementMixerTrackDelayProperty, kept.trackDelay, nullptr);
     s.setProperty (arrangementMixerCrossfaderProperty, kept.crossfader, nullptr); s.setProperty (arrangementMixerShownProperty, kept.shown, nullptr);
