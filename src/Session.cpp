@@ -8212,8 +8212,9 @@ Result Session::setComputerKeyboardEnabled (bool on)
             if (impl->keyboardHeld[(size_t) note]) impl->playComputerKeyboard (juce::MidiMessage::noteOff (1, note));
     impl->keyboardHeld.reset();
     impl->computerKeys = on;
-    // Kept with the preferences, as the reference keeps its computer MIDI keyboard's state.
-    if (impl->prefs.computerMidiKeyboard != on) { auto next = impl->prefs; next.computerMidiKeyboard = on; setPreferences (next); }
+    // Kept with the preferences, as the reference keeps its computer MIDI keyboard's state; only written, as the
+    // Preferences window's tab is, so nothing else is applied again.
+    if (impl->prefs.computerMidiKeyboard != on) { auto next = impl->prefs; next.computerMidiKeyboard = on; impl->savePreferences (next); }
     sendChangeMessage(); return Result::ok();
 }
 bool Session::isComputerKeyboardEnabled() const { return impl->computerKeys; }
