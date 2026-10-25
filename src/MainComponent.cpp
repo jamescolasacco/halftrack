@@ -1315,6 +1315,8 @@ public:
             // Cmd+Option+Delete deletes the selected clips' fades and crossfades, as the reference's key does.
             if ((code == juce::KeyPress::deleteKey || code == juce::KeyPress::backspaceKey) && key.getModifiers().isAltDown() && ! showSession && ! showPiano)
             { if (canResetFades()) resetSelectionFades(); return true; }
+            // In the note editor Cmd+G groups notes for chance, as the reference's does; elsewhere it groups tracks.
+            if (code == 'G' && ! key.getModifiers().isAltDown() && editArea() == EditArea::notes) { return pianoRoll.keyPressed (key); }
             if (code == 'G' && ! key.getModifiers().isAltDown()) { if (shift) ungroupSelectedTrack(); else groupSelectedTracks(); return true; }
             if ((code == 'E' || code == 'e') && shift && key.getModifiers().isAltDown()) { menuItemSelected (13, 1); return true; }
             if (code == 'C' && shift) { captureFromUI(); return true; }
@@ -8682,6 +8684,12 @@ private:
                     g.drawText ((note.active ? juce::String() : juce::String("OFF / ")) + pitchName (note.pitch), r.reduced (4, 0), juce::Justification::centredLeft, true);
                 }
                 if (selected) { g.setColour (ink); g.fillRect (r.getRight() - 4, r.getY() + 3, 2.0f, r.getHeight() - 6); }
+                // A note left to chance, or in a probability group, carries a triangle in its corner, as the reference's do.
+                if ((note.chance < 1 || note.chanceGroup.isNotEmpty()) && r.getWidth() > 6 && r.getHeight() > 6)
+                {
+                    juce::Path corner; corner.addTriangle (r.getX() + 1, r.getY() + 1, r.getX() + 6, r.getY() + 1, r.getX() + 1, r.getY() + 6);
+                    g.setColour (ink); g.fillPath (corner);
+                }
                 // An MPE note's pitch bend, in semitone rows from its centre.
                 if (! note.pitchBend.empty())
                 {
@@ -9036,6 +9044,8 @@ private:
             if (clip != nullptr && key.getModifiers().isCommandDown())
             {
                 if ((code == 'E' || code == 'e') && ! key.getModifiers().isShiftDown() && ! key.getModifiers().isAltDown()) { noteCommand (NoteCommand::split); return true; }
+                if ((code == 'G' || code == 'g') && ! key.getModifiers().isAltDown())
+                { if (key.getModifiers().isShiftDown()) ungroupSelectedNotes(); else groupSelectedNotes (std::nullopt); return true; }
                 // Cmd+U quantizes with the Quantize tool's settings, and Shift+Cmd+U opens them, as the reference's keys do.
                 if (code == 'U' || code == 'u')
                 { if (key.getModifiers().isShiftDown()) openNoteTool (Session::NoteTool::quantize); else quantizeNotes(); return true; }
@@ -10368,6 +10378,28 @@ private:
                 operation == Session::NoteTransform::fixedLength ? defaultLength() : snapBeats()));
             owner.refresh();
         }
+        // Probability groups, as the reference's (its manual, section 10.5.13.1): Cmd+G groups the selected notes
+        // as the last group made from the menu was (Play All at first), and Cmd+Shift+G ungroups them.
+        bool lastGroupPlayOne = false;
+        void groupSelectedNotes (std::optional<bool> playOne)
+        {
+            const auto* clip = owner.currentMidiClip();
+            if (clip == nullptr || ! hasSelectedNote()) return;
+            if (playOne) lastGroupPlayOne = *playOne;
+            juce::StringArray ids; for (const auto& note : selectedNotes()) ids.add (note.id);
+            const auto clipId = clip->id;
+            endGesture();
+            owner.report (owner.session.groupMidiNotes (clipId, ids, playOne.value_or (lastGroupPlayOne))); owner.refresh();
+        }
+        void ungroupSelectedNotes()
+        {
+            const auto* clip = owner.currentMidiClip();
+            if (clip == nullptr || ! hasSelectedNote()) return;
+            juce::StringArray ids; for (const auto& note : selectedNotes()) ids.add (note.id);
+            const auto clipId = clip->id;
+            endGesture();
+            owner.report (owner.session.ungroupMidiNotes (clipId, ids)); owner.refresh();
+        }
         // The most parts a note can be chopped into: none shorter than the shortest note.
         static int chopParts (const Session::MidiNoteInfo& note, int parts)
         { return juce::jlimit (1, juce::jmax (1, juce::jmin (128, (int) std::floor (note.lengthBeats * 960 + 1.0e-6))), parts); }
@@ -10545,6 +10577,11 @@ private:
             popup.addItem (2, "Copy Notes", hasSelectedNote()); popup.addItem (3, "Cut Notes", hasSelectedNote());
             popup.addItem (4, "Paste Notes at Marker", ! noteClipboard.empty()); popup.addItem (5, "Duplicate Notes");
             popup.addItem (7, "Split Notes at Marker", hasNotes); popup.addItem (9, "Chop Notes on Grid", hasSelectedNote());
+            popup.addSeparator();
+            const auto chosen = selectedNotes();
+            const bool grouped = std::any_of (chosen.begin(), chosen.end(), [] (const auto& n) { return n.chanceGroup.isNotEmpty(); });
+            popup.addItem (20, "Group Notes (Play All)", selectedNoteCount() > 1); popup.addItem (21, "Group Notes (Play One)", selectedNoteCount() > 1);
+            popup.addItem (22, "Ungroup Notes", grouped);
             const auto selected = selectedNotes();
             const bool activate = std::any_of (selected.begin(), selected.end(), [] (const auto& note) { return !note.active; });
             popup.addItem (8, activate ? "Activate Selected Notes" : "Deactivate Selected Notes", !selected.empty());
@@ -10560,6 +10597,8 @@ private:
                 if (result == 1) safe->deleteSelectedNote();
                 if (result == 7 && safe->insertionBeat==marker) safe->splitNotesAtMarker();
                 if (result == 9) safe->startChop (false);
+                if (result == 20 || result == 21) safe->groupSelectedNotes (result == 21);
+                if (result == 22) safe->ungroupSelectedNotes();
                 if (result == 8) safe->toggleSelectedNotes();
                 const char command = result == 2 ? 'C' : result == 3 ? 'X' : result == 4 ? 'V' : result == 5 ? 'D' : 0;
                 if (command != 0) safe->keyPressed (juce::KeyPress (command, juce::ModifierKeys (juce::ModifierKeys::commandModifier), 0));
@@ -25860,6 +25899,18 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         check (currentMidiClip()->notes.size() == 4 && std::abs (noteById (splitSource[0]).lengthBeats - 3) < 1e-6 && noteById (splitSource[1]).lengthBeats == 4,
                "and a drag along a note splits it where the drag ends");
         pianoRoll.keyStateChanged (false);
+    }
+    {
+        // In the note editor Cmd+G groups the selected notes for chance, and Cmd+Shift+G ungroups them, rather than
+        // grouping tracks (its manual, section 10.5.13.1).
+        const auto groupsBefore = state.groups.size();
+        groupClick (groupPoint (.5, 60)); groupClick (groupPoint (1.5, 64), juce::ModifierKeys::shiftModifier);
+        clickedArea = Area::notes; headerFocus = false;
+        check (pianoRoll.selectedNoteCount() == 2 && handleKey (juce::KeyPress ('G', juce::ModifierKeys (juce::ModifierKeys::commandModifier), 0)) && state.groups.size() == groupsBefore
+                   && noteById (splitSource[0]).chanceGroup.isNotEmpty() && noteById (splitSource[0]).chanceGroup == noteById (splitSource[1]).chanceGroup && ! noteById (splitSource[1]).playOne,
+               "in the note editor Cmd+G groups the selected notes Play All for chance, not the tracks");
+        check (handleKey (juce::KeyPress ('G', juce::ModifierKeys (juce::ModifierKeys::commandModifier | juce::ModifierKeys::shiftModifier), 0))
+                   && noteById (splitSource[0]).chanceGroup.isEmpty() && noteById (splitSource[1]).chanceGroup.isEmpty(), "and Cmd+Shift+G ungroups them");
     }
     {
         juce::TextEditor editor;juce::DocumentWindow focusWindow("Halftrack split shortcut test",panel,juce::DocumentWindow::closeButton);

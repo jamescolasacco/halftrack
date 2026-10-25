@@ -133,6 +133,7 @@ Session::LaunchSettings clipLaunchSettings (const juce::ValueTree& state)
 }
 const juce::Identifier midiNoteIDProperty { "halftrackNoteId" };
 const juce::Identifier noteChanceProperty { "halftrackChance" }, noteVelocityRangeProperty { "halftrackVelocityRange" };
+const juce::Identifier noteGroupProperty { "halftrackChanceGroup" }, noteGroupPlayOneProperty { "halftrackPlayOne" };
 const juce::Identifier returnProperty { "halftrackReturn" };
 const juce::Identifier linkProperty { "halftrackLink" }; // Linked-track editing: tracks with the same value edit together.
 const juce::Identifier infoTextProperty { "halftrackInfoText" }; // A track's or group's own info text (Edit Info Text).
@@ -1538,6 +1539,13 @@ Result validateAudioClips (const juce::ValueTree& state)
                 && (! finiteProperty (state[noteVelocityRangeProperty], -127, 127)
                     || std::floor ((double) state[noteVelocityRangeProperty]) != (double) state[noteVelocityRangeProperty]))))
         return Result::fail ("The project contains an invalid MIDI note chance or velocity range.");
+    if (state.hasType (te::IDs::NOTE) && state.hasProperty (noteGroupProperty))
+    {
+        const auto group = state[noteGroupProperty].toString();
+        const auto one = state[noteGroupPlayOneProperty].toString().trim();
+        if (group.trim().isEmpty() || group.length() > 64 || group.containsAnyOf ("\r\n\t") || (state.hasProperty (noteGroupPlayOneProperty) && one != "0" && one != "1"))
+            return Result::fail ("The project contains an invalid MIDI note probability group.");
+    }
     // MPE note expression: points at finite beats inside their ranges.
     if (state.getParent().hasType (te::IDs::NOTE) && te::MidiExpression::isExpression (state.getType()))
     {
@@ -2106,7 +2114,8 @@ Session::ClipInfo describeClip (te::Clip& clip)
                                      static_cast<float> (static_cast<double> (note->state.getProperty (noteChanceProperty, 1.0))),
                                      static_cast<int> (note->state.getProperty (noteVelocityRangeProperty, 0)),
                                      noteExpression (note->state, Session::NoteExpression::pitchBend), noteExpression (note->state, Session::NoteExpression::slide),
-                                     noteExpression (note->state, Session::NoteExpression::pressure), juce::jlimit (0, 127, note->getNoteOffVelocity()) });
+                                     noteExpression (note->state, Session::NoteExpression::pressure), juce::jlimit (0, 127, note->getNoteOffVelocity()),
+                                     note->state[noteGroupProperty].toString(), static_cast<bool> (note->state.getProperty (noteGroupPlayOneProperty, false)) });
         std::map<int, Session::ControllerLane> lanes;
         for (auto* event : midi->getSequence().getControllerEvents())
             if (const int lane = controllerLane (event->getType()); lane >= 0)
@@ -2277,19 +2286,34 @@ public:
     int getNumPlaybackMidiSequenceVariations (te::MidiClip& clip) override
     {
         for (auto note : clip.getSequence().state)
-            if (note.hasType (te::IDs::NOTE) && (note.hasProperty (noteChanceProperty) || note.hasProperty (noteVelocityRangeProperty))) return 64;
+            if (note.hasType (te::IDs::NOTE) && (note.hasProperty (noteChanceProperty) || note.hasProperty (noteVelocityRangeProperty) || note.hasProperty (noteGroupProperty))) return 64;
         return 1;
     }
     juce::MidiMessageSequence createPlaybackMidiSequenceVariation (const te::MidiList& list, te::MidiClip& clip, te::MidiList::TimeBase base,
                                                                    bool mpe, int variation) override
     {
         auto state = list.state.createCopy();
+        // A probability group decides once a pass for all its notes: Play All keeps them all or none, and
+        // Play One, at the group's chance, one of them chosen at random.
+        std::map<String, std::vector<juce::ValueTree>> groups;
+        for (const auto& note : state)
+            if (note.hasType (te::IDs::NOTE)) if (const auto group = note[noteGroupProperty].toString(); group.isNotEmpty()) groups[group].push_back (note);
+        std::vector<juce::ValueTree> silenced;
+        for (const auto& [group, members] : groups)
+        {
+            const bool plays = noteRoll (group, variation, 0) < static_cast<double> (members.front().getProperty (noteChanceProperty, 1.0));
+            const bool one = static_cast<bool> (members.front().getProperty (noteGroupPlayOneProperty, false));
+            const int chosen = one ? juce::jlimit (0, (int) members.size() - 1, (int) (noteRoll (group, variation, 2) * (double) members.size())) : -1;
+            for (int k = 0; k < (int) members.size(); ++k) if (! plays || (one && k != chosen)) silenced.push_back (members[(size_t) k]);
+        }
         for (int i = state.getNumChildren(); --i >= 0;)
         {
             auto note = state.getChild (i);
             if (! note.hasType (te::IDs::NOTE)) continue;
+            if (std::find (silenced.begin(), silenced.end(), note) != silenced.end()) { state.removeChild (i, nullptr); continue; }
             const auto id = note[midiNoteIDProperty].toString() + "@" + note[te::IDs::b].toString() + "/" + note[te::IDs::p].toString();
-            if (noteRoll (id, variation, 0) >= static_cast<double> (note.getProperty (noteChanceProperty, 1.0))) { state.removeChild (i, nullptr); continue; }
+            if (! note.hasProperty (noteGroupProperty) && noteRoll (id, variation, 0) >= static_cast<double> (note.getProperty (noteChanceProperty, 1.0)))
+            { state.removeChild (i, nullptr); continue; }
             if (const int range = note.getProperty (noteVelocityRangeProperty, 0); range != 0)
                 note.setProperty (te::IDs::v, juce::jlimit (1, 127, static_cast<int> (note[te::IDs::v]) + juce::roundToInt (noteRoll (id, variation, 1) * range)), nullptr);
         }
@@ -10195,6 +10219,11 @@ Result Session::addMidiNotes (const String& clipId, const std::vector<MidiNoteIn
         if (value.chance < 1) note->state.setProperty (noteChanceProperty, juce::jlimit (0.0f, 1.0f, value.chance), undo);
         if (value.velocityRange != 0) note->state.setProperty (noteVelocityRangeProperty, juce::jlimit (-127, 127, value.velocityRange), undo);
         if (value.releaseVelocity != 0) note->setNoteOffVelocity (juce::jlimit (0, 127, value.releaseVelocity), undo);
+        if (value.chanceGroup.isNotEmpty())
+        {
+            note->state.setProperty (noteGroupProperty, value.chanceGroup, undo);
+            if (value.playOne) note->state.setProperty (noteGroupPlayOneProperty, true, undo);
+        }
         for (const auto kind : { NoteExpression::pitchBend, NoteExpression::slide, NoteExpression::pressure })
             if (const auto& points = kind == NoteExpression::pitchBend ? value.pitchBend : kind == NoteExpression::slide ? value.slide : value.pressure;
                 ! points.empty() && validExpression (points, kind, value.lengthBeats))
@@ -10283,7 +10312,17 @@ Result Session::setMidiNotesActive (const String& clipId, const juce::StringArra
 Result Session::setMidiNotesChance (const String& clipId, const juce::StringArray& ids, float chance)
 {
     if (! std::isfinite (chance) || chance < 0 || chance > 1) return Result::fail ("Choose a chance from 0% to 100%.");
-    return impl->setNotesProperty (clipId, ids, noteChanceProperty, static_cast<double> (chance), 1.0, "Note chance");
+    // A grouped note's chance is its group's.
+    auto all = ids;
+    if (auto* clip = impl->midiClip (clipId))
+    {
+        std::set<String> groups;
+        for (auto* note : clip->getSequence().getNotes())
+            if (ids.contains (note->state[midiNoteIDProperty].toString()) && note->state.hasProperty (noteGroupProperty)) groups.insert (note->state[noteGroupProperty].toString());
+        for (auto* note : clip->getSequence().getNotes())
+            if (groups.count (note->state[noteGroupProperty].toString()) != 0) all.addIfNotAlreadyThere (note->state[midiNoteIDProperty].toString());
+    }
+    return impl->setNotesProperty (clipId, all, noteChanceProperty, static_cast<double> (chance), 1.0, "Note chance");
 }
 Result Session::setMidiNoteExpression (const String& clipId, const String& noteId, NoteExpression kind, const std::vector<ExpressionPoint>& points)
 {
@@ -10311,6 +10350,76 @@ Result Session::setMidiNotesReleaseVelocity (const String& clipId, const juce::S
 {
     if (velocity < 0 || velocity > 127) return Result::fail ("Choose a release velocity from 0 to 127.");
     return impl->setNotesProperty (clipId, ids, te::IDs::lift, velocity, 0, "Release velocity");
+}
+// The clip's notes by identity, or a failure for an unknown or repeated one.
+static Result notesById (te::MidiClip& clip, const juce::StringArray& ids, std::vector<te::MidiNote*>& found)
+{
+    std::map<String, te::MidiNote*> existing;
+    for (auto* note : clip.getSequence().getNotes())
+    {
+        auto [entry, inserted] = existing.emplace (note->state.getProperty (midiNoteIDProperty).toString(), note);
+        if (! inserted) entry->second = nullptr;
+    }
+    std::set<String> requested;
+    found.clear();
+    for (const auto& id : ids)
+    {
+        if (id.isEmpty() || ! requested.insert (id).second) return Result::fail ("Each selected note needs a unique identifier.");
+        const auto entry = existing.find (id);
+        if (entry == existing.end() || entry->second == nullptr) return Result::fail ("MIDI note not found or its identifier is ambiguous.");
+        found.push_back (entry->second);
+    }
+    return Result::ok();
+}
+// A probability group left with one note ends.
+static void endLoneGroups (te::MidiClip& clip, juce::UndoManager* undo)
+{
+    std::map<String, std::vector<te::MidiNote*>> groups;
+    for (auto* note : clip.getSequence().getNotes())
+        if (note->state.hasProperty (noteGroupProperty)) groups[note->state[noteGroupProperty].toString()].push_back (note);
+    for (auto& [group, members] : groups)
+        if (members.size() == 1) { members.front()->state.removeProperty (noteGroupProperty, undo); members.front()->state.removeProperty (noteGroupPlayOneProperty, undo); }
+}
+Result Session::groupMidiNotes (const String& clipId, const juce::StringArray& ids, bool playOne)
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    auto* clip = impl->midiClip (clipId); if (! clip) return Result::fail ("MIDI clip not found.");
+    if (auto frozen = impl->unfrozen (clip->getClipTrack()); frozen.failed()) return frozen;
+    std::vector<te::MidiNote*> notes;
+    if (auto r = notesById (*clip, ids, notes); r.failed()) return r;
+    if (notes.size() < 2) return Result::fail ("Select two notes or more to group them.");
+    // The group takes the chance of its earliest note, the lowest of those starting together.
+    const auto* earliest = *std::min_element (notes.begin(), notes.end(), [] (const auto* a, const auto* b)
+    { return a->getStartBeat() != b->getStartBeat() ? a->getStartBeat() < b->getStartBeat() : a->getNoteNumber() < b->getNoteNumber(); });
+    const auto chance = earliest->state.getProperty (noteChanceProperty, 1.0);
+    std::set<String> used;
+    for (auto* note : clip->getSequence().getNotes()) used.insert (note->state[noteGroupProperty].toString());
+    String group;
+    do { group = "group-" + String::toHexString (juce::Random::getSystemRandom().nextInt64()); } while (used.count (group) != 0);
+    impl->transaction (playOne ? "Group notes (Play One)" : "Group notes (Play All)");
+    auto* undo = &impl->edit->getUndoManager();
+    for (auto* note : notes)
+    {
+        note->state.setProperty (noteGroupProperty, group, undo);
+        if (playOne) note->state.setProperty (noteGroupPlayOneProperty, true, undo); else note->state.removeProperty (noteGroupPlayOneProperty, undo);
+        if (static_cast<double> (chance) < 1) note->state.setProperty (noteChanceProperty, chance, undo); else note->state.removeProperty (noteChanceProperty, undo);
+    }
+    endLoneGroups (*clip, undo);
+    impl->changed(); return Result::ok();
+}
+Result Session::ungroupMidiNotes (const String& clipId, const juce::StringArray& ids)
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    auto* clip = impl->midiClip (clipId); if (! clip) return Result::fail ("MIDI clip not found.");
+    if (auto frozen = impl->unfrozen (clip->getClipTrack()); frozen.failed()) return frozen;
+    std::vector<te::MidiNote*> notes;
+    if (auto r = notesById (*clip, ids, notes); r.failed()) return r;
+    if (std::none_of (notes.begin(), notes.end(), [] (const auto* n) { return n->state.hasProperty (noteGroupProperty); })) return Result::ok();
+    impl->transaction ("Ungroup notes");
+    auto* undo = &impl->edit->getUndoManager();
+    for (auto* note : notes) { note->state.removeProperty (noteGroupProperty, undo); note->state.removeProperty (noteGroupPlayOneProperty, undo); }
+    endLoneGroups (*clip, undo);
+    impl->changed(); return Result::ok();
 }
 Result Session::splitMidiNotes(const String& clipId,const juce::StringArray& ids,double beat,juce::StringArray& insertedIds)
 {

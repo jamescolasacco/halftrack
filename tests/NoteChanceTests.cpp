@@ -129,6 +129,62 @@ int runNoteChanceTests (const juce::File& artifacts)
             const auto bad = root.getChildFile ("bad.halftrack"); check (xml->writeTo (bad), "write a 200% chance");
             check (s.loadProject (bad).failed() && clip().notes[0].chance == .5f, "the invalid project is refused, keeping the open one");
         }
+        // Probability groups, as the reference's (its manual, section 10.5.13.1). A second note sounds on the
+        // third quarter of each pass, so each pass shows which of the two sounded.
+        {
+            const auto noteOf = [&] (const juce::String& id) { for (const auto& n : clip().notes) if (n.id == id) return n; return Session::MidiNoteInfo {}; };
+            ok (s.setMidiNotesVelocityRange (clip().id, { noteId }, 0), "no velocity range");
+            juce::StringArray more;
+            ok (s.addMidiNotes (clip().id, { { "", 67, .5, .25, 64.0f / 127, true, .5f } }, more), "a second 50% note on the third quarter");
+            const auto second = more[0];
+            const auto sounding = [&] (int count)
+            {
+                s.stop(); dispatch(); player.process (4096);
+                ok (s.launchScene (0), "launch the clip"); dispatch();
+                std::vector<std::pair<bool, bool>> heard;
+                for (int i = 0; i < count; ++i)
+                {
+                    const auto out = player.process (passSamples);
+                    heard.push_back ({ out.getMagnitude (0, 0, passSamples / 4) > .01f, out.getMagnitude (0, passSamples / 2 + 1000, passSamples / 4 - 1000) > .01f });
+                }
+                s.stop(); dispatch();
+                return heard;
+            };
+            bool apart = false;
+            for (const auto& [a, b] : sounding (64)) apart = apart || a != b;
+            check (apart, "ungrouped, the two 50% notes sound on different passes");
+            check (s.groupMidiNotes (clip().id, { noteId }, false).failed() && s.groupMidiNotes (clip().id, { noteId, "missing" }, false).failed(),
+                   "a group needs two known notes");
+            ok (s.groupMidiNotes (clip().id, { noteId, second }, false), "group them, Play All");
+            check (noteOf (noteId).chanceGroup.isNotEmpty() && noteOf (noteId).chanceGroup == noteOf (second).chanceGroup && ! noteOf (second).playOne,
+                   "both notes report the same Play All group");
+            bool together = true; int both = 0;
+            for (const auto& [a, b] : sounding (64)) { together = together && a == b; both += a && b; }
+            check (together && both >= 16 && both <= 48, "grouped Play All, they sound together or not at all, on about half the passes (" + juce::String (both) + ")");
+            ok (s.setMidiNotesChance (clip().id, { second }, 1), "set the second note's chance to 100%");
+            check (noteOf (noteId).chance == 1 && noteOf (second).chance == 1, "a grouped note's chance is its group's");
+            ok (s.groupMidiNotes (clip().id, { noteId, second }, true), "group them Play One");
+            bool one = true; int firsts = 0;
+            for (const auto& [a, b] : sounding (64)) { one = one && a != b; firsts += a; }
+            check (one && firsts > 0 && firsts < 64, "Play One at 100% plays one of the two each pass, now one, now the other (" + juce::String (firsts) + " firsts)");
+            s.undo();
+            check (noteOf (noteId).chanceGroup.isNotEmpty() && ! noteOf (noteId).playOne && ! noteOf (second).playOne, "one undo returns them to the Play All group");
+            s.redo();
+            ok (s.saveProject (project), "save the group"); ok (s.loadProject (project), "reopen it");
+            check (noteOf (noteId).chanceGroup.isNotEmpty() && noteOf (noteId).chanceGroup == noteOf (second).chanceGroup && noteOf (second).playOne, "the Play One group reopens");
+            {
+                auto xml = juce::XmlDocument::parse (project);
+                juce::XmlElement* grouped = nullptr;
+                std::function<void (juce::XmlElement&)> find = [&] (juce::XmlElement& e) { if (e.hasTagName ("NOTE") && e.hasAttribute ("halftrackChanceGroup")) grouped = &e; for (auto* c : e.getChildIterator()) find (*c); };
+                if (xml != nullptr) find (*xml);
+                check (grouped != nullptr, "find a saved grouped note");
+                grouped->setAttribute ("halftrackPlayOne", 2);
+                const auto bad = root.getChildFile ("bad group.halftrack"); check (xml->writeTo (bad), "write a broken group");
+                check (s.loadProject (bad).failed() && noteOf (second).playOne, "a broken group is refused, keeping the open project");
+            }
+            ok (s.ungroupMidiNotes (clip().id, { second }), "ungroup the second note");
+            check (noteOf (noteId).chanceGroup.isEmpty() && noteOf (second).chanceGroup.isEmpty(), "taking one of two notes out ends the group");
+        }
         std::cout << "Note chance passed: " << root.getFullPathName() << std::endl; return 0;
     }
     catch (const std::exception& e) { std::cerr << "FAIL note chance: " << e.what() << std::endl; return 1; }

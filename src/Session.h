@@ -252,6 +252,10 @@ public:
         int velocityRange = 0; // Each pass adds a random velocity between 0 and this, -127 to 127.
         std::vector<ExpressionPoint> pitchBend, slide, pressure;
         int releaseVelocity = 0; // Its note-off's velocity, 0 to 127, as the reference's Release Velocity lane edits it.
+        // Its probability group (empty for none; see groupMidiNotes), and whether the group plays one of
+        // its notes on a pass rather than all of them.
+        juce::String chanceGroup;
+        bool playOne = false;
     };
     // MIDI controller lanes in a clip: CC numbers 0-119, plus pitch bend and channel pressure.
     // Each point's value holds until the next point (step playback).
@@ -1003,6 +1007,13 @@ public:
     // The notes' release velocity, their note-offs' velocity from 0 to 127, as one undo step.
     juce::Result setMidiNotesReleaseVelocity (const juce::String& clipId, const juce::StringArray& noteIds, int velocity);
     juce::Result splitMidiNotes (const juce::String& clipId, const juce::StringArray& noteIds, double splitBeat, juce::StringArray& insertedIds);
+    // Probability groups, as the reference's (its manual, section 10.5.13.1): grouped notes share one
+    // chance, the earliest's when grouped. On each pass a Play All group plays all its notes or none,
+    // and a Play One group, at its chance, one of them chosen at random. Grouping takes the notes out of
+    // other groups; a group left with one note ends. Changing a grouped note's chance changes the
+    // group's. Each is one undo step.
+    juce::Result groupMidiNotes (const juce::String& clipId, const juce::StringArray& noteIds, bool playOne);
+    juce::Result ungroupMidiNotes (const juce::String& clipId, const juce::StringArray& noteIds);
     juce::Result transformMidiNotes (const juce::String& clipId, const juce::StringArray& noteIds, NoteTransform, double gridBeats);
     // Applies a note tool in one undo step. A transformation replaces the chosen notes with its
     // result; a generator (Euclidean, Seed) fills the clip, replacing any chosen notes. Quantize moves

@@ -37,6 +37,19 @@ Each note keeps its note-off velocity, 0 to 127, as the engine plays it (`MidiNo
 
 The UI suite drags a chance to 50%, a release velocity to the middle and Cmd-drags a velocity range to full velocity, undoing each.
 
+## Probability groups (2026-10-25)
+
+The reference's manual ([Editing MIDI](https://www.ableton.com/en/live-manual/12/editing-midi/), section 10.5.13.1, consulted 2026-10-25): grouped notes share one probability. In a Play All group all the notes play with the probability set; in a Play One group only one note plays at a time, chosen at random, according to the probability. Groups are made from the Clip Content Toolbar's Play All and Play One, the context menu's Group Notes (Play All) and Group Notes (Play One), the Edit menu, or Cmd+G, which makes the type last made from the buttons or menu. Ungroup, Cmd+Shift+G or the menu takes notes out; a note added to another group leaves its first. A grouped note shows the corner triangle even at 100%, the Chance editor shows one marker per group, a diamond for Play All and a triangle for Play One, and hovering a grouped note highlights its group.
+
+Halftrack:
+
+- **The model.** `groupMidiNotes` puts two notes or more in a new group, Play All or Play One, taking them out of other groups, with the chance of the earliest of them (the lowest of those starting together). `ungroupMidiNotes` takes notes out. A group left with one note ends. `setMidiNotesChance` on a grouped note sets its whole group's chance. Each is one undo step. Notes keep their group (`halftrackChanceGroup`) and type (`halftrackPlayOne`) with the project, in copies and in chopped parts; a project with an empty or overlong group name, or a type other than 0 or 1, is refused before it replaces the open one.
+- **Playing.** On each of the 64 passes a group decides once from its own identity: below its chance a Play All group keeps all its notes, and a Play One group one of them, chosen from the group's identity and the pass; otherwise none play. A grouped note does not roll alone.
+- **The editor.** In the note editor Cmd+G groups the selected notes as the last group made from the menu was (Play All at first) and Cmd+Shift+G ungroups them; elsewhere Cmd+G still groups tracks. The note menu has Group Notes (Play All), Group Notes (Play One) and Ungroup Notes. A note with a chance below 100%, or in a group, shows a triangle in its corner.
+- **Not followed.** The toolbar's Play All, Play One and Ungroup buttons, the Chance editor's single diamond or triangle marker per group, the hover highlight and the Status Bar's group type are missing.
+
+`tests/NoteChanceTests.cpp` renders a one-beat loop with a 50% note on its first quarter and another on its third. Ungrouped, they sound on different passes. A group of one note, or with an unknown note, is refused. Grouped Play All, they sound together or not at all on 33 of 64 passes. Setting one note to 100% sets both, and grouped Play One at 100% they never sound together and each sounds on some passes (36 firsts of 64). One undo returns the Play All group; the Play One group reopens; a broken type in a file is refused, keeping the open project; and taking one note of the two out ends the group. The UI suite groups two notes with Cmd+G in the note editor without grouping tracks, and ungroups them with Cmd+Shift+G.
+
 ## Not yet covered
 
-A clip that does not loop plays its first variation each time until its graph is rebuilt, where the reference decides on every play. Chance groups, the note inspector's numeric fields, and comparison with the reference's random distribution are missing.
+A clip that does not loop plays its first variation each time until its graph is rebuilt, where the reference decides on every play. The note inspector's numeric fields, the probability groups' toolbar buttons and Chance editor markers, and comparison with the reference's random distribution are missing.

@@ -2825,3 +2825,7 @@ Engine area. As the reference's manual says the time commands affect the time si
 ## Note Chop and drawn Split — 2026-10-25
 
 UI area. As the reference's manual describes, Cmd+E with notes selected now chops them on the grid into equal parts that stay selected, and with Cmd still held Up and Down change the parts (Shift doubling or halving them), all one undo step; with no notes selected it still splits every note at the insert marker or the timespan's edges. Holding E, a line drawn across notes splits them where it crosses them, and a drag along a note splits it where the drag ends ([note drawing contract](research/note-drawing-contract.md#split-and-chop-2026-10-25)). Checked in the UI suite.
+
+## Probability groups — 2026-10-25
+
+Engine and UI areas. Notes can now form probability groups, as the reference's manual describes: a Play All group plays all its notes or none on each pass, and a Play One group one of them at random, at the group's one chance. Cmd+G and Cmd+Shift+G group and ungroup in the note editor (elsewhere Cmd+G still groups tracks), and the note menu has both kinds; grouped notes, like notes left to chance, show a corner triangle. Groups are saved and validated on load ([note chance contract](research/note-chance-contract.md#probability-groups-2026-10-25)). Checked by the note chance and UI suites.
