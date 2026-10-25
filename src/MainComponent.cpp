@@ -526,6 +526,23 @@ private:
     bool clip = true;
 };
 
+// The decibel scale a mixer strip shows beside its meter once it is wide and tall enough, as the
+// reference's does when a widened track's meter is made taller: marks every 12 dB from 0 to -60, on
+// the meter's own scale.
+constexpr int scaledStripWidth = 150, scaledMeterHeight = 120;
+bool meterScaleShown (juce::Rectangle<int> meter, int stripWidth) { return stripWidth >= scaledStripWidth && meter.getHeight() >= scaledMeterHeight; }
+void drawMeterScale (juce::Graphics& g, juce::Rectangle<int> meter, int stripWidth)
+{
+    if (! meterScaleShown (meter, stripWidth)) return;
+    g.setFont (font (8.5f));
+    for (int db = 0; db >= -60; db -= 12)
+    {
+        const auto y = meter.getBottom() - juce::roundToInt ((float) meter.getHeight() * (float) (db + 60) / 60.0f);
+        g.setColour (muted.withAlpha (0.8f)); g.fillRect (meter.getRight() + 2, y, 3, 1);
+        g.drawText (juce::String (db), meter.getRight() + 7, y - 6, 26, 12, juce::Justification::centredLeft, false);
+    }
+}
+
 // A mixer control's look for its lane: automated controls show a red thumb, overridden ones a grey one.
 void showAutomationState (juce::Slider& slider, const Session::AutomationLane& lane, const juce::String& manualTip, const juce::String& what)
 {
@@ -2899,6 +2916,8 @@ private:
         }
         // Rows of send knobs, three to a row, above the pan control.
         int sendOffset() const noexcept { return sends.empty() ? 0 : (int) ((sends.size() + 2) / 3) * 40; }
+        // Whether the strip shows the decibel scale beside its meter (see drawMeterScale).
+        bool showsMeterScale() const { return columnLayout && gain.isVisible() && meterScaleShown (meterBounds(), getWidth()); }
         void paint (juce::Graphics& g) override
         {
             g.fillAll (owner.selectedTrack == index ? themes::colour (0xff454545) : themes::colour (0xff383838));
@@ -2909,6 +2928,7 @@ private:
             {
                 // Two-channel meter beside the fader, 0 dB to -60 dB, with the Mixer section.
                 const auto meter = meterBounds();
+                if (gain.isVisible()) drawMeterScale (g, meter, getWidth());
                 for (int channel = 0; channel < 2 && gain.isVisible(); ++channel)
                 {
                     const auto bar = meter.withWidth (4).translated (channel * 6, 0);
@@ -3354,6 +3374,7 @@ private:
                 for (size_t i = 0; i < sends.size() && sends[i]->isVisible(); ++i)
                     g.drawText (juce::String::charToString ((juce::juce_wchar) ('A' + (int) i)), sends[i]->getBounds().withY (sends[i]->getBottom()).withHeight (11), juce::Justification::centred);
                 const juce::Rectangle<int> meter { 66, gain.getY() + 4, 10, juce::jmax (10, gain.getBottom() - 20 - gain.getY()) };
+                if (gain.isVisible()) drawMeterScale (g, meter, getWidth());
                 for (int channel = 0; channel < 2 && gain.isVisible(); ++channel)
                 {
                     const auto bar = meter.withWidth (4).translated (channel * 6, 0);
@@ -5182,6 +5203,7 @@ private:
             if (cueVolume.isVisible()) g.drawText ("CUE", cueVolume.getX(), cueVolume.getBottom(), 32, 10, juce::Justification::centred);
             if (crossfader.isVisible()) { g.drawText ("A", 4, getHeight() - 34, 12, 22, juce::Justification::centred); g.drawText ("B", getWidth() - 16, getHeight() - 34, 12, 22, juce::Justification::centred); }
             const juce::Rectangle<int> meter { 66, gain.getY() + 4, 10, juce::jmax (10, gain.getBottom() - 20 - gain.getY()) };
+            if (gain.isVisible()) drawMeterScale (g, meter, getWidth());
             for (int channel = 0; channel < 2 && gain.isVisible(); ++channel)
             {
                 const auto bar = meter.withWidth (4).translated (channel * 6, 0);
@@ -24984,6 +25006,22 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
                 check (launcher.widthOf (0) == Session::minimumSessionWidth, "dragging it far left narrows it to the narrowest");
                 const auto firstId = launcher.columnId (0);
                 check (session.setSessionWidth (firstId, 0).wasOk(), "back to the usual width"); refresh();
+                // Widened and made taller, a track's strip shows a decibel scale beside its meter, as the reference's does.
+                int scaled = -1;
+                for (int i = 0; i < (int) state.tracks.size() && scaled < 0; ++i) if (! state.tracks[(size_t) i].isReturn && launcher.columnOf (i) >= 0) scaled = i;
+                const auto stripOf = [&]() -> TrackRow*
+                {
+                    for (int i = 0; i < launcher.getNumChildComponents(); ++i) if (auto* area = launcher.getChildComponent (i))
+                        for (int k = 0; k < area->getNumChildComponents(); ++k)
+                            if (auto* row = dynamic_cast<TrackRow*> (area->getChildComponent (k)); row != nullptr && scaled >= 0 && row->getTrackId() == state.tracks[(size_t) scaled].id) return row;
+                    return nullptr;
+                };
+                check (scaled >= 0 && stripOf() != nullptr && ! stripOf()->showsMeterScale(), "at its usual size a strip shows no decibel scale");
+                check (session.setSessionWidth (state.tracks[(size_t) scaled].id, 200).wasOk(), "widen its column"); refresh();
+                auto taller = state.mixerSections; taller.extraVolumeHeight = 120; session.setMixerSections (taller); refresh(); launcher.resized();
+                check (stripOf() != nullptr && stripOf()->showsMeterScale(), "widened and made taller, its strip shows a decibel scale beside the meter");
+                taller.extraVolumeHeight = 0; session.setMixerSections (taller);
+                check (session.setSessionWidth (state.tracks[(size_t) scaled].id, 0).wasOk(), "and back"); refresh();
                 check (launcher.widthOf (0) == LauncherGrid::columnWidth && launcher.columnX (1) == nextX, "and the columns are back where they were");
             }
         }

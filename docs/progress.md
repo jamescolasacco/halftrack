@@ -2745,3 +2745,7 @@ Engine and UI areas. As the reference's manual describes, a Session track's or g
 ## Grooves dropped on clips — 2026-10-24
 
 UI area. A groove dragged from the browser onto a MIDI clip, in the Arrangement or a Session slot, joins the Groove Pool and grooves that clip; dropped anywhere else, it joins the pool alone ([contract](research/browser-places-contract.md#dragging-2026-10-24)). Checked in the UI suite.
+
+## Mixer meters' decibel scale — 2026-10-24
+
+UI area. As the reference's manual describes, a widened mixer strip whose meter is made taller shows a decibel scale beside it, marked every 12 dB from 0 to -60, on track, group and Main strips in either mixer ([contract](research/mixer-sections-contract.md#the-arrangements-mixer-2026-10-24)). Checked in the UI suite.

@@ -74,7 +74,8 @@ The track order suite saves and reopens chosen controls; the UI suite hides and 
 - **Focus Mixer** (Option+Shift+M) is the Arrangement's. It shows the Arrangement's mixer and gives it the keys. There Left and Right select the strip beside the selected one. In the Session it is greyed.
 - **Taller faders.** Dragging the top edge of either mixer up makes its faders and meters taller, and dragging it down returns them to their usual height, no shorter; the Session's leaves the clip grid at least a row. Each mixer keeps its own height with the project as view state (`MixerSections::extraVolumeHeight`, up to 600 pixels more), as the reference keeps `ViewStateSessionMixerVolumeSectionHeight` and `ViewStateArrangerMixerVolumeSectionHeight` with its Set (120 at first in its default Set), after its manual's section 18.1.1: "dragging upwards on the top of the mixer will extend the height of the track meters".
 - **Column widths.** In the Session, a track's or group's column widens or narrows by dragging its right edge in the title row, from 60 to 400 pixels, the columns after it and the Main column moving along, and its clip slots and mixer strip with it. Each width is kept with its track or group in the project, outside the undo history (`Session::setSessionWidth`), as the reference keeps each track's `ViewStateSessionTrackWidth` (manual section 18.2: tracks' edges drag their width in the Session View).
-- **Missing.** The decibel scale a wider strip shows beside a taller meter, the Arrangement mixer's own strip widths, Performance Impact and FX Slots.
+- **The decibel scale.** A strip at least 150 pixels wide whose meter is at least 120 pixels tall shows a scale beside the meter, marked every 12 dB from 0 to -60 on the meter's own scale, as the manual says a widened track's taller meter gains one (section 18.1.1). Track, group and Main strips show it, in either mixer.
+- **Missing.** The Arrangement mixer's own strip widths, Performance Impact and FX Slots.
 
 ### Evidence in Halftrack
 
@@ -96,4 +97,5 @@ The UI suite checks:
 - that the mixer view control hides it and follows the Session's mixer in the Session;
 - that Focus Mixer is greyed in the Session, and in the Arrangement shows the mixer;
 - that dragging the Session mixer's top edge up makes its strips and faders taller without an undo step, and dragging it far down returns them to their usual height; and that the Arrangement mixer's edge does the same for its own;
-- that a column's edge widens it, moving the columns after it and widening its strip, without an undo step, narrows it no further than 60 pixels, and returns to the usual width.
+- that a column's edge widens it, moving the columns after it and widening its strip, without an undo step, narrows it no further than 60 pixels, and returns to the usual width;
+- that a strip at its usual size shows no decibel scale, and widened and made taller shows one.
