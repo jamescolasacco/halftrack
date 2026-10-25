@@ -594,7 +594,7 @@ public:
                  &playButton, &stopButton, &recordButton, &overdubButton, &sessionRecordButton, &automationArmButton, &reEnableButton, &captureButton, &punchInButton, &punchOutButton, &followButton, &tempo, &nudgeDown, &nudgeUp, &meterLabel, &extButton, &tapButton, &loopButton, &clickButton, &clickSettingsButton, &positionLabel, &loopStartLabel, &loopLengthLabel, &quantisation, &backToArrangement,
                  &projectLabel, &audioButton, &addTrackButton, &addMidiButton, &newMidiClipButton, &sessionTab, &arrangementTab, &pianoTab, &importButton, &filesButton, &pluginsButton,
                  &folderButton, &upButton, &browserSearch, &browserList, &browserSidebar, &browseBack, &browseForward, &hotSwapLabel, &hotSwapClose, &info, &overview, &ruler, &timeRuler, &viewport,
-                 &horizontalScroll, &gridReadout, &zoomIn, &zoomOut, &fitButton, &launcher, &arrangementMixer, &pianoRoll, &audioClipView, &midiLaunch, &clipLoop, &clipGroove, &deviceChain,
+                 &horizontalScroll, &gridReadout, &zoomIn, &zoomOut, &fitButton, &launcher, &arrangementMixer, &pianoRoll, &audioClipView, &midiLaunch, &clipLoop, &clipGroove, &clipTitle, &deviceChain,
                  &mixerViewButton, &mixerViewOptions, &clipViewSelector, &deviceViewSelector })
             addAndMakeVisible (child);
         // The Clip View and Device View selectors beside it: a click shows its view, or hides the
@@ -1104,16 +1104,24 @@ public:
         // A Session MIDI clip shows its Launch box to the left of the note editor.
         const auto* launchClip = clipShown && ! audioClip ? sessionMidiClip() : nullptr;
         auto editor = clipArea;
+        // The clip's title bar runs over its boxes, as the reference's runs over its panels.
+        const auto* titledClip = clipShown && ! audioClip ? currentMidiClip() : nullptr;
+        clipTitle.setVisible (titledClip != nullptr);
+        const bool folded = titledClip != nullptr && clipPanelsFolded;
+        auto panels = titledClip != nullptr && ! folded ? editor.removeFromLeft ((launchClip != nullptr ? LaunchBox::width : 0) + LoopBox::width + GrooveBox::width) : juce::Rectangle<int>();
+        if (folded) { clipTitle.setBounds (editor.removeFromLeft (6 + ClipTitleBar::height + 6).reduced (0, 6).withTrimmedLeft (6).withTrimmedRight (6)); clipTitle.sync(); }
+        else if (titledClip != nullptr) { clipTitle.setBounds (panels.withTrimmedLeft (6).withTrimmedTop (6).withHeight (ClipTitleBar::height)); panels.removeFromTop (6 + ClipTitleBar::height); clipTitle.sync(); }
+        if (folded) launchClip = nullptr; // Folded, the boxes hide.
         midiLaunch.setVisible (launchClip != nullptr);
-        if (launchClip != nullptr) { midiLaunch.setBounds (editor.removeFromLeft (LaunchBox::width).reduced (0, 6).withTrimmedLeft (6)); midiLaunch.setClip (*launchClip); }
+        if (launchClip != nullptr) { midiLaunch.setBounds (panels.removeFromLeft (LaunchBox::width).withTrimmedBottom (6).withTrimmedTop (4).withTrimmedLeft (6)); midiLaunch.setClip (*launchClip); }
         // Every MIDI clip shows its Loop box: Start, End, Loop, Position and Length.
-        const auto* loopClip = clipShown && ! audioClip ? currentMidiClip() : nullptr;
+        const auto* loopClip = clipShown && ! audioClip && ! folded ? currentMidiClip() : nullptr;
         clipLoop.setVisible (loopClip != nullptr);
-        if (loopClip != nullptr) { clipLoop.setBounds (editor.removeFromLeft (LoopBox::width).reduced (0, 6).withTrimmedLeft (6)); clipLoop.setClip (*loopClip); }
+        if (loopClip != nullptr) { clipLoop.setBounds (panels.removeFromLeft (LoopBox::width).withTrimmedBottom (6).withTrimmedTop (4).withTrimmedLeft (6)); clipLoop.setClip (*loopClip); }
         // Every MIDI clip shows its Groove section beside the note editor.
-        const auto* grooveClip = clipShown && ! audioClip ? currentMidiClip() : nullptr;
+        const auto* grooveClip = clipShown && ! audioClip && ! folded ? currentMidiClip() : nullptr;
         clipGroove.setVisible (grooveClip != nullptr);
-        if (grooveClip != nullptr) { clipGroove.setBounds (editor.removeFromLeft (GrooveBox::width).reduced (0, 6).withTrimmedLeft (6)); clipGroove.setClip (*grooveClip); }
+        if (grooveClip != nullptr) { clipGroove.setBounds (panels.removeFromLeft (GrooveBox::width).withTrimmedBottom (6).withTrimmedTop (4).withTrimmedLeft (6)); clipGroove.setClip (*grooveClip); }
         pianoRoll.setBounds (editor);
         pianoRoll.setVisible (clipShown && ! audioClip);
         audioClipView.setBounds (clipArea);
@@ -6959,6 +6967,59 @@ private:
             owner.report (owner.session.setClipEnvelope (clipId, next)); owner.refresh();
         }
     };
+    // The Clip View's title bar, as the reference's: the clip's activator and its name in its colour,
+    // over the clip's panels; its menu renames and colours the clip (Impl::clipTitleMenu).
+    class ClipTitleBar final : public juce::Component
+    {
+    public:
+        static constexpr int height = 22;
+        explicit ClipTitleBar (Impl& o) : owner (o)
+        {
+            setName ("Clip title bar");
+            activator.setName ("Clip activator"); activator.setClickingTogglesState (false);
+            activator.setWantsKeyboardFocus (false); activator.setMouseClickGrabsKeyboardFocus (false);
+            activator.setColour (juce::TextButton::buttonOnColourId, themes::colour (0xffffcf4a));
+            activator.setTooltip ("Clip Activator: a deactivated clip does not play");
+            activator.onClick = [this] { if (const auto* clip = owner.shownClip()) { owner.report (owner.session.setClipActive (clip->id, ! clip->active)); owner.refresh(); } };
+            addAndMakeVisible (activator);
+        }
+        void sync()
+        {
+            const auto* clip = owner.shownClip();
+            activator.setToggleState (clip != nullptr && clip->active, juce::dontSendNotification);
+            activator.setEnabled (clip != nullptr && ! owner.session.isExporting());
+            const auto title = clip != nullptr ? clip->name : juce::String();
+            if (title != getProperties()[infoTitleProperty].toString()) getProperties().set (infoTitleProperty, title);
+            repaint();
+        }
+        // Folded panels leave it a strip down their left, the name running up it.
+        bool vertical() const { return getHeight() > getWidth(); }
+        void resized() override { if (vertical()) activator.setBounds (4, 4, getWidth() - 8, 14); else activator.setBounds (4, 4, 14, getHeight() - 8); }
+        void paint (juce::Graphics& g) override
+        {
+            const auto* clip = owner.shownClip();
+            const auto colour = clip != nullptr ? clip->colour : muted;
+            g.setColour (clip == nullptr || clip->active ? colour : colour.withMultipliedSaturation (0.25f).darker (0.2f)); g.fillRect (getLocalBounds());
+            g.setColour (themes::colour (0xff141414)); g.setFont (font (11.0f, true));
+            const auto name = clip != nullptr ? clip->name : juce::String();
+            if (! vertical()) { g.drawText (name, getLocalBounds().withTrimmedLeft (24).reduced (4, 0), juce::Justification::centredLeft, true); return; }
+            g.saveState();
+            g.addTransform (juce::AffineTransform::rotation (-juce::MathConstants<float>::halfPi, 0.0f, 0.0f).translated (0.0f, (float) getHeight()));
+            g.drawText (name, juce::Rectangle<int> (4, 0, getHeight() - 30, getWidth()), juce::Justification::centredLeft, true);
+            g.restoreState();
+        }
+        void mouseDoubleClick (const juce::MouseEvent& e) override { if (! e.mods.isPopupMenu()) owner.setClipPanelsFolded (! owner.clipPanelsFolded); }
+        void mouseDown (const juce::MouseEvent& e) override
+        {
+            if (! e.mods.isPopupMenu()) return;
+            auto colour = std::make_shared<int> (-1);
+            owner.clipTitleMenu (colour).showMenuAsync (juce::PopupMenu::Options().withTargetComponent (this),
+                [safe = juce::Component::SafePointer<Impl> (&owner), colour] (int item) { if (safe != nullptr) safe->chooseClipTitleItem (item, *colour); });
+        }
+    private:
+        Impl& owner;
+        juce::TextButton activator;
+    };
     class AudioClipView final : public juce::Component, private juce::ChangeListener
     {
     public:
@@ -7073,6 +7134,7 @@ private:
             envelopesTab.setTooltip ("Envelopes: the clip's envelopes, drawn over the waveform  |  Option+Shift+2");
             sampleTab.setToggleState (true, juce::dontSendNotification);
             envelopeChoice.setVisible (false);
+            addAndMakeVisible (title);
             thumbnail.addChangeListener (this);
         }
         ~AudioClipView() override { thumbnail.removeChangeListener (this); if (gesture) owner.session.endEditGesture(); }
@@ -7081,10 +7143,13 @@ private:
             const auto* selected = owner.selectedAudioClip();
             if (selected == nullptr) return false;
             clip = *selected;
+            title.sync();
+            const bool folded = owner.clipPanelsFolded;
+            if (folded != laidOutFolded) { laidOutFolded = folded; showBoxes (! folded); if (! folded) { launch.setVisible (owner.showSession); loopBox.setVisible (clip.canLoop); } resized(); }
             // Session clips show their Launch box between the Clip and Sample boxes.
-            if (launch.isVisible() != owner.showSession) { launch.setVisible (owner.showSession); resized(); }
+            if (! folded && launch.isVisible() != owner.showSession) { launch.setVisible (owner.showSession); resized(); }
             // A warped clip shows its Loop box after the Launch box.
-            if (loopBox.isVisible() != clip.canLoop) { loopBox.setVisible (clip.canLoop); resized(); }
+            if (! folded && loopBox.isVisible() != clip.canLoop) { loopBox.setVisible (clip.canLoop); resized(); }
             if (clip.canLoop) loopBox.setClip (clip);
             if (owner.showSession) launch.setClip (clip);
             if (clip.file != shownFile) { shownFile = clip.file; thumbnail.setSource (clip.file.existsAsFile() ? new juce::FileInputSource (clip.file) : nullptr); }
@@ -7096,9 +7161,9 @@ private:
             mode.setSelectedId (modeId (clip.warp.mode), juce::dontSendNotification); mode.setEnabled (warped);
             using Mode = Session::WarpMode;
             const auto shown = clip.warp.mode;
-            transientLoop.setVisible (shown == Mode::beats); transientEnvelope.setVisible (shown == Mode::beats);
-            grainSize.setVisible (shown == Mode::tones || shown == Mode::texture); flux.setVisible (shown == Mode::texture);
-            formants.setVisible (shown == Mode::complexPro);
+            transientLoop.setVisible (! folded && shown == Mode::beats); transientEnvelope.setVisible (! folded && shown == Mode::beats);
+            grainSize.setVisible (! folded && (shown == Mode::tones || shown == Mode::texture)); flux.setVisible (! folded && shown == Mode::texture);
+            formants.setVisible (! folded && shown == Mode::complexPro);
             transientLoop.setSelectedId ((int) clip.warp.transientLoop + 1, juce::dontSendNotification);
             const auto show = [] (juce::Slider& slider, double value) { if (! slider.isMouseButtonDown()) slider.setValue (value, juce::dontSendNotification); slider.updateText(); };
             show (transientEnvelope, clip.warp.transientEnvelope);
@@ -7176,8 +7241,10 @@ private:
         EditorTab shownTab() const noexcept { return tab; }
         void resized() override
         {
-            launch.setBounds (clipBox().getRight() + 6, 6, LaunchBox::width, getHeight() - 12);
-            loopBox.setBounds (clipBox().getRight() + 6 + (launch.isVisible() ? LaunchBox::width + 6 : 0), 6, LoopBox::width, getHeight() - 12);
+            if (owner.clipPanelsFolded) title.setBounds (6, 6, ClipTitleBar::height, getHeight() - 12);
+            else title.setBounds (6, 6, sampleBox().getRight() - 6, ClipTitleBar::height);
+            launch.setBounds (clipBox().getRight() + 6, boxTop, LaunchBox::width, clipBox().getHeight());
+            loopBox.setBounds (clipBox().getRight() + 6 + (launch.isVisible() ? LaunchBox::width + 6 : 0), boxTop, LoopBox::width, clipBox().getHeight());
             auto sample = sampleBox();
             sample.removeFromTop (24);
             auto row = sample.removeFromTop (22).reduced (6, 0);
@@ -7207,6 +7274,11 @@ private:
         void paint (juce::Graphics& g) override
         {
             g.fillAll (themes::colour (0xff262626));
+            if (! owner.clipPanelsFolded) paintBoxes (g);
+            paintWave (g);
+        }
+        void paintBoxes (juce::Graphics& g)
+        {
             for (auto box : { clipBox(), sampleBox() })
             {
                 g.setColour (themes::colour (0xff303030)); g.fillRect (box);
@@ -7218,8 +7290,6 @@ private:
             g.drawText ("Sample", sampleBox().withHeight (22).reduced (6, 0), juce::Justification::centredLeft);
             auto details = clipBox().withTrimmedTop (28).reduced (8, 0);
             g.setFont (font (11.0f));
-            g.setColour (owner.selectedTrackColour()); g.fillRect (details.removeFromTop (20));
-            g.setColour (themes::colour (0xff141414)); g.drawText (clip.name, details.translated (0, -20).withHeight (20).reduced (5, 0), juce::Justification::centredLeft, true);
             g.setColour (muted);
             const auto line1 = "Start  " + juce::String (clip.start, 3) + " s", line2 = "Length  " + juce::String (clip.length, 3) + " s";
             g.drawText (line1, details.removeFromTop (20).withTrimmedTop (4), juce::Justification::centredLeft);
@@ -7228,6 +7298,9 @@ private:
             g.drawText ("Seg. BPM", sampleBox().getX() + 6, bpm.getY(), 52, bpm.getHeight(), juce::Justification::centredLeft);
             for (auto [knob, name] : { std::pair<juce::Component*, const char*> { &transpose, "Transpose" }, { &detune, "Detune" }, { &gain, "Gain" } })
                 g.drawText (name, knob->getBounds().withY (knob->getY() - 14).withHeight (14), juce::Justification::centred);
+        }
+        void paintWave (juce::Graphics& g)
+        {
             // Waveform of the visible source span, with beat lines when warped. A warped clip is drawn
             // in its beats, each warp segment over its own beats.
             const auto wave = waveBounds();
@@ -7308,6 +7381,7 @@ private:
         juce::ComboBox mode, transientLoop;
         juce::Slider transientEnvelope, grainSize, flux, formants, transpose, detune;
         Session::WarpMode laidOutMode = Session::WarpMode::off;
+        bool laidOutFolded = false;
         juce::Label bpm;
         juce::Slider gain;
         LaunchBox launch { owner };
@@ -7315,11 +7389,21 @@ private:
         bool gesture = false;
         // The Launch and Loop boxes' room between the Clip and Sample boxes.
         int launchSpace() const { return (launch.isVisible() ? LaunchBox::width + 6 : 0) + (loopBox.isVisible() ? LoopBox::width + 6 : 0); }
-        juce::Rectangle<int> clipBox() const { return { 6, 6, 170, getHeight() - 12 }; }
-        juce::Rectangle<int> sampleBox() const { return { 182 + launchSpace(), 6, 200, getHeight() - 12 }; }
+        // The boxes stand under the title bar.
+        static constexpr int boxTop = 6 + ClipTitleBar::height + 4;
+        juce::Rectangle<int> clipBox() const { return { 6, boxTop, 170, getHeight() - boxTop - 6 }; }
+        juce::Rectangle<int> sampleBox() const { return { 182 + launchSpace(), boxTop, 200, getHeight() - boxTop - 6 }; }
         // The tabs' row over the waveform.
-        juce::Rectangle<int> tabRow() const { return { 390 + launchSpace(), 6, juce::jmax (40, getWidth() - 396 - launchSpace()), 22 }; }
-        juce::Rectangle<int> waveBounds() const { return { 390 + launchSpace(), 32, juce::jmax (40, getWidth() - 396 - launchSpace()), juce::jmax (20, getHeight() - 38) }; }
+        // The editor's left edge: past the boxes, or past the title's strip while the panels are folded.
+        int editorLeft() const { return owner.clipPanelsFolded ? 6 + ClipTitleBar::height + 6 : 390 + launchSpace(); }
+        juce::Rectangle<int> tabRow() const { return { editorLeft(), 6, juce::jmax (40, getWidth() - editorLeft() - 6), 22 }; }
+        juce::Rectangle<int> waveBounds() const { return { editorLeft(), 32, juce::jmax (40, getWidth() - editorLeft() - 6), juce::jmax (20, getHeight() - 38) }; }
+        // Folded, the boxes and their controls hide; unfolded, sync shows them as the clip has them.
+        void showBoxes (bool shown)
+        {
+            for (auto* c : std::initializer_list<juce::Component*> { &warp, &mode, &bpm, &halve, &twice, &gain, &reverse, &transpose, &detune }) c->setVisible (shown);
+            if (! shown) for (auto* c : std::initializer_list<juce::Component*> { &transientLoop, &transientEnvelope, &grainSize, &flux, &formants, &launch, &loopBox }) c->setVisible (false);
+        }
         // Chooser items in the reference's order, with Halftrack's cheaper Complex last.
         static constexpr Session::WarpMode chooserModes[] { Session::WarpMode::beats, Session::WarpMode::tones, Session::WarpMode::texture, Session::WarpMode::repitch,
                                                             Session::WarpMode::stretch, Session::WarpMode::complexPro, Session::WarpMode::efficient };
@@ -7577,6 +7661,7 @@ private:
         EditorTab tab = EditorTab::content;
         std::optional<EnvelopeChoice> keptEnvelope; // The Envelopes tab's envelope, while the Sample tab shows.
         juce::TextButton sampleTab { "Sample" }, envelopesTab { "Envelopes" };
+        ClipTitleBar title { owner };
     };
 
     class PianoRoll final : public juce::Component, private juce::ScrollBar::Listener
@@ -10597,6 +10682,7 @@ private:
     AudioClipView audioClipView { *this };
     LaunchBox midiLaunch { *this };
     LoopBox clipLoop { *this };
+    ClipTitleBar clipTitle { *this };
    #if JUCE_MAC
     // The Video window, after the reference's: the picture of the video clip under the play head,
     // playing along while the transport plays. The clip plays the movie's sound, so the picture is silent.
@@ -13556,13 +13642,18 @@ private:
         arrangementMixer.sync();
         mixerViewButton.setToggleState (shownMixer().shown, juce::dontSendNotification);
         pianoRoll.sync();
-        if (showPiano && (audioClipView.isVisible() != (selectedAudioClip() != nullptr) || midiLaunch.isVisible() != (selectedAudioClip() == nullptr && sessionMidiClip() != nullptr)
-                          || clipGroove.isVisible() != (selectedAudioClip() == nullptr && currentMidiClip() != nullptr)
-                          || clipLoop.isVisible() != (selectedAudioClip() == nullptr && currentMidiClip() != nullptr))) resized();
+        {
+            // The clip view's boxes as the clip has them, unless its panels are folded.
+            const bool boxes = ! clipPanelsFolded && selectedAudioClip() == nullptr;
+            if (showPiano && (audioClipView.isVisible() != (selectedAudioClip() != nullptr) || midiLaunch.isVisible() != (boxes && sessionMidiClip() != nullptr)
+                              || clipGroove.isVisible() != (boxes && currentMidiClip() != nullptr) || clipLoop.isVisible() != (boxes && currentMidiClip() != nullptr)
+                              || clipTitle.isVisible() != (selectedAudioClip() == nullptr && currentMidiClip() != nullptr))) resized();
+        }
         if (audioClipView.isVisible()) audioClipView.sync();
         if (midiLaunch.isVisible()) if (const auto* clip = sessionMidiClip()) midiLaunch.setClip (*clip);
         if (clipGroove.isVisible()) if (const auto* clip = currentMidiClip()) clipGroove.setClip (*clip);
         if (clipLoop.isVisible()) if (const auto* clip = currentMidiClip()) clipLoop.setClip (*clip);
+        if (clipTitle.isVisible()) clipTitle.sync();
         if (groovePool != nullptr) groovePool->sync();
         if (auto* history = undoHistory()) history->sync();
         newMidiClipButton.setEnabled (currentTrack() != nullptr && currentTrack()->isMidi && ! currentTrack()->isReturn);
@@ -14405,6 +14496,37 @@ private:
     }
     // The clip view and the device view share the detail view, as the reference's do.
     void showClipView (bool clip) { if (clip == showPiano) return; if (clip) openPianoRoll(); else closeClipView(); }
+    // The clip the clip view shows: the selected audio clip, or the MIDI clip.
+    const Session::ClipInfo* shownClip() const { if (const auto* audio = selectedAudioClip()) return audio; return currentMidiClip(); }
+    // The clip title bar's menu, as the reference's: Rename, and the palette.
+    static constexpr int clipTitleRename = 1, clipTitleColour = 2, clipTitleFold = 3;
+    juce::PopupMenu clipTitleMenu (std::shared_ptr<int> colour)
+    {
+        juce::PopupMenu menu;
+        const auto* clip = shownClip();
+        menu.addItem (menuEntry (clipTitleRename, "Rename", clip != nullptr));
+        menu.addSeparator();
+        if (clip != nullptr) menu.addCustomItem (clipTitleColour, std::make_unique<ColourGrid> (std::vector<juce::Colour> { clip->colour }, std::move (colour)), nullptr, "Clip Colours");
+        menu.addSeparator();
+        menu.addItem (menuEntry (clipTitleFold, "Fold", true, clipPanelsFolded));
+        return menu;
+    }
+    void chooseClipTitleItem (int item, int colour)
+    {
+        if (item == clipTitleFold) { setClipPanelsFolded (! clipPanelsFolded); return; }
+        const auto* clip = shownClip(); if (clip == nullptr) return;
+        if (item == clipTitleRename) renameClipDialog (clip->id);
+        else if (item == clipTitleColour && colour >= 0) { report (session.setClipColours ({ clip->id }, paletteColour (colour))); refresh(); }
+    }
+    // The title bar's Fold, or a double-click on it, minimizes the clip's panels, as the reference's
+    // does: the boxes hide and the title runs down a strip at the left, the editor taking the width.
+    bool clipPanelsFolded = false;
+    void setClipPanelsFolded (bool folded)
+    {
+        clipPanelsFolded = folded;
+        resized(); if (audioClipView.isVisible()) audioClipView.sync();
+        repaint();
+    }
     // The corner's selectors: a click shows the view, or hides the detail view while it shows it;
     // with toggle (Option held) it switches between the Clip View and the Device View.
     void chooseDetailView (bool clip, bool toggle)
@@ -21970,6 +22092,49 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
                 clipViewSelector.onClick();
                 check (clipViewOpen() && ! deviceViewOpen() && ! deviceChain.isVisible() && ! stackDevices, "a click on the Clip View selector shows the clip view alone");
             }
+            {
+                // The Clip View's title bar, as the reference's: the clip's activator and name in its colour, over its panels.
+                const auto* clip = currentMidiClip();
+                auto* activator = dynamic_cast<juce::Button*> (findNamed (clipTitle, "Clip activator"));
+                check (clip != nullptr && clipTitle.isVisible() && activator != nullptr && activator->getToggleState() && clipTitle.getBottom() <= clipLoop.getY()
+                           && clipTitle.getX() <= clipLoop.getX() && clipTitle.getRight() >= clipGroove.getRight() - 1 && clipTitle.getProperties()[infoTitleProperty].toString() == clip->name,
+                       "the clip's title bar runs over its boxes, naming it, its activator lit");
+                const auto id = clip->id;
+                activator->onClick();
+                check (! currentMidiClip()->active && ! activator->getToggleState(), "its activator deactivates the clip");
+                activator->onClick();
+                check (currentMidiClip()->active, "and activates it again");
+                auto colour = std::make_shared<int> (-1);
+                const auto menu = clipTitleMenu (colour);
+                bool renames = false, colours = false;
+                for (juce::PopupMenu::MenuItemIterator items (menu); items.next();)
+                { renames = renames || (items.getItem().itemID == clipTitleRename && items.getItem().isEnabled); colours = colours || (items.getItem().itemID == clipTitleColour && items.getItem().customComponent != nullptr); }
+                check (renames && colours, "its menu offers Rename and the clip colours");
+                chooseClipTitleItem (clipTitleColour, 5);
+                check (currentMidiClip()->id == id && currentMidiClip()->colour == paletteColour (5), "choosing a colour colours the clip");
+                session.undo(); session.undo(); session.undo(); refresh(); // The colour and both activations.
+                check (currentMidiClip() != nullptr && currentMidiClip()->active && currentMidiClip()->colour != paletteColour (5), "three undo steps take them back");
+                // Fold, from a double-click or the menu, minimizes the panels to a strip, the editor taking their width.
+                const auto editorWas = pianoRoll.getBounds();
+                const auto when = juce::Time::getCurrentTime();
+                const auto centre = clipTitle.getLocalBounds().getCentre().toFloat();
+                clipTitle.mouseDoubleClick (juce::MouseEvent (juce::Desktop::getInstance().getMainMouseSource(), centre, juce::ModifierKeys (juce::ModifierKeys::leftButtonModifier), 1.0f,
+                                                              0, 0, 0, 0, &clipTitle, &clipTitle, when, centre, when, 2, false));
+                check (clipPanelsFolded && ! clipLoop.isVisible() && ! clipGroove.isVisible() && clipTitle.isVisible() && clipTitle.getHeight() > clipTitle.getWidth()
+                           && pianoRoll.getX() < editorWas.getX() && pianoRoll.getRight() == editorWas.getRight(), "a double-click on the title bar folds the panels into a strip, the editor taking their width");
+                refresh();
+                check (clipPanelsFolded && ! clipLoop.isVisible(), "and they stay folded");
+                if (const auto* configured = std::getenv ("HALFTRACK_TEST_UI_SNAPSHOT_DIRECTORY"))
+                    if (const juce::File directory (juce::String::fromUTF8 (configured)); directory.createDirectory().wasOk())
+                    {
+                        juce::PNGImageFormat png; const auto output = directory.getChildFile ("clip-panels-folded.png");
+                        if (auto stream = output.createOutputStream(); stream && stream->setPosition (0) && stream->truncate().wasOk()
+                            && png.writeImageToStream (createComponentSnapshot (getLocalBounds(), true, 1.0f), *stream))
+                            std::cout << "UI SNAPSHOT " << output.getFullPathName() << std::endl;
+                    }
+                chooseClipTitleItem (clipTitleFold, -1);
+                check (! clipPanelsFolded && clipLoop.isVisible() && clipGroove.isVisible() && pianoRoll.getBounds() == editorWas, "the menu's Fold unfolds them");
+            }
             session.undo(); selectedClip = -1; closeClipView(); refresh();
             showBrowser = false; resized();
             menuItemSelected (menuFocusBrowser, 5);
@@ -22367,6 +22532,18 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         check (audioClipView.isVisible() && chooser != nullptr && ! chooser->isVisible() && envelopesButton != nullptr && audioClipView.shownTab() == EditorTab::content
                    && viewEntry (menuContentEditor).text == "Sample" && viewEntry (menuContentEditor).isTicked && ! viewEntry (menuExpressionEditor).isEnabled,
                "an audio clip's editor shows its Sample tab at first, without envelopes, and has no MPE tab");
+        {
+            auto* audioTitle = findNamed (audioClipView, "Clip title bar");
+            check (audioTitle != nullptr && audioTitle->isVisible() && audioTitle->getY() < 10 && audioTitle->getWidth() > 300
+                       && audioTitle->getProperties()[infoTitleProperty].toString() == state.tracks[0].clips[0].name, "an audio clip's title bar runs over its boxes, naming it");
+            auto* warpSwitch = findNamed (audioClipView, "Clip warp");
+            const auto waveWas = audioClipView.envelopeArea();
+            setClipPanelsFolded (true); refresh();
+            check (warpSwitch != nullptr && ! warpSwitch->isVisible() && audioTitle->getHeight() > audioTitle->getWidth() && audioClipView.envelopeArea().getX() < waveWas.getX()
+                       && audioClipView.envelopeArea().getX() < 60, "folded, an audio clip's boxes hide and its waveform takes their width");
+            setClipPanelsFolded (false); refresh();
+            check (warpSwitch->isVisible() && audioTitle->getWidth() > 300 && audioClipView.envelopeArea() == waveWas, "unfolded, they come back");
+        }
         envelopesButton->onClick(); refresh();
         const int volumeItem = findItem (*chooser, "Modulation", "Track Volume");
         check (chooser->isVisible() && audioClipView.shownTab() == EditorTab::envelopes && envelopesButton->getToggleState() && volumeItem > 0 && findItem (*chooser, "Automation", "Track Volume") == 0,

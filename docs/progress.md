@@ -2725,3 +2725,7 @@ UI area. As the reference's corner has them, the Clip View and Device View selec
 ## Stacked Clip and Device Views — 2026-10-24
 
 UI area. As the reference's manual describes, the triangles on the Clip View and Device View selectors open or close each view while the other stays, so the two stack: the device view runs under the clip view. A click on a selector shows its view alone ([layout contract](research/window-layout-contract.md)). Checked in the UI suite.
+
+## The Clip View's title bar — 2026-10-24
+
+UI area. As the reference's Clip View has one, a title bar runs over the clip's boxes, MIDI and audio: the clip's name in its colour, dimmed while deactivated, and its activator. Its right-click menu renames the clip, colours it from the palette and folds the panels, as a double-click on it does: the boxes hide and the title runs down a strip at the left, the editor taking the width ([clip view contract](research/clip-view-contract.md)). Checked in the UI suite.
