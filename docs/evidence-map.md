@@ -54,7 +54,7 @@ Each capability with partial implementation (a PARTIAL row of the [capability le
 | WRP-007 | ui, warp-modes |  |
 | WRP-008 | warp |  |
 | WRP-009 | grooves, ui |  |
-| WRP-010 | slicing, ui |  |
+| WRP-010 | convert-midi, slicing, ui |  |
 | WRP-011 | shared-media |  |
 | MID-001 | note-tools, note-preview, ui |  |
 | MID-002 | note-tools, ui |  |

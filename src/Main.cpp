@@ -45,6 +45,7 @@ int runCrossfadeTests (const juce::File&);
 int runTimeEditTests (const juce::File&);
 int runTrackDelayTests (const juce::File&);
 int runTrackColourTests (const juce::File&);
+int runConvertMidiTests (const juce::File&);
 int runMidiControllerTests (const juce::File&);
 int runRangeEditTests (const juce::File&);
 int runTimeSignatureTests (const juce::File&);
@@ -799,6 +800,12 @@ public:
         {
             const int i = args.indexOf ("--self-test-track-delay");
             setApplicationReturnValue (runTrackDelayTests (juce::File (args[i + 1])));
+            quit(); return;
+        }
+        if (args.contains ("--self-test-convert-midi"))
+        {
+            const int i = args.indexOf ("--self-test-convert-midi");
+            setApplicationReturnValue (runConvertMidiTests (juce::File (args[i + 1])));
             quit(); return;
         }
         if (args.contains ("--self-test-track-colours"))

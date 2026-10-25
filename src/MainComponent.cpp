@@ -13687,6 +13687,18 @@ private:
         report (session.sliceToNewMidiTrack (id, by, trackId)); refresh();
         for (int t = 0; t < (int) state.tracks.size(); ++t) if (state.tracks[(size_t) t].id == trackId) { selectTrack (t); selectedClip = 0; refresh(); }
     }
+    // Convert Harmony, Melody and Drums to New MIDI Track (Session::convertToNewMidiTrack), selecting the new track.
+    static std::array<std::pair<Session::ConvertKind, const char*>, 3> convertCommands()
+    {
+        return { { { Session::ConvertKind::harmony, "Convert Harmony to New MIDI Track" }, { Session::ConvertKind::melody, "Convert Melody to New MIDI Track" },
+                   { Session::ConvertKind::drums, "Convert Drums to New MIDI Track" } } };
+    }
+    void convertClip (const juce::String& id, Session::ConvertKind kind)
+    {
+        juce::String trackId;
+        report (session.convertToNewMidiTrack (id, kind, trackId)); refresh();
+        for (int t = 0; t < (int) state.tracks.size(); ++t) if (state.tracks[(size_t) t].id == trackId) { selectTrack (t); selectedClip = 0; refresh(); }
+    }
     void focusMidiClip (const juce::String& id)
     {
         const auto [t, c] = locateClip (id);
@@ -14487,7 +14499,8 @@ private:
                            arrangementConsolidate, arrangementConsolidateScene, arrangementExportMidi, arrangementInsertMidi, arrangementVideo,
                            arrangementReveal, arrangementSimilar, arrangementFade, arrangementResetFades, arrangementLoop, arrangementFreeze,
                            arrangementBounceInPlace, arrangementBounceNew, arrangementCrop, arrangementReverse, arrangementColour, arrangementInfo, arrangementShowInBrowser,
-                           arrangementSlice = 450 }; // Plus Session::SliceBy.
+                           arrangementSlice = 450, // Plus Session::SliceBy.
+                           arrangementConvert = 460 }; // Plus Session::ConvertKind.
     // A right-click's selection, as the reference prepares it (0x1037c6280): an unselected clip is
     // selected alone, with the time selection on its lane at its edges; a click inside the selection keeps
     // it; elsewhere the selection gives way to the insert marker at the click.
@@ -14729,6 +14742,8 @@ private:
                     for (const auto& [by, text] : divisions) slices.addItem (arrangementSlice + (int) by, text, ! markers);
                     pending = false;
                     menu.addSeparator(); menu.addSubMenu ("Slice to New MIDI Track", slices);
+                    // The Convert commands, after Slice, as the reference's clip menu has them.
+                    for (const auto& [kind, text] : convertCommands()) menu.addItem (arrangementConvert + (int) kind, text, ! markers);
                 }
             }
         }
@@ -14752,6 +14767,8 @@ private:
         const auto [start, end] = std::pair { timeSelection.start, timeSelection.end };
         if (result >= arrangementSlice && result <= arrangementSlice + (int) Session::SliceBy::bar)
         { if (single != nullptr) sliceClip (single->id, static_cast<Session::SliceBy> (result - arrangementSlice)); return; }
+        if (result >= arrangementConvert && result <= arrangementConvert + (int) Session::ConvertKind::drums)
+        { if (single != nullptr) convertClip (single->id, static_cast<Session::ConvertKind> (result - arrangementConvert)); return; }
         switch (result)
         {
             case arrangementComp: compSelectedTake(); break;
@@ -15642,10 +15659,11 @@ private:
                     menuCollectAndSave,
                     menuLastCommand, // New commands go before this.
                     menuSlice = 400, // Plus Session::SliceBy.
+                    menuConvert = 407, // Plus Session::ConvertKind.
                     menuTimeFormat = 410, // Plus Session::TimeFormat.
                     menuRecentProject = 420, // Plus the project's place in the list.
                     menuBackup = 430 }; // Plus the backup's place in the list.
-    static_assert (menuLastCommand <= menuSlice && menuSlice + (int) Session::SliceBy::bar < menuTimeFormat
+    static_assert (menuLastCommand <= menuSlice && menuSlice + (int) Session::SliceBy::bar < menuConvert && menuConvert + (int) Session::ConvertKind::drums < menuTimeFormat
                    && menuTimeFormat + (int) Session::TimeFormat::smpte2997 < menuRecentProject && menuRecentProject + 10 <= menuBackup, "the menu bar's command ids overlap");
     // The shortcuts the menu bar shows, as the reference's builders give them on a Mac (Redo and
     // Fullscreen take their Windows keys elsewhere). The command manager only holds them for the menus:
@@ -16534,6 +16552,14 @@ private:
                     if (const auto& item = items.getItem(); item.itemID >= arrangementSlice && item.itemID <= arrangementSlice + (int) Session::SliceBy::bar)
                     { slices.addItem (menuEntry (menuSlice + item.itemID - arrangementSlice, item.text, item.isEnabled)); any = true; }
                 popup.addSubMenu ("Slice to New MIDI Track", slices, any && ! menusBlocked());
+                // The Convert commands, as the clip's menu offers them.
+                for (const auto& [kind, text] : convertCommands())
+                {
+                    bool enabled = false;
+                    juce::PopupMenu::MenuItemIterator converts (arrangement, true);
+                    while (converts.next()) if (converts.getItem().itemID == arrangementConvert + (int) kind) enabled = converts.getItem().isEnabled;
+                    popup.addItem (menuEntry (menuConvert + (int) kind, text, enabled));
+                }
             }
             popup.addSeparator();
             add (menuLocator, locatorAtPosition() != nullptr ? "Delete Locator" : "Add Locator");
@@ -16700,6 +16726,8 @@ private:
         { session.setTimeRulerFormat (static_cast<Session::TimeFormat> (id - menuTimeFormat)); refresh(); timeRuler.repaint(); return; }
         if (id >= menuSlice && id <= menuSlice + (int) Session::SliceBy::bar)
         { if (const auto clips = menuClips(); clips.size() == 1) sliceClip (clips.front()->id, static_cast<Session::SliceBy> (id - menuSlice)); refresh(); return; }
+        if (id >= menuConvert && id <= menuConvert + (int) Session::ConvertKind::drums)
+        { if (const auto clips = menuClips(); clips.size() == 1) convertClip (clips.front()->id, static_cast<Session::ConvertKind> (id - menuConvert)); refresh(); return; }
         switch (id)
         {
             case 1: ensureSaved ([safe = juce::Component::SafePointer<Impl> (this)] { if (safe != nullptr) safe->startNewProject(); }); break;
@@ -21460,7 +21488,8 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         const auto clipMenu = listed (arrangementMenu (onClip, colour));
         check (clipMenu == "Cut|Copy|" + paste + "Duplicate|Delete|-|Zoom to Arrangement Time Selection|-|Rename|Edit Info Text|Deactivate Clip|Consolidate|Consolidate Time to New Scene|-|"
                                "Show in Browser|Reveal in Finder|Show Similar Files (off)|-|Create Fade (off)|Reset Fades (off)|Loop Selection|-|Freeze Track|Bounce Track in Place|"
-                               "Bounce to New Track|-|Crop Clip (off)|Reverse Clip|-|Slice to New MIDI Track|-|[Clip Colours]",
+                               "Bounce to New Track|-|Crop Clip (off)|Reverse Clip|-|Slice to New MIDI Track|Convert Harmony to New MIDI Track|Convert Melody to New MIDI Track|"
+                               "Convert Drums to New MIDI Track|-|[Clip Colours]",
                "an audio clip's menu lists the reference's commands in its order, ending with the clip colours: " + clipMenu);
         // Show in Browser opens the sample's folder in the browser, with the sample selected.
         {
@@ -21497,7 +21526,8 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         const auto selectionMenu = listed (arrangementMenu (inside, colour));
         check (selectionMenu == "Cut|Copy|" + paste + "Duplicate|Delete|-|Zoom to Arrangement Time Selection|-|Rename|Edit Info Text|Deactivate Clip|Split|Consolidate|Consolidate Time to New Scene|-|"
                                     "Show in Browser|Reveal in Finder|Show Similar Files (off)|-|Create Fade In|Reset Fades (off)|Loop Selection|-|Freeze Track|Bounce Track in Place|"
-                                    "Bounce to New Track|-|Slice to New MIDI Track|-|Snap to Grid (on)|[Adaptive Grid]|[Fixed Grid]|-|Narrow Grid|Widen Grid|-|Triplet Grid",
+                                    "Bounce to New Track|-|Slice to New MIDI Track|Convert Harmony to New MIDI Track|Convert Melody to New MIDI Track|Convert Drums to New MIDI Track|-|"
+                                    "Snap to Grid (on)|[Adaptive Grid]|[Fixed Grid]|-|Narrow Grid|Widen Grid|-|Triplet Grid",
                "a time selection's menu has Split and Create Fade In, and the grid's items in place of the colours: " + selectionMenu);
         chooseArrangementItem (arrangementFade, inside, -1);
         check (std::abs (clip().audio.fadeInSeconds - .05) < 1e-3 && ! clip().audio.defaultFadeIn, "Create Fade In fades the clip in over the selection's part of it");
@@ -24192,7 +24222,8 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
                           "Cut Time (Loop Range)", "Paste Time", "Duplicate Time (Loop Range)", "Delete Time (Loop Range)", "-", "Rename", "Edit Info Text", "-", "Solo", "Arm", "-",
                           "Freeze Track", "Bounce Track in Place", "Bounce to New Track", "-", "Split", "Consolidate", "-", "Quantize", "Quantize Settings...", "Extract Groove", "Record Quantization >" });
         expect ("Create", { "Insert Audio Track", "Insert MIDI Track", "Insert Return Track", "Insert Take Lane", "-", "Insert Silence (Loop Range)", "Capture and Insert Scene",
-                            "Consolidate Time to New Scene", "-", "Insert MIDI Clip", "Capture MIDI", "-", "Create Fade", "-", "Slice to New MIDI Track >", "-", "Add Locator",
+                            "Consolidate Time to New Scene", "-", "Insert MIDI Clip", "Capture MIDI", "-", "Create Fade", "-", "Slice to New MIDI Track >", "Convert Harmony to New MIDI Track",
+                            "Convert Melody to New MIDI Track", "Convert Drums to New MIDI Track", "-", "Add Locator",
                             "Insert Time Signature Change", "-", "Import File..." });
         expect ("Playback", { "Play", "Continue Playback", "Play from Insert Marker", "Move Insert Marker to Playhead", "Playback Options >", "-", "Record in Arrangement", "Arm Record in Arrangement",
                               "Record in Session", "-", "Metronome", "Metronome Only While Recording", "-", "Back to Arrangement" });
@@ -24980,6 +25011,12 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
                "slicing makes and selects a Drum Rack track playing the slices");
         session.undo(); refresh(); selectTrack (0); refresh();
         check (state.tracks.size() == before, "one undo removes it");
+        // So does Convert Drums to New MIDI Track, with the notes it finds.
+        convertClip (state.tracks[0].clips[0].id, Session::ConvertKind::drums);
+        check (state.tracks.size() == before + 1 && selectedTrack == 1 && state.tracks[1].isMidi && state.tracks[1].instrument.isRack && state.tracks[1].clips.size() == 1
+                   && ! state.tracks[1].clips[0].notes.empty() && session.undoSteps()[0] == "Convert Drums to New MIDI Track",
+               "Convert Drums makes and selects a Drum Rack track playing the hits found, one undo step");
+        session.undo(); refresh(); selectTrack (0); refresh();
     }
     const auto originalAudio = state.tracks[0].clips[0].id;
     session.seek(.05); audioClipCommand(3,originalAudio);

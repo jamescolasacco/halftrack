@@ -1437,6 +1437,14 @@ public:
     // by markers. One undo step.
     enum class SliceBy { transients, warpMarkers, sixteenth, eighth, quarter, half, bar };
     juce::Result sliceToNewMidiTrack (const juce::String& clipId, SliceBy, juce::String& trackId);
+    // Convert Harmony, Melody and Drums to New MIDI Track, as the reference's (its manual, chapter 13): a new MIDI
+    // track after the clip's plays the notes found in the clip's audio, from a MIDI clip in the clip's place,
+    // through Halftrack's synthesizer, or for drums a Drum Rack of Halftrack's own kick, snare and hi-hat (written
+    // to the project's media) on C1, D1 and F#1. The audio is divided at its transients, and the analysis is
+    // Halftrack's own (src/AudioToMidi.h). The clip must be an unlooped, unreversed Arrangement clip, unwarped or
+    // warped without markers, as for slicing. Refused when no notes are found. One undo step.
+    enum class ConvertKind { harmony, melody, drums };
+    juce::Result convertToNewMidiTrack (const juce::String& clipId, ConvertKind, juce::String& trackId);
     // Typed application clipboard. Copy retains independent media before Cut removes anything.
     juce::Result copyMidiClip (const juce::String& clipId, bool cut = false);
     bool hasMidiClipClipboard() const;

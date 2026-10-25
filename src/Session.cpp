@@ -17,6 +17,7 @@
 #include "TempoDetection.h"
 #include "MetronomeSounds.h"
 #include "VideoMedia.h"
+#include "AudioToMidi.h"
 #include <tracktion_engine/tracktion_engine.h>
 #include <map>
 #include <array>
@@ -8206,6 +8207,89 @@ Result Session::sliceToNewMidiTrack (const String& clipId, SliceBy by, String& t
             note.lengthBeats = std::max (1.0 / 64, beats[i + 1] - beats[i]); note.velocity = 1.0f;
             notes.push_back (note);
         }
+        juce::StringArray inserted;
+        result = addMidiNotes (midiId, notes, inserted);
+    }
+    endEditGesture();
+    if (result.failed()) { if (created && canUndo()) undo(); trackId.clear(); return result; }
+    return Result::ok();
+}
+Result Session::convertToNewMidiTrack (const String& clipId, ConvertKind kind, String& trackId)
+{
+    if (impl->exporting || impl->anyRecording()) return Result::fail ("Stop recording or finish exporting before converting.");
+    auto* clip = impl->audioClip (clipId);
+    if (clip == nullptr || clip->getClipSlot() != nullptr) return Result::fail ("Choose an Arrangement audio clip to convert.");
+    if (clip->isLooping()) return Result::fail ("Turn off the clip's loop before converting it.");
+    if (auto frozen = impl->unfrozen (clip->getTrack()); frozen.failed()) return frozen;
+    const auto info = describeClip (*clip);
+    const auto file = clip->getOriginalFile();
+    if (info.mediaMissing || info.reversed || ! file.existsAsFile()) return Result::fail ("Converting needs the clip's audio file, unreversed.");
+    const bool warped = info.warp.mode != WarpMode::off;
+    if (warped && ! info.warpMarkers.empty()) return Result::fail ("Convert a clip without warp markers.");
+    // Clip beats from the clip's start, and the source seconds they play, as for slicing.
+    const auto startBeat = beatsAt (info.start), lengthBeats = beatsAt (info.start + info.length) - startBeat;
+    const auto offsetBeats = startBeat - beatsAt (std::max (0.0, info.start - info.sourceOffset));
+    const auto sourceAt = [&] (double beat) { return warped ? (offsetBeats + beat) * 60 / info.warp.bpm : info.sourceOffset + (secondsAt (startBeat + beat) - info.start); };
+    const auto beatOfSource = [&] (double seconds) { return warped ? seconds * info.warp.bpm / 60 - offsetBeats : beatsAt (info.start + seconds - info.sourceOffset) - startBeat; };
+    juce::AudioFormatManager formats; formats.registerBasicFormats();
+    std::unique_ptr<juce::AudioFormatReader> reader (formats.createReaderFor (file));
+    if (reader == nullptr || reader->lengthInSamples <= 0) return Result::fail ("The clip's audio could not be read.");
+    const auto rate = reader->sampleRate;
+    const auto from = (juce::int64) std::floor (std::max (0.0, sourceAt (0)) * rate);
+    const auto to = std::min (reader->lengthInSamples, (juce::int64) std::ceil (sourceAt (lengthBeats) * rate));
+    if (to <= from) return Result::fail ("The clip has no audio to convert.");
+    if (to - from > (juce::int64) (rate * 600)) return Result::fail ("Convert clips of up to ten minutes.");
+    juce::AudioBuffer<float> audio ((int) reader->numChannels, (int) (to - from));
+    reader->read (&audio, 0, audio.getNumSamples(), from, true, true);
+    juce::AudioBuffer<float> mono (1, audio.getNumSamples());
+    mono.clear();
+    for (int c = 0; c < audio.getNumChannels(); ++c) mono.addFrom (0, 0, audio, c, 0, audio.getNumSamples(), 1.0f / (float) audio.getNumChannels());
+    const auto found = audiotomidi::convert (mono.getReadPointer (0), mono.getNumSamples(), rate, static_cast<audiotomidi::Kind> (kind), warp::findTransients (audio, rate));
+    std::vector<MidiNoteInfo> notes;
+    for (const auto& n : found)
+    {
+        const auto start = beatOfSource ((double) from / rate + n.start), end = beatOfSource ((double) from / rate + n.start + n.length);
+        if (start < -1e-9 || start >= lengthBeats) continue;
+        MidiNoteInfo note;
+        note.pitch = n.pitch; note.startBeat = std::max (0.0, start); note.velocity = n.velocity;
+        note.lengthBeats = std::max (1.0 / 64, std::min (end, lengthBeats) - note.startBeat);
+        notes.push_back (note);
+    }
+    if (notes.empty()) return Result::fail ("No notes were found in the clip's audio.");
+    // The drums' sounds, Halftrack's own, kept with the project's media.
+    constexpr std::array<std::pair<int, const char*>, 3> kit { { { audiotomidi::kickNote, "Kick" }, { audiotomidi::snareNote, "Snare" }, { audiotomidi::hihatNote, "Hi-Hat" } } };
+    std::array<File, 3> sounds;
+    if (kind == ConvertKind::drums)
+    {
+        const auto folder = impl->assets();
+        if (auto r = folder.createDirectory(); r.failed()) return r;
+        for (size_t i = 0; i < kit.size(); ++i)
+        {
+            sounds[i] = folder.getNonexistentChildFile (String ("Halftrack ") + kit[i].second, ".wav", false);
+            const auto buffer = audiotomidi::drumSound (kit[i].first, 48000);
+            juce::WavAudioFormat wav;
+            std::unique_ptr<juce::OutputStream> stream (sounds[i].createOutputStream());
+            auto writer = wav.createWriterFor (stream, juce::AudioFormatWriterOptions().withSampleRate (48000).withNumChannels (1).withBitsPerSample (24));
+            if (writer == nullptr || ! writer->writeFromAudioSampleBuffer (buffer, 0, buffer.getNumSamples())) return Result::fail ("The drum sounds could not be written.");
+        }
+    }
+    const auto sourceIndex = te::getAudioTracks (*impl->edit).indexOf (dynamic_cast<te::AudioTrack*> (clip->getTrack()));
+    constexpr const char* steps[] { "Convert Harmony to New MIDI Track", "Convert Melody to New MIDI Track", "Convert Drums to New MIDI Track" };
+    beginEditGesture (steps[(int) kind]);
+    auto result = [&] { const juce::ScopedValueSetter<bool> plain (impl->plainTracks, true); return addMidiTrack(); }();
+    const auto created = result.wasOk();
+    if (created) { trackId = impl->lastCreated->itemID.toString(); result = moveTrack (trackId, sourceIndex + 1); }
+    if (result.wasOk() && kind == ConvertKind::drums)
+    {
+        result = setTrackInstrument (trackId, EffectKind::drumRack);
+        const auto rackId = [&] { for (const auto& t : snapshot().tracks) if (t.id == trackId) return t.instrument.id; return String(); }();
+        for (size_t i = 0; result.wasOk() && i < kit.size(); ++i) { String chainId; result = setDrumRackPadSample (rackId, kit[i].first, sounds[i], chainId); }
+    }
+    if (result.wasOk()) result = addMidiClip (trackId, startBeat, lengthBeats);
+    if (result.wasOk())
+    {
+        String midiId;
+        for (const auto& t : snapshot().tracks) if (t.id == trackId && ! t.clips.empty()) midiId = t.clips.front().id;
         juce::StringArray inserted;
         result = addMidiNotes (midiId, notes, inserted);
     }

@@ -2913,3 +2913,7 @@ UI area. As the reference's manual describes (section 7.2.2), selecting scenes o
 ## Reordering and resizing take lanes — 2026-10-25
 
 Engine and UI areas. As the reference's manual describes (section 21.2), a take lane's header now drags it to another place among its track's lanes, Cmd+Up/Down moves the selected lane (`Session::moveTakeLane`, one undo step), and a lane's lower edge, Option +/- and Option-scrolling set its height, kept with the project outside the undo history (`Session::setTakeLaneHeight`) ([take lanes contract](research/take-lanes-contract.md#reordering-and-resizing-2026-10-25)). Checked in the take lanes and UI suites.
+
+## Convert to MIDI — 2026-10-25
+
+Engine, UI and root areas. As the reference's manual describes (chapter 13), Convert Harmony, Melody and Drums to New MIDI Track now follow Slice to New MIDI Track in the Create menu and an audio clip's menu: each makes a MIDI track after the clip's with the notes found, divided at the clip's transients, through Halftrack's synthesizer or a Drum Rack of its own generated kick, snare and hi-hat. The analysis is Halftrack's own (`src/AudioToMidi.cpp`) ([convert to MIDI contract](research/convert-to-midi-contract.md)). Checked in the new convert-midi suite and the UI suite. Cross-area: `Session` (engine), `MainComponent` (UI), `CMakeLists.txt` and `Main.cpp` (the suite).

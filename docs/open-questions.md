@@ -449,6 +449,10 @@ The reference's colour algorithm was read statically and is followed (see the [t
 - Takes share a random colour while their recordings overlap: an Arrangement pass, and Session takes recording at the same time. The reference clears its shared colour when its recorder's last clip has it, which was read only in part.
 - Dropping a single clip onto empty space does not give the new track the clip's colour, as some of the reference's drop paths do.
 
+### Convert to MIDI
+
+The reference's manual describes what Convert Harmony, Melody and Drums do, not how. Halftrack's analysis is its own (see the [convert to MIDI contract](research/convert-to-midi-contract.md)), with its thresholds as defaults: onsets 50 ms apart at least and growing by 40%, notes held until 30 dB below their attack, drums classed by band energy below 150 Hz and above 6 kHz, and chords of up to six pitches. Its instruments stand in for the reference's: the synthesizer for both pitched commands, and a Drum Rack of generated kick, snare and hi-hat sounds. Session clips, and clips with warp markers, are not converted.
+
 ### Scene View
 
 The reference's manual describes the Scene View's sections but not their controls' look or what they show for several scenes with different values. Halftrack's Tempo and Signature are number fields like the scene fields in the launcher, showing the scene the selection follows; a change goes to every selected scene. Its title bar reads the scene's number and name ("2   Verse"), or "3 Scenes". Scene Follow Actions, its lower section in the reference, are missing.
