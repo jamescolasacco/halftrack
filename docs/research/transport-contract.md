@@ -5,6 +5,7 @@ Halftrack's Play, Stop, Continue and locate follow the reference's [Arrangement 
 ## Behaviour
 
 - **The insert marker** is the engine's transport start position. It is not an undoable edit and does not mark the project changed. Tempo changes keep its beat.
+- **The bar numbers** are the reference's beat-time ruler and do not locate: dragging them scrolls and zooms ([timeline navigation contract](timeline-navigation-contract.md)).
 - **Placing it.** Clicking an Arrangement lane places the insert marker, snapped to the grid unless Alt is held. A time selection puts it at the selection's start. While stopped, the play position moves with it; while playing, playback runs on.
 - **Play** (Space or the Play button) starts from the insert marker. **Record** does too, unless the transport is already playing.
 - **The Record button** (and F9) follows the reference's Arrangement Record button and its manual's Recording chapter (consulted 2026-10-22):
@@ -27,7 +28,7 @@ Halftrack's Play, Stop, Continue and locate follow the reference's [Arrangement 
 - **A locator as the song's start.** A locator's context menu offers its own Set Song Start Time Here (static reading of the reference's code). Play and Record from a stop then start at the locator. One thing holds the song's start at a time: setting it on a locator takes it from the loop brace or another locator, and the loop brace's item takes it from a locator. Moving the locator moves the song's start and deleting it clears it. It is kept with the project as `halftrackSongStart` on the locator, each change is one undo step, and a project with two song starts is refused (`Session::setLocatorSongStart`, `LocatorInfo::songStart`). The ruler marks the song's start with a small play triangle in the locator row.
 - **Stop** leaves the play position where playback stopped. **Shift+Space** continues from there.
 - **A second Stop** (the Stop button pressed while stopped) or **Home** returns the insert marker and play position to the start. Escape no longer stops: as the reference's, it jumps to the selected track's title bar (see the [menu contract](main-menu-contract.md#keys-outside-the-menus)).
-- **Locating** (the ruler, the position fields, locators, `Session::seek`) moves the play position and the insert marker together, jumping playback if it is running. It relocates the play head even when the engine's cached position already reads the target. That cache follows the play head on a timer, and offline it does not move at all.
+- **Locating** (the ruler's rows above and below its bar numbers, the position fields, locators, `Session::seek`) moves the play position and the insert marker together, jumping playback if it is running. It relocates the play head even when the engine's cached position already reads the target. That cache follows the play head on a timer, and offline it does not move at all.
 - **Edit points.** Pasting clips, new MIDI clips, splitting MIDI clips (Cmd+E) and importing without a drop position use the insert marker.
 
 ## API

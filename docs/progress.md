@@ -2877,3 +2877,7 @@ UI area. Pasted or duplicated notes from a probability group now form a group of
 ## Panning with Cmd+Option — 2026-10-25
 
 UI area. A Cmd+Option drag (Ctrl+Alt elsewhere) now pans the Arrangement's lanes and the note editor's grid, as the reference's manual describes (section 6.2; key list sections 42.9 and 42.16); with Shift as well the drag still slides clip contents ([timeline navigation contract](research/timeline-navigation-contract.md)). Checked in the UI suite.
+
+## Beat-time ruler, time ruler and overview navigation — 2026-10-25
+
+UI area. As the reference's manual describes (sections 6.1 and 6.2), the Arrangement's bar numbers now act as its beat-time ruler: dragging scrolls and zooms with the pressed time kept under the pointer, a double-click zooms to the selection or out to the whole Arrangement, and a press stops Follow instead of locating. Dragging the time ruler scrolls, and a double-click inside the overview's outline shows the whole Arrangement ([timeline navigation contract](research/timeline-navigation-contract.md#behaviour)). Checked in the UI suite.

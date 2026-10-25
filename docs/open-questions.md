@@ -445,7 +445,8 @@ These are simplest defaults pending a comparison with the reference:
 
 - **The marker** flashes across every lane. The reference shows it on the track that was clicked.
 - **Clicks** snap the marker to the grid, unless Alt is held.
-- **Scrubbing.** Clicks in the ruler jump immediately. Quantized scrub jumps and holding to loop a section are not implemented.
+- **Scrubbing.** Clicks in the ruler's scrub area (the locators' row, and the loop brace's row) jump immediately, without starting playback. The reference's manual says a click there launches playback, its jumps quantized by the control bar's quantization, and holding loops a section; none of that is implemented yet.
+- **The beat-time ruler.** Dragging the bar numbers keeps the pressed time under the pointer, and zooms 1% a pixel, down zooming in, as Halftrack's overview does. The reference's rate and scroll direction were not read.
 
 ### Missing media matching
 

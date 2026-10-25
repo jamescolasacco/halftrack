@@ -5131,6 +5131,7 @@ private:
         }
         // Where the locators' scrub area starts: under the bar numbers, and the time signature lane while it shows.
         int scrubTop() const { return 35 + (owner.meterLaneShown() ? meterLaneHeight : 0); }
+        bool onBarNumbers (juce::Point<float> point) const { return point.y >= 14 && point.y < 35 && point.x >= 0 && point.x < owner.canvas.timelineWidth(); }
         // A time signature marker's place in its lane, as wide as its meter's text or the room before the next.
         juce::Rectangle<float> meterBounds (int index) const
         {
@@ -5294,6 +5295,14 @@ private:
                 downX=event.x;braceStart=owner.beatsAt (owner.state.loopStart);braceEnd=owner.beatsAt (owner.state.loopEnd);
                 selected.clear();owner.refresh();return;
             }
+            // The bar numbers are the reference's beat-time ruler (its manual, sections 6.1 and 6.2): a drag scrolls
+            // and zooms, the pressed time staying under the pointer, and a press stops Follow rather than locating.
+            if (onBarNumbers (event.position))
+            {
+                selected.clear();zoomFrom=std::pair { owner.viewStart+event.x/owner.pixelsPerSecond,owner.pixelsPerSecond };
+                if (owner.state.playing) owner.setFollow (false);
+                owner.refresh();return;
+            }
             if (hit.isNotEmpty())
             {
                 selected=hit;dragId=hit;downX=event.x;
@@ -5306,6 +5315,8 @@ private:
         void mouseDoubleClick (const juce::MouseEvent& event) override
         {
             if (event.x>=owner.canvas.timelineWidth() || event.mods.isPopupMenu() || event.mods.isShiftDown()) return;
+            // On the bar numbers a double-click zooms to the selection, or without one shows the whole Arrangement.
+            if (onBarNumbers (event.position)) { if (! owner.zoomToSelection()) owner.fitTimeline(); return; }
             if (const auto meter=hitMeter (event.position); meter>=0) { owner.editMeterDialog (meter);return; }
             const auto hit=hitLocator (event.position);
             if (hit.isNotEmpty()) owner.editLocatorDialog (hit);
@@ -5314,6 +5325,13 @@ private:
         void mouseDrag (const juce::MouseEvent& event) override
         {
             if (owner.session.isExporting()) return;
+            if (zoomFrom)
+            {
+                // Down zooms in, 1% a pixel, as the overview does.
+                const auto [seconds,zoom]=*zoomFrom;
+                const auto next=juce::jlimit (3.0,650.0,zoom*std::pow (1.01,(double) event.getDistanceFromDragStartY()));
+                owner.setView (seconds-event.position.x/next,next);return;
+            }
             if (meterDrag>0)
             {
                 if (! event.mouseWasDraggedSinceMouseDown()) return;
@@ -5368,7 +5386,7 @@ private:
             }
             if (locatorGesture)owner.session.endEditGesture();
             if (meterGesture)owner.session.endEditGesture();
-            definingLoop=false;locatorGesture=false;meterGesture=false;meterDrag=-1;dragId.clear();braceDrag=BracePart::none;
+            definingLoop=false;locatorGesture=false;meterGesture=false;meterDrag=-1;dragId.clear();braceDrag=BracePart::none;zoomFrom.reset();
         }
         void focusLost (FocusChangeType) override { if (braceSelected) { braceSelected=false;repaint(); } }
         bool keyPressed (const juce::KeyPress& key) override
@@ -5425,6 +5443,7 @@ private:
         juce::TextButton add {"Add locator"},previous {"<"},next {">"},automationMode {"Automation Mode"};
         juce::String selected,dragId;
         double anchor=0,original=0,braceStart=0,braceEnd=0,originalMeter=0;int downX=0,meterDrag=-1;
+        std::optional<std::pair<double,double>> zoomFrom; // A press on the bar numbers: the time pressed, and the zoom then.
         bool definingLoop=false,locatorGesture=false,meterGesture=false;
         BracePart braceDrag=BracePart::none;
     public:
@@ -5538,6 +5557,12 @@ private:
             if (pressSeconds < owner.viewStart || pressSeconds > owner.viewStart + visible())
             { pressView = juce::jmax (0.0, pressSeconds - visible() / 2); owner.setView (pressView, pressZoom); }
         }
+        // A double-click inside the outline shows the whole Arrangement, as the reference's does (its manual, section 6.1).
+        void mouseDoubleClick (const juce::MouseEvent& e) override
+        {
+            const auto seconds = e.position.x / (double) stripWidth() * span();
+            if (seconds >= owner.viewStart && seconds <= owner.viewStart + visible()) owner.fitTimeline();
+        }
         void mouseDrag (const juce::MouseEvent& e) override
         {
             const auto zoom = juce::jlimit (3.0, 650.0, pressZoom * std::pow (1.01, (double) e.getDistanceFromDragStartY()));
@@ -5631,8 +5656,17 @@ private:
                 g.setColour (ink.withAlpha (0.75f)); g.drawText (label (t, format, every), juce::Rectangle<float> (x + 3, 2, 90, (float) getHeight() - 2), juce::Justification::centredLeft, false);
             }
         }
+        // Dragging scrolls the Arrangement, the pressed time staying under the pointer, as the reference's time
+        // ruler does (its manual, section 6.1).
+        void mouseDown (const juce::MouseEvent& e) override
+        {
+            pressed = owner.viewStart + e.position.x / owner.pixelsPerSecond;
+            if (owner.state.playing) owner.setFollow (false); // As a hand scroll does.
+        }
+        void mouseDrag (const juce::MouseEvent& e) override { owner.setView (pressed - e.position.x / owner.pixelsPerSecond, owner.pixelsPerSecond); }
     private:
         Impl& owner;
+        double pressed = 0;
     };
     TimeRuler timeRuler { *this };
 
@@ -15286,9 +15320,7 @@ private:
         if (to - from < .001) return false;
         zoomBack = { viewStart, pixelsPerSecond };
         const auto span = to - from;
-        pixelsPerSecond = juce::jlimit (3.0, 650.0, canvas.timelineWidth() / (span * 1.1));
-        viewStart = juce::jmax (0.0, from - span * .05);
-        updateScroll(); canvas.repaint(); ruler.repaint(); return true;
+        setView (from - span * .05, canvas.timelineWidth() / (span * 1.1)); return true;
     }
     bool zoomBackFromSelection()
     {
@@ -15303,12 +15335,7 @@ private:
         viewStart = juce::jmax (0.0, center - canvas.timelineWidth() / pixelsPerSecond * 0.5);
         updateScroll(); canvas.repaint(); ruler.repaint();
     }
-    void fitTimeline()
-    {
-        viewStart = 0;
-        pixelsPerSecond = juce::jlimit (3.0, 650.0, canvas.timelineWidth() / juce::jmax (8.0 * 240.0 / state.tempo, state.duration * 1.08));
-        updateScroll(); canvas.repaint(); ruler.repaint();
-    }
+    void fitTimeline() { setView (0, canvas.timelineWidth() / juce::jmax (8.0 * 240.0 / state.tempo, state.duration * 1.08)); }
     void updateScroll()
     {
         const auto visible = juce::jmax (1.0, canvas.timelineWidth() / pixelsPerSecond);
@@ -24250,6 +24277,36 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
             overview.mouseDrag (event (press + juce::Point<float> (0.0f, 50.0f), press, true));
             check (pixelsPerSecond > 150 && std::abs ((pressed - viewStart) * pixelsPerSecond - visible / 2 * 100) < 1e-3, "a drag down zooms in, keeping the pressed time in place");
             overview.mouseUp (event (press + juce::Point<float> (0.0f, 50.0f), press, true));
+            const auto showsEverything = [&] { return viewStart == 0 && state.duration * pixelsPerSecond <= canvas.timelineWidth(); };
+            setView (30, 100); refresh();
+            const juce::Point<float> inside ((float) ((30.0 + overview.visible() / 2) / overview.span() * overview.stripWidth()), 10.0f);
+            overview.mouseDoubleClick (event (inside, inside, false));
+            check (showsEverything(), "a double-click inside the outline shows the whole Arrangement");
+            // The bar numbers are the beat-time ruler (the reference's manual, section 6.1): a drag keeps the pressed time
+            // under the pointer, down zooming in, and a double-click zooms to the selection or shows everything.
+            setView (10, 100); refresh();
+            const auto onRuler = [&] (juce::Component& target, juce::Point<float> at, juce::Point<float> down, bool dragged, int clicks = 1)
+            { return juce::MouseEvent (juce::Desktop::getInstance().getMainMouseSource(), at, juce::ModifierKeys (juce::ModifierKeys::leftButtonModifier), 1.0f, 0, 0, 0, 0, &target, &target, now, down, now, clicks, dragged); };
+            const auto positionBefore = state.position;
+            const juce::Point<float> bar (200.0f, 24.0f), left = bar - juce::Point<float> (50.0f, 0.0f), lower = left + juce::Point<float> (0.0f, 40.0f);
+            ruler.mouseDown (onRuler (ruler, bar, bar, false)); ruler.mouseDrag (onRuler (ruler, left, bar, true)); refresh();
+            check (std::abs (viewStart - 10.5) < 1e-6 && std::abs (pixelsPerSecond - 100) < 1e-9 && state.position == positionBefore,
+                   "dragging the bar numbers left takes the pressed time along with the pointer, without locating");
+            ruler.mouseDrag (onRuler (ruler, lower, bar, true)); ruler.mouseUp (onRuler (ruler, lower, bar, true)); refresh();
+            check (pixelsPerSecond > 140 && std::abs ((12 - viewStart) * pixelsPerSecond - 150) < 1e-6, "dragging down zooms in, the pressed time staying under the pointer");
+            const auto clipBefore = selectedClip;
+            timeSelection = { 20, 24, { state.tracks[(size_t) midiIndex].id } };
+            ruler.mouseDoubleClick (onRuler (ruler, bar, bar, false, 2));
+            check (std::abs (viewStart - 19.8) < 1e-6 && std::abs (pixelsPerSecond - canvas.timelineWidth() / 4.4) < 1e-6, "a double-click on the bar numbers zooms to the time selection");
+            timeSelection = {}; selectedClip = -1;
+            ruler.mouseDoubleClick (onRuler (ruler, bar, bar, false, 2));
+            check (showsEverything(), "and without a selection shows the whole Arrangement");
+            selectedClip = clipBefore;
+            // The time ruler under the tracks scrolls the same way, without zooming.
+            setView (10, 100); refresh();
+            const juce::Point<float> tick (300.0f, 8.0f), dragged = tick + juce::Point<float> (100.0f, 30.0f);
+            timeRuler.mouseDown (onRuler (timeRuler, tick, tick, false)); timeRuler.mouseDrag (onRuler (timeRuler, dragged, tick, true)); timeRuler.mouseUp (onRuler (timeRuler, dragged, tick, true));
+            check (std::abs (viewStart - 9) < 1e-6 && std::abs (pixelsPerSecond - 100) < 1e-9, "dragging the time ruler right shows earlier time by the distance dragged, without zooming");
             session.undo(); refresh(); fitTimeline();
         }
         menuItemSelected (menuPluginWindows, 4);
