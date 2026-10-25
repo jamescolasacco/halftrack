@@ -35,7 +35,7 @@ public:
     {
         active.setName ("Chain active"); active.setTooltip ("Chain activator: switch this chain on or off");
         active.setClickingTogglesState (true); active.setColour (juce::TextButton::buttonOnColourId, themes::colour (0xffffcf4a));
-        solo.setName ("Chain solo"); solo.setTooltip ("Solo this chain. Cmd/Ctrl-click to solo several.");
+        solo.setName ("Chain solo"); solo.setTooltip ("Solo this chain alone; Cmd/Ctrl-click to add it to the soloed chains (the other way round with Exclusive Solo off).");
         solo.setClickingTogglesState (true); solo.setColour (juce::TextButton::buttonOnColourId, blue);
         name.setName ("Chain name"); name.setEditable (false, true, false); name.setFont (font (10.5f)); name.setColour (juce::Label::textColourId, ink);
         name.setTooltip ("Double-click to rename");
@@ -642,15 +642,17 @@ void ChainRow::change (const std::function<void (Session::RackChainSettings&)>& 
 }
 void ChainRow::soloClicked()
 {
-    // Like track solo, a plain click solos this chain alone; Cmd/Ctrl adds it to the soloed chains.
+    // As the reference's (static reading): a click is exclusive, unsoloing every chain of the rack before setting this
+    // one, when Exclusive Solo is on and Cmd/Ctrl alone is not held, or when it is off and Cmd/Ctrl alone is.
+    // Otherwise this chain alone changes.
     const bool on = solo.getToggleState();
-    const bool exclusive = ! juce::ModifierKeys::currentModifiers.isCommandDown();
-    if (on && exclusive)
+    const bool commandAlone = juce::ModifierKeys::currentModifiers.withoutMouseButtons() == juce::ModifierKeys (juce::ModifierKeys::commandModifier);
+    if (! commandAlone == owner.session.preferences().exclusiveSolo)
     {
         owner.session.beginEditGesture ("Solo chain");
         for (const auto& c : owner.rack.chains)
             if (c.id != chainId && c.settings.solo) { auto s = c.settings; s.solo = false; owner.session.setRackChainSettings (c.id, s); }
-        change ([] (auto& s) { s.solo = true; });
+        change ([on] (auto& s) { s.solo = on; });
         owner.session.endEditGesture();
         owner.sync(); return;
     }

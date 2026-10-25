@@ -2933,3 +2933,14 @@ Engine, UI and root areas. A research agent read the reference's four native MID
 - **Selection.** With nothing selected, transformations take the notes starting in the time selection.
 - **Build.** CMakeLists builds `src/NoteTools.cpp` without floating-point contraction.
 - **Tests.** The midi-tools suite compares the four tools with the research model's output bit for bit and checks their Session merges; the UI suite drives each window.
+
+## Return Play Position, the loop with time commands, and switches — 2026-10-25
+
+Engine and UI areas. A research agent read five small behaviours of the reference statically; four now follow it.
+
+- **Stop and Return Play Position.** Playback's Return Play Position is available while stopped. With the Stop button, Space and Continue while playing, it goes through `Session::stopPressed`: stopped, the insert marker returns to the start and the time selection collapses. A third stop within 3.5 seconds releases notes held from inputs ([transport contract](research/transport-contract.md)).
+- **Time commands.** Insert Silence and Delete Time (and so Cut, Paste and Duplicate Time) move the loop brace with the time, outside the undo step. Delete and Cut Time leave the insert marker at the time's start ([time commands contract](research/time-commands-contract.md)).
+- **Device activators.** Clicked within a selection of several devices, an activator switches the selection's span in one undo step (`Session::setPluginsEnabled`).
+- **Chain solo.** Chain solo follows Exclusive Solo, Cmd/Ctrl alone reversing it ([racks contract](research/racks-contract.md)).
+- **Left for later.** Reduced Latency When Monitoring.
+

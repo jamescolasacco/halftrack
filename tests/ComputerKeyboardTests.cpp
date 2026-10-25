@@ -121,6 +121,24 @@ int runComputerKeyboardTests (const juce::File&)
         ok (s.setTrackMonitor (keys, Session::MonitorMode::on), "monitor again");
         pumpSyntheticTestDevice (s, 8);
 
+        // Three stops within 3.5 seconds of each other release held notes, as the reference's do (static reading).
+        // Moving the play head releases them too, so once Stop has returned it to the start the note is held there.
+        s.setInsertMarker (2);
+        check (s.stopPressed() && s.snapshot().insertMarker == 0, "Stop while stopped returns the insert marker to the start");
+        pumpSyntheticTestDevice (s, 8);
+        ok (s.computerKeyboardNote (69, .8f, true), "hold A3");
+        pumpSyntheticTestDevice (s, 4);
+        check (peak (s, 20) > .05f, "it sounds");
+        s.stopPressed(); pumpSyntheticTestDevice (s, 4);
+        check (peak (s, 20) > .05f, "after a second stop the note still sounds");
+        s.stopPressed(); pumpSyntheticTestDevice (s, blocksPerSecond / 4);
+        check (peak (s, 10) < 1e-4f, "a third within 3.5 seconds releases it");
+        ok (s.computerKeyboardNote (69, 0, false), "let go of the key");
+        ok (s.play(), "play");
+        pumpSyntheticTestDevice (s, 4);
+        check (! s.stopPressed() && ! s.snapshot().playing, "while playing, Stop stops");
+        pumpSyntheticTestDevice (s, 8);
+
         // Turning the keyboard off ends its held notes.
         ok (s.computerKeyboardNote (72, .8f, true), "press a key");
         pumpSyntheticTestDevice (s, 4);

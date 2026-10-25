@@ -3260,6 +3260,43 @@ struct Session::Impl
         void timerCallback() override { tick(); }
     } sceneWatch, rangeWatch, tapWatch, scrubWatch;
     std::optional<double> rangeEnd; // Where Play Arrangement Selection stops.
+    // The user's stops counted toward the third within 3.5 seconds of each other (Session::stopPressed).
+    int userStops = 0;
+    double lastUserStop = 0;
+    // Every track's instrument receives sustain off and All Notes Off on each channel.
+    void releaseAllNotes()
+    {
+        for (auto* track : te::getAudioTracks (*edit))
+            for (int channel = 1; channel <= 16; ++channel)
+            {
+                track->injectLiveMidiMessage (juce::MidiMessage::controllerEvent (channel, 64, 0), {});
+                track->injectLiveMidiMessage (juce::MidiMessage::allNotesOff (channel), {});
+            }
+    }
+    // The loop brace after Insert Silence or Delete Time, as the reference's transport moves it (static reading):
+    // inserting moves its end when at or after the point, then its start; deleting brings each edge after the
+    // deleted time's start earlier by its length, but not before that start. Its start stays a beat before its
+    // end. Not an undo step, as the loop never is.
+    void moveLoopBrace (double startSeconds, double lengthSeconds, bool inserted)
+    {
+        auto& transport = edit->getTransport();
+        const auto& tempo = edit->tempoSequence;
+        const auto beats = [&] (te::TimePosition t) { return tempo.toBeats (t).inBeats(); };
+        auto loopStart = beats (transport.loopPoint1.get()), loopEnd = beats (transport.loopPoint2.get());
+        const auto at = beats (te::TimePosition::fromSeconds (startSeconds)), length = beats (te::TimePosition::fromSeconds (startSeconds + lengthSeconds)) - at;
+        if (inserted)
+        {
+            if (loopEnd >= at) loopEnd = std::max (loopEnd + length, loopStart + 1);
+            if (loopStart >= at) loopStart = std::max (0.0, std::min (loopStart + length, loopEnd - 1));
+        }
+        else
+        {
+            if (loopStart > at) loopStart = std::max (0.0, std::min (std::max (loopStart - length, at), loopEnd - 1));
+            if (loopEnd > at) loopEnd = std::max (std::max (loopEnd - length, at), loopStart + 1);
+        }
+        transport.loopPoint1.setValue (tempo.toTime (te::BeatPosition::fromBeats (loopStart)), nullptr);
+        transport.loopPoint2.setValue (tempo.toTime (te::BeatPosition::fromBeats (loopEnd)), nullptr);
+    }
     // A scrub (Session::scrub): the grid line it waits for before jumping, where it jumps to, and while held the
     // grid step from there that loops. `from` is the play head when the jump was asked for, so a loop taking the
     // play head back before the line jumps at once; `landing` waits for the play head to arrive after a jump, as
@@ -13743,6 +13780,7 @@ Result Session::insertTime (double start, double length)
         if (marker->getPosition().getStart() >= from) marker->setStart (marker->getPosition().getStart() + delta, false, true);
     impl->shiftTimeSignatures (impl->edit->tempoSequence.toBeats (from).inBeats(), deltaBeats.inBeats(), std::nullopt);
     for (auto* curve : arrangementCurves (*impl->edit)) shiftCurve (*curve, *impl->edit, from, delta, std::nullopt, undo);
+    impl->moveLoopBrace (start, length, true);
     impl->refreshParameterValues();
     impl->changed(); return Result::ok();
 }
@@ -13842,6 +13880,7 @@ Result Session::deleteTime (double start, double length)
         impl->shiftTimeSignatures (cutEnd, cut - cutEnd, cut);
     }
     for (auto* curve : arrangementCurves (*impl->edit)) shiftCurve (*curve, *impl->edit, to, te::TimeDuration() - delta, te::TimeRange (from, to), undo);
+    impl->moveLoopBrace (start, length, false);
     impl->refreshParameterValues();
     impl->changed(); return Result::ok();
 }
@@ -15562,6 +15601,18 @@ void Session::stop()
     }
     finishRecording (true);
     sendChangeMessage();
+}
+bool Session::stopPressed()
+{
+    if (impl->exporting) return false;
+    const auto now = juce::Time::getMillisecondCounterHiRes();
+    impl->userStops = impl->userStops > 0 && now - impl->lastUserStop <= 3500 ? impl->userStops + 1 : 1;
+    impl->lastUserStop = now;
+    if (impl->userStops >= 3) { impl->userStops = 0; impl->releaseAllNotes(); }
+    auto& transport = impl->edit->getTransport();
+    if (transport.isPlaying() || transport.isRecording() || impl->recordWaiting) { stop(); return false; }
+    returnToStart();
+    return true;
 }
 Result Session::stopRecording()
 {
@@ -17566,6 +17617,29 @@ Result Session::setPluginEnabled (const String& chainId, int p, bool enabled)
     const auto devices = Impl::devicesIn (*list);
     if (! juce::isPositiveAndBelow (p, devices.size())) return Result::fail ("Plug-in not found.");
     impl->transaction ("Bypass plug-in"); devices[p]->setEnabled (enabled); impl->changed(); return Result::ok();
+}
+Result Session::setPluginsEnabled (const String& chainId, int first, int last, bool enabled)
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    if (first > last) std::swap (first, last);
+    juce::Array<te::Plugin*> devices;
+    if (const int t = impl->trackIndexOf (chainId); t >= 0)
+    {
+        if (auto frozen = impl->unfrozen (impl->track (t)); frozen.failed()) return frozen;
+        for (int p = first; p <= last; ++p)
+            if (auto* plugin = impl->plugin (t, p)) devices.add (plugin);
+            else return Result::fail ("Plug-in not found.");
+    }
+    else
+    {
+        auto* list = impl->effectChain (chainId); if (list == nullptr) return Result::fail ("Device chain not found.");
+        const auto all = Impl::devicesIn (*list);
+        if (first < 0 || last >= all.size()) return Result::fail ("Plug-in not found.");
+        for (int p = first; p <= last; ++p) devices.add (all[p]);
+    }
+    impl->transaction ("Bypass plug-ins");
+    for (auto* device : devices) device->setEnabled (enabled);
+    impl->changed(); return Result::ok();
 }
 Result Session::removePlugin (const String& chainId, int p)
 {

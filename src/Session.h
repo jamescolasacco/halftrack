@@ -1354,6 +1354,7 @@ public:
     // and automation; clips crossing start split (audio) or open a gap between their notes (MIDI).
     juce::Result insertTime (double startSeconds, double lengthSeconds);
     // Delete Time: removes [start, start + length) everywhere and moves later material earlier.
+    // Both move the loop brace with the time, as the reference's transport does, outside the undo step.
     juce::Result deleteTime (double startSeconds, double lengthSeconds);
     // The reference's other time commands, each across every track but the returns and one undo
     // step. Cut Time copies the time to the range clipboard and deletes it, as Delete Time does.
@@ -1752,6 +1753,11 @@ public:
     // at its end, watched from the message thread every 2 ms. Stopping or playing again ends the watch.
     juce::Result playRange (double startSeconds, double endSeconds);
     void stop();
+    // The Stop command as the user gives it, as the reference's (static reading): it stops, or while stopped
+    // returns the insert marker to the start, which Playback's Return Play Position also does; true when it
+    // returned. Three within 3.5 seconds of each other also send every track sustain off and All Notes Off,
+    // releasing stuck notes.
+    bool stopPressed();
     // Record from a stop starts playback too, unless Start Playback with Record is off: then it
     // waits until Play or a Session launch starts the transport (Continue records from where it is).
     juce::Result record();
@@ -2042,6 +2048,9 @@ public:
     juce::Result addPlugin (const juce::String& chainId, const juce::PluginDescription&);
     juce::Result movePlugin (const juce::String& chainId, int pluginIndex, int destinationIndex);
     juce::Result setPluginEnabled (const juce::String& chainId, int pluginIndex, bool);
+    // Switches the devices from first to last in a chain on or off together, one undo step, as the reference's
+    // activator does for a selection of several devices.
+    juce::Result setPluginsEnabled (const juce::String& chainId, int firstIndex, int lastIndex, bool);
     juce::Result removePlugin (const juce::String& chainId, int pluginIndex);
     juce::Result showPluginEditor (const juce::String& chainId, int pluginIndex);
     juce::Result setPluginParameter (int trackIndex, int pluginIndex, int parameterIndex, float normalisedValue);

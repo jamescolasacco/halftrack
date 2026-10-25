@@ -482,6 +482,15 @@ The static reading of the reference's binary left these open, and Halftrack take
 - **Overlapping notes.** Generated notes do not otherwise replace the existing notes they overlap; the reference's manual says generated notes replace the notes they overlap, and its merge works "per key".
 - **The interface.** The tools open as windows applied with a button, not the reference's Clip View panels with Auto Apply.
 
+### Stops, time commands and switches
+
+The static reading of the reference's code left these open, and Halftrack takes the simplest reasonable default for each:
+
+- **The third stop.** The count starts again after the third stop releases notes. The release reaches each track's live MIDI (sustain off and All Notes Off on every channel), not plug-ins without a live input. The reference's message was read as probably All Notes Off.
+- **Return Play Position** has no shortcut, as in the reference's menus.
+- **After Paste and Duplicate Time** the selection is left as it was. The reference's choice was not read.
+- **Selecting chains.** Halftrack's rack editor selects one chain at a time, so the reference's solo of all selected chains together does not arise, and no key solos a chain (the reference's S binding was not found).
+
 ### Missing media matching
 
 Locate Missing Media matches files by name only, case-insensitively, taking the first readable audio file found. The reference also compares size and checksums; Halftrack does not yet store them. A file moved while the project is open may keep playing from the engine's open handle until the project is reopened, even though it is reported missing.

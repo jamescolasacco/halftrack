@@ -187,6 +187,27 @@ int runTimeEditTests (const juce::File& artifacts)
             check (meters() == Meters { { 0, 4 }, { 6, 4 } }, "one undo removes the pasted time and its markers");
         }
 
+        {
+            // The loop brace moves with the time, as the reference's transport moves it (static reading): Delete Time
+            // brings each edge after the deleted time's start earlier by its length, but not before that start, a beat
+            // apart at least; Insert Silence moves the end when at or after the point, then the start. Undo leaves it.
+            Session l (false);
+            const auto loopBeats = [&] { const auto snap = l.snapshot(); return std::pair { snap.loopStart * snap.tempo / 60, snap.loopEnd * snap.tempo / 60 }; };
+            const auto loopIs = [&] (double from, double to) { const auto [a, b] = loopBeats(); return near (a, from) && near (b, to); };
+            l.setLoop (true, 4, 12);
+            ok (l.deleteTime (2, 13), "delete beats 4 to 30 across a loop from beat 8 to 24");
+            check (loopIs (4, 5), "the loop's edges come back to the deleted time's start, a beat apart");
+            l.undo();
+            check (loopIs (4, 5), "undo leaves the loop where it went");
+            l.setLoop (true, 4, 12);
+            ok (l.insertTime (12, 8), "insert 16 beats at beat 24, the loop's end");
+            check (loopIs (8, 40), "inserting at the loop's end moves the end and not the start");
+            ok (l.insertTime (1, 1), "insert 2 beats before the loop");
+            check (loopIs (10, 42), "inserting before the loop moves all of it");
+            ok (l.deleteTime (6, 2), "delete beats 12 to 16, inside the loop");
+            check (loopIs (10, 38), "deleting inside the loop shortens it");
+        }
+
         // A warped clip crossing the edit cannot be split, so nothing changes.
         Session warped (false);
         ok (warped.importAudio (longSource, 0, 0), "import a clip to warp");

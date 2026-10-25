@@ -7,13 +7,14 @@ Racks follow the reference's Instrument, Audio Effect, MIDI Effect and Drum Rack
 - Racks are native device kinds 30–33. Instrument and Drum Racks are chosen as a MIDI track's instrument, a MIDI Effect Rack goes with the MIDI effects and an Audio Effect Rack with the audio devices. The device menu lists them under Racks.
 - A chain holds MIDI effects, then at most one instrument, then audio effects and Utilities, up to 32 devices. Audio Effect Rack chains take audio devices only, and MIDI Effect Rack chains take MIDI effects only. Racks nest up to four deep. A rack holds up to 128 chains.
 - Chain settings: name, volume (−100 dB is silence, top +6 dB), pan on the track mixer's law, activator, solo, and key, velocity and chain select zones. Each zone has a low and high limit and fade ranges inside them.
-- Solo is exclusive in the chain list; Cmd/Ctrl-click adds chains.
+- Solo follows the Exclusive Solo preference, as the reference's chain solo does (static reading of its code, 2026-10-25). With it on, a click is exclusive: every chain of the rack is unsoloed before the clicked one is set, whether it turns on or off. Cmd/Ctrl alone, with no other modifier, makes the click change only that chain. With Exclusive Solo off it is the other way round.
 - Sixteen macros, eight shown at first, with More/Fewer buttons. A macro maps to any built-in device control in the rack, a chain's volume, pan or send, or the chain selector, between a minimum and maximum. A minimum above the maximum inverts the mapping. A macro can drive many targets, and each target control takes one macro.
 - A macro's name is its custom name, else its one target's control name, else "Macro N".
 - Macros and the chain selector are the rack's own controls, so they automate and undo like any device control.
 - Drum Rack chains are pads: each receives one note (or All Notes), plays a note of its own (C3 by default) and can join one of 16 choke groups. Pads send post-fader to up to six return chains inside the rack.
 - Dropping an audio file on an empty pad makes a chain named after it with a one-shot Sampler. Dropping on a filled pad replaces its Sampler's sample. Dragging a pad onto another swaps them.
 - The pad grid shows 16 of the 128 notes and moves by bank.
+- Device activators: with several devices of a chain selected, clicking the activator of one of them, or of a device between them, switches every device from the first selected to the last in one undo step, as the reference's activator does (static reading of its code, 2026-10-25; it ignores modifiers). Elsewhere a click switches the one device.
 - Grouping: Cmd/Ctrl+G groups the selected devices into a rack of the right kind, and the instrument panel's Group button groups the instrument and the audio devices after it. Cmd/Ctrl+Shift+G ungroups a one-chain rack.
 - Every command in the [architecture](../architecture.md#racks) is one undo step and validates before changing the project.
 
@@ -54,7 +55,7 @@ The rack's chains, returns, devices, mappings, visible-macro count and macro nam
 - rejection of eight malformed project files;
 - no heap calls in 36 blocks of note floods, chokes, sends and macro-driven controls, nor in adopting a new layout.
 
-The realtime source guard covers the rack callback and choke path. The UI suite drives the rack editor's chains, zone edges and fades, the macro knob and mapping list, More macros, chain-device power and removal, the Drum Rack drop, choke, returns, sends, pad drag and banks, and device selection with Cmd/Ctrl+G, Cmd/Ctrl+Shift+G and Delete.
+The realtime source guard covers the rack callback and choke path. The UI suite drives the rack editor's chains, zone edges and fades, the macro knob and mapping list, More macros, chain-device power and removal, the Drum Rack drop, choke, returns, sends, pad drag and banks, and device selection with Cmd/Ctrl+G, Cmd/Ctrl+Shift+G and Delete. It solos chains with Exclusive Solo on and off, with and without Cmd/Ctrl, and switches two selected devices off together in one undo step, a device outside them alone.
 
 ## Macro variations and Rand (2026-10-25)
 

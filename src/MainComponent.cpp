@@ -773,7 +773,8 @@ public:
         stopButton.setTooltip ("Stop; again to return to the start  |  Home");
         recordButton.setTooltip ("Record into armed audio or MIDI tracks  |  F9");
         playButton.onClick = [this] { togglePlay(); };
-        stopButton.onClick = [this] { if (state.playing || state.recording) session.stop(); else session.returnToStart(); refresh(); };
+        // Stopped, Stop returns the insert marker to the start and collapses the time selection there, as the reference's does.
+        stopButton.onClick = [this] { if (session.stopPressed()) timeSelection = {}; refresh(); };
         recordButton.onClick = [this] { report (session.recordButton (juce::ModifierKeys::getCurrentModifiers().isShiftDown())); refresh(); };
         overdubButton.setTooltip ("MIDI Arrangement Overdub: MIDI recorded in the Arrangement adds its notes to the clips it records over");
         overdubButton.onClick = [this] { session.setArrangementOverdub (! session.arrangementOverdub()); refresh(); };
@@ -1409,7 +1410,7 @@ public:
         if (code == juce::KeyPress::tabKey && editorTabKey) { if (clipEditorShown()) stepEditorTab (shift ? -1 : 1); return true; }
         if (code == juce::KeyPress::tabKey && shift) { if (showPiano) closeClipView(); else openPianoRoll(); return true; }
         if (code == juce::KeyPress::tabKey) { if (showSession) showArrangementView(); else showSessionView(); return true; }
-        if (code == juce::KeyPress::spaceKey && shift && ! cmd) { if (state.playing) session.stop(); else report (session.continuePlayback()); refresh(); return true; }
+        if (code == juce::KeyPress::spaceKey && shift && ! cmd) { if (state.playing) session.stopPressed(); else report (session.continuePlayback()); refresh(); return true; }
         if (code == juce::KeyPress::spaceKey && ! cmd && ! key.getModifiers().isAltDown()) { togglePlay(); return true; }
         if (code == juce::KeyPress::homeKey) { session.returnToStart(); refresh(); return true; }
         // Escape jumps to the selected track's title bar, as the reference's does: the headers then take Edit's commands.
@@ -12212,7 +12213,18 @@ private:
             power.setTooltip ("Turn this device on or off (bypass)");
             power.setColour (juce::TextButton::buttonOnColourId, themes::colour (0xffffcf4a)); power.setColour (juce::TextButton::textColourOnId, themes::colour (0xff1a1a1a));
             open.setTooltip ("Open this device in its own window"); remove.setTooltip ("Remove this device");
-            power.onClick = [this] { if (const int p = index(); p >= 0) owner.report (owner.session.setPluginEnabled (owner.deviceChainId(), p, power.getToggleState())); owner.refresh(); };
+            // As the reference's activator: clicked within a selection of several devices, it switches the span from the
+            // first selected to the last together.
+            power.onClick = [this]
+            {
+                if (const int p = index(); p >= 0)
+                {
+                    const auto [first, last] = owner.selectedDeviceSpan();
+                    owner.report (last > first && p >= first && p <= last ? owner.session.setPluginsEnabled (owner.deviceChainId(), first, last, power.getToggleState())
+                                                                          : owner.session.setPluginEnabled (owner.deviceChainId(), p, power.getToggleState()));
+                }
+                owner.refresh();
+            };
             open.onClick = [this] { if (const int p = index(); p >= 0) owner.report (owner.session.showPluginEditor (owner.deviceChainId(), p)); };
             remove.onClick = [this] { if (const int p = index(); p >= 0) owner.report (owner.session.removePlugin (owner.deviceChainId(), p)); owner.refresh(); };
             if (native)
@@ -15829,7 +15841,7 @@ private:
         else if (success.isNotEmpty()) { status = std::move (success); statusFrames = 24 * 7; }
         repaint();
     }
-    void togglePlay() { if (state.playing) session.stop(); else report (session.play()); refresh(); }
+    void togglePlay() { if (state.playing) session.stopPressed(); else report (session.play()); refresh(); }
     // Capture MIDI into the Session's empty slots in Session View, otherwise into the Arrangement.
     void captureFromUI()
     {
@@ -16090,7 +16102,7 @@ private:
                     menuArrangementInOut, menuArrangementVolume, menuArrangementTrackOptions, menuArrangementReturns, menuArrangementOverdub,
                     menuAddFolder, menuRemoveUnavailableProjects, menuClearRecentProjects, menuShowBackups, menuRevealBackups, menuSnapAutomation, menuSaveTemplate,
                     menuQuantizeSettings, menuStartWithTap, menuDelayCompensation, menuFullHeightBrowser, menuFullSizeClip, menuContentEditor, menuEnvelopeEditor, menuExpressionEditor,
-                    menuCollectAndSave,
+                    menuCollectAndSave, menuReturnPlayPosition,
                     menuLastCommand, // New commands go before this.
                     menuSlice = 400, // Plus Session::SliceBy.
                     menuConvert = 407, // Plus Session::ConvertKind.
@@ -17006,6 +17018,7 @@ private:
             add (menuPlay, state.playing ? "Stop" : "Play");
             add (menuContinue, state.playing ? "Stop" : "Continue Playback");
             add (menuPlaySelection, playsSelection() ? "Play Arrangement Selection" : "Play from Insert Marker");
+            add (menuReturnPlayPosition, "Return Play Position", ! state.playing);
             add (menuInsertMarkerToPlayhead, "Move Insert Marker to Playhead");
             juce::PopupMenu options;
             options.addItem (menuEntry (menuFollow, "Follow", true, followPlayhead));
@@ -17238,8 +17251,9 @@ private:
             case menuSetClipEnd: clipMarkerFromMenu (ClipMarker::end); return;
             case menuPlaySelection: playSelectionFromUI(); return;
             case 74: { const auto [a, b] = editRange(); report (session.insertTime (a, b - a)); refresh(); break; }
-            case 75: { const auto [a, b] = editRange(); report (session.deleteTime (a, b - a)); timeSelection = {}; refresh(); break; }
-            case 89: { const auto [a, b] = editRange(); report (session.cutTime (a, b - a)); timeSelection = {}; refresh(); break; }
+            // Delete and Cut Time leave the selection collapsed to its start, as the reference's do.
+            case 75: { const auto [a, b] = editRange(); const auto r = session.deleteTime (a, b - a); report (r); if (r.wasOk()) { timeSelection = {}; session.setInsertMarker (a); } refresh(); break; }
+            case 89: { const auto [a, b] = editRange(); const auto r = session.cutTime (a, b - a); report (r); if (r.wasOk()) { timeSelection = {}; session.setInsertMarker (a); } refresh(); break; }
             case 101: report (session.pasteTime (pasteTimeTrack(), state.insertMarker)); refresh(); break;
             case 102: { const auto [a, b] = editRange(); report (session.duplicateTime (a, b)); refresh(); break; }
             case 98: report (session.setSoloInPlace (! state.soloInPlace)); refresh(); break;
@@ -17283,7 +17297,10 @@ private:
                 else { juce::String added; report (session.addLocator (state.position, {}, added)); }
                 break;
             case menuPlay: togglePlay(); return;
-            case menuContinue: if (state.playing) session.stop(); else report (session.continuePlayback()); break;
+            case menuContinue: if (state.playing) session.stopPressed(); else report (session.continuePlayback()); break;
+            // As the reference's, it stops: stopped, the insert marker returns to the start and the time selection
+            // collapses there.
+            case menuReturnPlayPosition: if (session.stopPressed()) timeSelection = {}; break;
             case menuInsertMarkerToPlayhead: session.setInsertMarker (state.position); break;
             case menuFollow: setFollow (! followPlayhead); break;
             case menuStartWithRecord:
@@ -18938,6 +18955,15 @@ private:
         else if (mods.isCommandDown()) { if (selectedDevices.contains (id)) selectedDevices.removeString (id); else selectedDevices.add (id); }
         else { selectedDevices.clearQuick(); selectedDevices.add (id); }
         deviceChain.repaint();
+    }
+    // The first and last selected devices' places in the shown chain, or (-1, -1).
+    std::pair<int, int> selectedDeviceSpan() const
+    {
+        int first = -1, last = -1;
+        if (const auto* devices = chainDevices())
+            for (int p = 0; p < (int) devices->size(); ++p)
+                if (selectedDevices.contains ((*devices)[(size_t) p].id)) { if (first < 0) first = p; last = p; }
+        return { first, last };
     }
     juce::StringArray orderedSelection() const
     {
@@ -21561,6 +21587,33 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         active->setToggleState (false, juce::dontSendNotification); active->onClick();
         check (! rackInfo().chains[0].settings.active, "the chain activator switches the chain off");
         session.undo(); check (rackInfo().chains[0].settings.active, "undo restores the chain activator");
+        {
+            // Chain solo follows Exclusive Solo, Cmd/Ctrl alone reversing it, as the reference's does (static reading).
+            const auto soloClick = [&] (int row, bool on, juce::ModifierKeys mods)
+            {
+                auto* solo = dynamic_cast<juce::Button*> (named (*editor, "Chain solo", (size_t) row));
+                juce::ModifierKeys::currentModifiers = mods;
+                solo->setToggleState (on, juce::dontSendNotification); solo->onClick();
+                juce::ModifierKeys::currentModifiers = {};
+                rackInfo();
+            };
+            const auto soloed = [&] { std::vector<bool> result; for (const auto& c : rackInfo().chains) result.push_back (c.settings.solo); return result; };
+            const auto command = juce::ModifierKeys (juce::ModifierKeys::commandModifier);
+            soloClick (0, true, {}); soloClick (1, true, {});
+            check (soloed() == std::vector<bool> { false, true }, "with Exclusive Solo on, a click solos a chain alone");
+            soloClick (0, true, command);
+            check (soloed() == std::vector<bool> { true, true }, "and a Cmd/Ctrl-click adds a chain to the soloed ones");
+            soloClick (0, false, {});
+            check (soloed() == std::vector<bool> { false, false }, "a plain click unsoloing one clears every chain's solo");
+            auto prefs = session.preferences(); prefs.exclusiveSolo = false; report (session.setPreferences (prefs));
+            soloClick (0, true, {}); soloClick (1, true, {});
+            check (soloed() == std::vector<bool> { true, true }, "with Exclusive Solo off, clicks add chains");
+            soloClick (1, true, command);
+            check (soloed() == std::vector<bool> { false, true }, "and a Cmd/Ctrl-click solos one alone");
+            prefs.exclusiveSolo = true; report (session.setPreferences (prefs));
+            soloClick (1, false, {});
+            check (soloed() == std::vector<bool> { false, false }, "no chain is left soloed");
+        }
         // Drag the second chain's key zone low edge from C-2 up to C3, then its top fade inward.
         auto* zones = named (*editor, "Zone editor");
         check (zones != nullptr && zones->isVisible(), "the zone editor is shown for an Instrument Rack");
@@ -21756,6 +21809,9 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         session.setLoop (state.looping, .5, 1); refresh();
         menuItemSelected (74, 1); refresh();
         check (std::abs (clipStart() - 2.5) < 1e-6, "Insert Silence moves later clips by the loop length");
+        // The loop brace moves with inserted time, as the reference's does, so each command below starts from the same loop.
+        check (std::abs (state.loopStart - 1) < 1e-6 && std::abs (state.loopEnd - 1.5) < 1e-6, "and the loop brace with them");
+        session.setLoop (state.looping, .5, 1); refresh();
         menuItemSelected (75, 1); refresh();
         check (std::abs (clipStart() - 2) < 1e-6, "Delete Time moves them back");
         showArrangementView(); refresh();
@@ -21765,6 +21821,7 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         refresh();
         check (std::abs (clipStart() - 2) < 1e-6, "each time edit is one undo step");
         // Cut, Paste and Duplicate Time, from the Edit menu and Shift+Cmd/Ctrl+V and D.
+        session.setLoop (state.looping, .5, 1); refresh();
         menuItemSelected (89, 1); refresh();
         check (std::abs (clipStart() - 1.5) < 1e-6 && session.hasRangeClipboard() && std::abs (session.rangeClipboardLength() - .5) < 1e-9,
                "Cut Time moves later clips back and keeps the time");
@@ -21772,8 +21829,10 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         const auto shiftCommand = juce::ModifierKeys::commandModifier | juce::ModifierKeys::shiftModifier;
         check (handleKey (juce::KeyPress ('V', shiftCommand, 0)), "Shift+Cmd/Ctrl+V pastes time"); refresh();
         check (std::abs (clipStart() - 2) < 1e-6, "Paste Time at the insert marker moves them on again");
+        session.setLoop (state.looping, .5, 1); refresh();
         check (handleKey (juce::KeyPress ('D', shiftCommand, 0)), "Shift+Cmd/Ctrl+D duplicates time"); refresh();
         check (std::abs (clipStart() - 2.5) < 1e-6, "Duplicate Time inserts a copy of the loop range after it");
+        check (std::abs (state.loopStart - .5) < 1e-6 && std::abs (state.loopEnd - 1.5) < 1e-6, "the loop brace grows over the copy, as the reference's does");
         for (int step = 0; step < 3; ++step) session.undo();
         refresh();
         check (std::abs (clipStart() - 2) < 1e-6, "each is one undo step");
@@ -22787,6 +22846,26 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         check (! state.tracks[0].plugins.back().enabled && ! power->getToggleState(), "the device switch bypasses the device");
         session.undo(); session.undo(); session.undo(); refresh();
         check (state.tracks[0].plugins.empty(), "undo removes the inline test device");
+        // As the reference's activator, a click within a selection of several devices switches the span together.
+        for (int i = 0; i < 3; ++i) report (session.addNativeEffect (0, Session::EffectKind::saturator));
+        refresh();
+        const auto devices = trackDeviceIds();
+        std::vector<juce::Button*> powers;
+        std::function<void (juce::Component&)> collect = [&] (juce::Component& c)
+        { for (auto* child : c.getChildren()) { if (auto* b = dynamic_cast<juce::Button*> (child); b != nullptr && child->getName() == "Device on") powers.push_back (b); collect (*child); } };
+        collect (deviceChain);
+        const auto enabled = [&] { std::vector<bool> result; for (const auto& p : state.tracks[0].plugins) result.push_back (p.enabled); return result; };
+        check (devices.size() == 3 && powers.size() == 3, "three devices, each with its switch");
+        selectDevice (devices[0], {}); selectDevice (devices[1], juce::ModifierKeys (juce::ModifierKeys::shiftModifier));
+        powers[1]->setToggleState (false, juce::dontSendNotification); powers[1]->onClick(); refresh();
+        check (enabled() == std::vector<bool> { false, false, true }, "switching off one of two selected devices switches off both");
+        session.undo(); refresh();
+        check (enabled() == std::vector<bool> { true, true, true }, "as one undo step");
+        powers[2]->setToggleState (false, juce::dontSendNotification); powers[2]->onClick(); refresh();
+        check (enabled() == std::vector<bool> { true, true, false }, "a device outside the selection switches alone");
+        for (int i = 0; i < 4; ++i) session.undo();
+        refresh(); selectedDevices.clear();
+        check (state.tracks[0].plugins.empty(), "undo removes the three devices");
         selectTrack (instrumentTrack); refresh();
     }
     if (const auto* pluginPath = std::getenv ("HALFTRACK_TEST_PLUGIN"))
@@ -24770,8 +24849,21 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
                             "Consolidate Time to New Scene", "-", "Insert MIDI Clip", "Capture MIDI", "-", "Create Fade", "-", "Slice to New MIDI Track >", "Convert Harmony to New MIDI Track",
                             "Convert Melody to New MIDI Track", "Convert Drums to New MIDI Track", "-", "Add Locator",
                             "Insert Time Signature Change", "-", "Import File..." });
-        expect ("Playback", { "Play", "Continue Playback", "Play from Insert Marker", "Move Insert Marker to Playhead", "Playback Options >", "-", "Record in Arrangement", "Arm Record in Arrangement",
+        expect ("Playback", { "Play", "Continue Playback", "Play from Insert Marker", "Return Play Position", "Move Insert Marker to Playhead", "Playback Options >", "-", "Record in Arrangement", "Arm Record in Arrangement",
                               "Record in Session", "-", "Metronome", "Metronome Only While Recording", "-", "Back to Arrangement" });
+        {
+            // Return Play Position, as the reference's: while stopped it returns the insert marker to the start and
+            // collapses the time selection there; while playing it is unavailable.
+            session.setInsertMarker (6); timeSelection = { 6, 8, { state.tracks[0].id } }; refresh();
+            const auto item = entry ("Playback", menuReturnPlayPosition);
+            check (item && item->isEnabled, "Return Play Position is available while stopped");
+            menuItemSelected (menuReturnPlayPosition, 0);
+            check (state.insertMarker == 0 && ! timeSelection.active() && ! state.playing, "it returns the insert marker to the start and collapses the time selection");
+            report (session.play()); refresh();
+            const auto playing = entry ("Playback", menuReturnPlayPosition);
+            check (playing && ! playing->isEnabled, "while playing it is unavailable");
+            session.stop(); refresh();
+        }
         const juce::String folds = std::any_of (state.tracks.begin(), state.tracks.end(), [] (const auto& t) { return ! t.folded; }) ? "Fold All Tracks" : "Unfold All Tracks";
         juce::StringArray view { "Fullscreen", "Zoom >", "-", "Info", "Undo History", "-", "Toggle Arrangement/Session View", "-", "Clip View", "Device View", "Toggle Clip/Device View", "Full-Size Clip View", "Hide Detail View", "-", "Notes", "Envelopes", "MPE", "-",
                                  "Browser", "Groove Pool", "Full Height Browser", "-", "Search in Browser", "Show Similar Files", "-", "Plug-In Windows" };
