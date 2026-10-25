@@ -49,7 +49,7 @@ What moved with the rebuild:
 - Halftrack's Session menu is gone. Its scene commands are in the scene menu and Edit; a scene drags in the scene column to a new place, as the reference's do; Stop All Clips is the Session's button; a clip's follow action opens from the clip view's Launch box.
 - View's Session, Arrangement and Piano Roll items became Toggle Arrangement/Session View and Clip View. The automation window opens from the device view's automation button, for the Main when its chain is shown.
 - Audio & MIDI Setup and Plug-Ins became tabs of the one Preferences window, as the reference's (see the [preferences contract](preferences-contract.md)).
-- Undo History is a window of its own beside the main one, Halftrack's, listing the steps by Edit's step names after a Start row; the steps Redo would do again are dimmed. The reference's window was not read.
+- Undo History is a window of its own beside the main one, Halftrack's, listing the steps by Edit's step names after a Start row; the steps Redo would do again are dimmed. Escape closes it, as the reference's Esc closes its windows and dialogs (manual section 42.1). The reference's window was not read.
 - Save a Copy writes the project to another file, with its media collected beside it, and keeps the open project's file, media and unsaved changes. Every Halftrack save collects its media, where the reference collects only with Collect All and Save (see [open questions](../open-questions.md)).
 - Import Audio and Import MIDI File became Import File, which takes both. Cmd+F searches the browser, and Follow moved to Option+Shift+F; Cmd+I inserts a scene in the Session; Shift+Cmd+R exports; Option+Cmd+O is the overview's, not Open's.
 
@@ -91,7 +91,7 @@ The UI suite compares each menu with the reference's order, filtered to Halftrac
 - the alternate keys reaching their items, with Option+Cmd+B showing and hiding the browser;
 - the Session keys above, Escape giving the headers Edit's commands, Cmd+6 to 9 and Cmd+0 setting the global quantization, and the browser's Right, Left and 0;
 - Navigate's Option+1 and Option+2 showing the Session and Arrangement Views with Edit acting there, Focus Device View and Focus Clip View likewise, Focus Browser showing the browser, and Option+Shift+M showing the Arrangement's mixer, greyed in the Session;
-- Undo History opening from Option+Cmd+Z without undoing, listing the steps from the start with the latest selected, a click on an earlier step undoing back to it and on the latest redoing, the main window's menus working while it is open, and choosing it again closing it;
+- Undo History opening from Option+Cmd+Z without undoing, listing the steps from the start with the latest selected, a click on an earlier step undoing back to it and on the latest redoing, the main window's menus working while it is open, and choosing it again, or Escape, closing it;
 - Plug-In Windows hiding and showing the plug-in windows (the plug-in editor suite hides an open editor's window, shows it again, and sees opening an editor bring the windows back);
 - Cmd+I inserting a scene below the selected one;
 - Edit acting on the slots (Cmd+E removing a stop button), a scene and the headers (Duplicate), and a lone Arrangement clip (Cut, then Paste at the insert marker), and Select All in the Arrangement;

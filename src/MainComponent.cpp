@@ -11423,6 +11423,8 @@ private:
         }
         ~UndoHistoryWindow() override { clearContentComponent(); setLookAndFeel (nullptr); }
         void closeButtonPressed() override { delete this; }
+        // Escape closes it, as the reference's Esc closes its windows and dialogs (its manual, section 42.1).
+        bool keyPressed (const juce::KeyPress& key) override { if (key == juce::KeyPress::escapeKey) { closeButtonPressed(); return true; } return DocumentWindow::keyPressed (key); }
         UndoHistoryPanel& content() { return *list; }
     private:
         std::unique_ptr<UndoHistoryPanel> list;
@@ -17200,6 +17202,8 @@ private:
         }
         ~PreferencesWindow() override { clearContentComponent(); setLookAndFeel (nullptr); }
         void closeButtonPressed() override { delete this; }
+        // Escape closes it, as the reference's Esc closes its windows and dialogs (its manual, section 42.1).
+        bool keyPressed (const juce::KeyPress& key) override { if (key == juce::KeyPress::escapeKey) { closeButtonPressed(); return true; } return DocumentWindow::keyPressed (key); }
         PreferencesView& content() { return *view; }
     private:
         std::unique_ptr<PreferencesView> view;
@@ -22663,6 +22667,8 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
             check (state.tracks.size() == tracks && history->currentRow() == current && ! session.canRedo(), "clicking the latest step redoes them");
             menuItemSelected (menuUndoHistory, 4); refresh();
             check (undoHistory() == nullptr && ! entry ("View", menuUndoHistory)->isTicked, "choosing it again closes the window");
+            menuItemSelected (menuUndoHistory, 4); refresh();
+            check (undoHistoryWindow != nullptr && undoHistoryWindow->keyPressed (juce::KeyPress (juce::KeyPress::escapeKey)) && undoHistoryWindow == nullptr, "and Escape closes it too, as the reference's Esc does");
             session.undo(); session.undo(); refresh();
         }
         {
@@ -23157,7 +23163,7 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         check (window->content().currentTab() == "audio" && session.preferences().preferencesTab == "audio", "a link opens the Audio tab, which it remembers");
         showPreferences ("midi");
         check (preferencesWindow.getComponent() == window && window->content().currentTab() == "midi", "opening it again keeps the one window, at the tab asked for");
-        window->closeButtonPressed();
+        check (window->keyPressed (juce::KeyPress (juce::KeyPress::escapeKey)) && preferencesWindow == nullptr, "Escape closes it, as the reference's Esc does");
         showPreferences();
         check (preferencesWindow != nullptr && preferencesWindow->content().currentTab() == "midi", "reopened, it shows the tab chosen last");
         // The Audio page, in the reference's order: the driver type and device, the channel configuration, the sample rate and the latencies.

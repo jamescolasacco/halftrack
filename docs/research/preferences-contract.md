@@ -6,7 +6,7 @@ Halftrack's preferences follow part of the reference's. They live in a versioned
 
 A research agent read the reference's Preferences window statically (Live 12.2.1, arm64 slice sha256 b37cb738…; findings in the ignored `artifacts/reverse-engineering/prefs/`). Seven of its nine pages are layouts in an encrypted resource, so only the Audio and Link, Tempo & MIDI pages have exact rows; the others give their sections and the defaults of the settings behind them.
 
-- **A normal window, one at a time.** The reference shows Preferences as an ordinary window, never modal; opening it again brings the open one to the front. Halftrack's does the same.
+- **A normal window, one at a time.** The reference shows Preferences as an ordinary window, never modal; opening it again brings the open one to the front. Halftrack's does the same. Escape closes it, as the reference's Esc closes its windows and dialogs (manual section 42.1, consulted 2026-10-25).
 - **Tabs.** The reference's tabs run down the left (141 pixels of a 556 by 589 window): Display & Input, Theme & Colors, Audio, Link, Tempo & MIDI, File & Folder, Library, Plug-Ins, Record, Warp & Launch, and Licenses & Updates. Halftrack shows those holding settings it has, in that order, and leaves out File & Folder, Library and Licenses & Updates.
 - **The tab is remembered.** The reference keeps the chosen tab with its preferences (first open: Display & Input). Halftrack keeps it as `preferencesTab`, by the reference's tab ids (`audio`, `midi`, `Plugins`...), without marking the project changed (`Session::setPreferencesTab`). Its links open a tab: the control bar's audio button and Audio To's Configure... the Audio tab, the device chain's Manage the Plug-Ins tab.
 - **Pages.**
@@ -68,7 +68,7 @@ An import that the preferences warp is still one undo step.
   - a newer file's unknown setting is ignored;
   - an out-of-range value, and a file of junk, are set aside with the defaults kept and the reason given.
 
-The UI suite opens the window: a normal window, not modal, with the tabs in the reference's order; a link opening the Audio tab, which it remembers; one window when opened again; and the tab chosen last when reopened. On the Audio page it finds the driver type, device, sample rate and buffer size, their rows in the reference's order, and sets the buffer size; on Link, Tempo & MIDI the control surface, and on a virtual port the ports' switches. Every preference fits on its page. It switches Exclusive Solo off and sees a plain click add a second soloed track. It also finds Start Recording on Scene Launch off and switches it on, and Start Playback with Record on and switches it off, each keeping the other settings, and then resets.
+The UI suite opens the window: a normal window, not modal, with the tabs in the reference's order; a link opening the Audio tab, which it remembers; one window when opened again; Escape closing it; and the tab chosen last when reopened. On the Audio page it finds the driver type, device, sample rate and buffer size, their rows in the reference's order, and sets the buffer size; on Link, Tempo & MIDI the control surface, and on a virtual port the ports' switches. Every preference fits on its page. It switches Exclusive Solo off and sees a plain click add a second soloed track. It also finds Start Recording on Scene Launch off and switches it on, and Start Playback with Record on and switches it off, each keeping the other settings, and then resets.
 
 ## Not yet covered
 
