@@ -1429,6 +1429,11 @@ public:
         }
         if (! cmd && ! showPiano && (code == 'U' || code == 'u')) { toggleFold (key.getModifiers().isAltDown()); return true; }
         if (! cmd && ! key.getModifiers().isAltDown() && ! showSession && ! showPiano && (code == 'W' || code == 'w')) { optimizeWidth(); return true; }
+        // With a group selected, + shows its tracks and - hides them, as the reference's keys do (its manual,
+        // section 42.19); otherwise they zoom.
+        if ((key.getTextCharacter() == '+' || key.getTextCharacter() == '=' || key.getTextCharacter() == '-') && ! cmd && ! key.getModifiers().isAltDown() && ! showPiano)
+            if (const auto* group = groupInfo (selectedChain))
+            { report (session.setGroupFolded (group->id, key.getTextCharacter() == '-')); refresh(); return true; }
         if ((key.getTextCharacter() == '+' || key.getTextCharacter() == '=') && ! cmd) { if (showSession && ! showPiano) return false; if (showPiano) pianoRoll.zoom (1.3); else zoom (1.3); return true; }
         if (key.getTextCharacter() == '-' && ! cmd) { if (showSession && ! showPiano) return false; if (showPiano) pianoRoll.zoom (1.0 / 1.3); else zoom (1.0 / 1.3); return true; }
         for (auto* focused = juce::Component::getCurrentlyFocusedComponent(); focused != nullptr; focused = focused->getParentComponent())
@@ -25083,6 +25088,15 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
             for (const auto& lane : lanes) if (lane.group && lane.height > 0) ++shownGroupLanes;
             check (shownGroupLanes == 1 && laneHeight (0) == 0 && laneHeight (1) == 0, "folding the outer group hides the inner group and every track inside");
             check (session.setGroupFolded (group, false).wasOk(), "unfold it"); refresh();
+            {
+                // With the group selected, - hides its tracks and + shows them, rather than zooming.
+                const auto zoomed = pixelsPerSecond;
+                selectedChain = group; refresh();
+                check (handleKey (juce::KeyPress ('-', {}, '-')) && groupInfo (group) != nullptr && groupInfo (group)->folded && pixelsPerSecond == zoomed,
+                       "with a group selected, - hides its tracks, as the reference's key does, rather than zooming");
+                check (handleKey (juce::KeyPress ('+', juce::ModifierKeys::shiftModifier, '+')) && groupInfo (group) != nullptr && ! groupInfo (group)->folded, "and + shows them again");
+                selectedChain.clear(); refresh();
+            }
             {
                 // Dragging headers moves tracks and groups, as in the reference: onto the lower half of a
                 // group's header goes into it, first; below every lane goes after the last track.

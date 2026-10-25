@@ -32,6 +32,7 @@ From a static reading of the reference's code (Group Tracks 0x10260d478, its gro
 - **Snapshot.** `GroupInfo::parentId` names the group around a group. A track's `groupId` names its own group.
 - **Interface.**
   - The Arrangement shows a header lane for each group above its contents, outermost first. Folding a group hides everything inside it, nested groups' headers included.
+  - With a group selected, + shows its tracks and - hides them, in either view, as the reference's Show/Hide Grouped Tracks keys do (manual section 42.19, consulted 2026-10-25); otherwise the keys zoom as before.
   - The Session view shows each group's column before its contents.
   - A group lane summarises the clips of every track inside it.
   - With a group selected (by clicking its header or strip), Group Tracks groups it with the tracks selected besides it, and Ungroup Tracks ungroups it.
@@ -43,7 +44,7 @@ Evidence (`tests/GroupTests.cpp`):
 - the nesting reopening;
 - ungrouping the middle group moving its contents into the top group, with the mix unchanged, and undo.
 
-The UI suite checks the Session columns and Arrangement header lanes of a nested group, folding the outer group, and ungrouping the selected inner group.
+The UI suite checks the Session columns and Arrangement header lanes of a nested group, folding the outer group, - and + hiding and showing the selected group's tracks without zooming, and ungrouping the selected inner group.
 
 Not implemented: group sends, presets and racks on group or Main chains, sidechains into group or Main plug-ins, per-clip launch modes through group slots, and any comparison with reference group summing.
 
