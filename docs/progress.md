@@ -2861,3 +2861,7 @@ UI area. A clicked start marker in the note editor now takes Left and Right, a g
 ## Collect All and Save — 2026-10-25
 
 UI area. The File menu has the reference's Collect All and Save after Save a Copy; as every Halftrack save collects the project's media, it saves ([menu contract](research/main-menu-contract.md)). The menu contract's list of missing commands no longer names Snap Automation to Grid, which Options already has. Checked in the UI suite.
+
+## Probability groups in the editor — 2026-10-25
+
+UI area. Pointing at a grouped note now outlines its group's notes, and the Chance lane shows one marker per group, a diamond for Play All and a triangle for Play One, as the reference's manual describes ([note chance contract](research/note-chance-contract.md#probability-groups-2026-10-25)). Checked in the UI suite.

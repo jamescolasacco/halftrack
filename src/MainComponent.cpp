@@ -8687,6 +8687,7 @@ private:
                     g.drawText ((note.active ? juce::String() : juce::String("OFF / ")) + pitchName (note.pitch), r.reduced (4, 0), juce::Justification::centredLeft, true);
                 }
                 if (selected) { g.setColour (ink); g.fillRect (r.getRight() - 4, r.getY() + 3, 2.0f, r.getHeight() - 6); }
+                if (note.chanceGroup.isNotEmpty() && note.chanceGroup == hoveredChanceGroup) { g.setColour (ink); g.drawRect (r.expanded (1.0f), 1.5f); }
                 // A note left to chance, or in a probability group, carries a triangle in its corner, as the reference's do.
                 if ((note.chance < 1 || note.chanceGroup.isNotEmpty()) && r.getWidth() > 6 && r.getHeight() > 6)
                 {
@@ -9035,12 +9036,19 @@ private:
         }
         void mouseMove (const juce::MouseEvent& e) override
         {
-            if (owner.drawMode && gridBounds().contains (e.getPosition())) { setMouseCursor (owner.drawCursor); return; }
             const auto* clip = owner.currentMidiClip();
+            // Pointing at a note in a probability group highlights the group's notes, as the reference's do (its manual,
+            // section 10.5.13.1).
+            juce::String group;
+            if (clip != nullptr) for (const auto& note : clip->notes) if (noteBounds (note).contains (e.position) && note.chanceGroup.isNotEmpty()) group = note.chanceGroup;
+            if (group != hoveredChanceGroup) { hoveredChanceGroup = group; repaint(); }
+            if (owner.drawMode && gridBounds().contains (e.getPosition())) { setMouseCursor (owner.drawCursor); return; }
             bool edge = false;
             if (clip != nullptr) for (const auto& note : clip->notes) if (noteBounds (note).contains (e.position) && e.x >= noteBounds (note).getRight() - 8) edge = true;
             setMouseCursor (edge ? juce::MouseCursor::LeftRightResizeCursor : juce::MouseCursor::NormalCursor);
         }
+        void mouseExit (const juce::MouseEvent&) override { if (hoveredChanceGroup.isNotEmpty()) { hoveredChanceGroup.clear(); repaint(); } }
+        juce::String hoveredChanceGroup; // The probability group of the note under the pointer, its notes highlighted.
         void mouseWheelMove (const juce::MouseEvent& e, const juce::MouseWheelDetails& details) override
         {
             if (e.mods.isCommandDown()) { zoom (details.deltaY > 0 ? 1.1 : 1.0 / 1.1); return; }
@@ -9438,8 +9446,13 @@ private:
             if (envelope.active() || expression) {}
             else if (lane < 0)
             {
+                const auto leads = chanceGroupLeads();
                 for (const auto& note : notes())
                 {
+                    // In the Chance lane a probability group shows one marker, at its earliest note: a diamond handle for
+                    // Play All, a triangle for Play One (its manual, section 10.5.13.1).
+                    const bool grouped = lane == chanceLane && note.chanceGroup.isNotEmpty();
+                    if (grouped && leads.at (note.chanceGroup) != note.id) continue;
                     const bool selected = roll.selectedNoteIds.contains (note.id);
                     const auto top = y (noteValue (note)), at = x (note.startBeat);
                     const auto colour = (selected ? orange : themes::colour (0xff8cc4b5)).withAlpha (note.active ? 1.0f : .35f);
@@ -9451,7 +9464,14 @@ private:
                     }
                     g.setColour (colour);
                     g.fillRect (at, top, 2.0f, (float) area.getBottom() - top);
-                    g.fillEllipse (at - 2.5f, top - 2.5f, 6, 6);
+                    if (grouped)
+                    {
+                        juce::Path handle;
+                        if (note.playOne) handle.addTriangle (at + 1.0f, top - 4.0f, at + 5.0f, top + 3.0f, at - 3.0f, top + 3.0f);
+                        else { handle.startNewSubPath (at + 1.0f, top - 4.5f); handle.lineTo (at + 5.5f, top); handle.lineTo (at + 1.0f, top + 4.5f); handle.lineTo (at - 3.5f, top); handle.closeSubPath(); }
+                        g.fillPath (handle);
+                    }
+                    else g.fillEllipse (at - 2.5f, top - 2.5f, 6, 6);
                 }
             }
             else
@@ -9769,6 +9789,28 @@ private:
             const auto grid = roll.snapBeats();
             return juce::jlimit (0.0, clip ? contentEndBeat (*clip) : 0.0, ! roll.snapsNotes (mods) ? beat : std::round (beat / grid) * grid);
         }
+    public:
+        // Each probability group's earliest note (the lowest of those starting together), which carries its marker.
+        std::map<juce::String, juce::String> chanceGroupLeads() const
+        {
+            std::map<juce::String, Session::MidiNoteInfo> earliest;
+            for (const auto& note : notes())
+                if (note.chanceGroup.isNotEmpty())
+                    if (const auto found = earliest.find (note.chanceGroup); found == earliest.end() || note.startBeat < found->second.startBeat
+                        || (note.startBeat == found->second.startBeat && note.pitch < found->second.pitch)) earliest[note.chanceGroup] = note;
+            std::map<juce::String, juce::String> leads;
+            for (const auto& [group, note] : earliest) leads[group] = note.id;
+            return leads;
+        }
+        // The markers the lane shows: one a note, but one a probability group in the Chance lane.
+        int shownMarkers() const
+        {
+            const auto leads = chanceGroupLeads();
+            int markers = 0;
+            for (const auto& note : notes()) markers += lane != chanceLane || note.chanceGroup.isEmpty() || leads.at (note.chanceGroup) == note.id;
+            return markers;
+        }
+    private:
         std::vector<Session::MidiNoteInfo> notes() const
         {
             if (! previewNotes.empty()) return previewNotes;
@@ -10357,6 +10399,7 @@ private:
         double visibleStartBeat() const noexcept { return viewBeat; }
         juce::Rectangle<float> shownNoteBounds (const Session::MidiNoteInfo& note) const { return noteBounds (note); }
         int keyTrackHeight() const noexcept { return rowHeight; }
+        int shownLaneMarkers() const { return laneView.shownMarkers(); } // The lane's markers (see LaneView::shownMarkers).
         // Shows the key tracks from a pitch at a height, as a view restored.
         void setKeyTracks (int top, int height)
         { rowHeight = juce::jlimit ((int) minimumRowHeight, (int) maximumRowHeight, height); topPitch = juce::jlimit (0, 127, top); updateScroll(); repaint(); }
@@ -26119,6 +26162,17 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         check (pianoRoll.selectedNoteCount() == 2 && handleKey (juce::KeyPress ('G', juce::ModifierKeys (juce::ModifierKeys::commandModifier), 0)) && state.groups.size() == groupsBefore
                    && noteById (splitSource[0]).chanceGroup.isNotEmpty() && noteById (splitSource[0]).chanceGroup == noteById (splitSource[1]).chanceGroup && ! noteById (splitSource[1]).playOne,
                "in the note editor Cmd+G groups the selected notes Play All for chance, not the tracks");
+        {
+            // Pointing at a grouped note highlights its group, and the Chance lane shows one marker for the group.
+            const auto over = groupPoint (.5, 60);
+            pianoRoll.mouseMove (groupEvent (over, over, false, 0));
+            check (pianoRoll.hoveredChanceGroup == noteById (splitSource[0]).chanceGroup, "pointing at a grouped note highlights its group's notes");
+            auto* lanes = dynamic_cast<juce::ComboBox*> (findNamed (pianoRoll, "Lane"));
+            const auto laneBefore = lanes != nullptr ? lanes->getSelectedId() : 1;
+            if (lanes != nullptr) lanes->setSelectedId (97, juce::sendNotificationSync);
+            check (pianoRoll.shownLaneMarkers() == (int) currentMidiClip()->notes.size() - 1, "the Chance lane shows the two grouped notes as one marker");
+            if (lanes != nullptr) lanes->setSelectedId (laneBefore, juce::sendNotificationSync);
+        }
         check (handleKey (juce::KeyPress ('G', juce::ModifierKeys (juce::ModifierKeys::commandModifier | juce::ModifierKeys::shiftModifier), 0))
                    && noteById (splitSource[0]).chanceGroup.isEmpty() && noteById (splitSource[1]).chanceGroup.isEmpty(), "and Cmd+Shift+G ungroups them");
     }
