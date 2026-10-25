@@ -2849,3 +2849,7 @@ UI area. The Display & Input page has the reference's Draw Mode with Pitch Lock 
 ## Device A/B comparison — 2026-10-25
 
 Engine and UI areas. Built-in devices keep two states, A and B, as the reference's manual describes: P or the title menu's Compare: Switch to B shows the other state (overriding automated controls, as a change by hand would), Compare: Copy A to B copies the shown state to the other, and "(B)" follows the name while B shows. Each is one undo step, and both states are saved and validated on load ([native effects contract](research/native-effects-contract.md#device-ab-comparison-2026-10-25)). Checked by the presets and UI suites.
+
+## Computer MIDI keyboard and Scale Highlighting kept — 2026-10-25
+
+UI area. The computer MIDI keyboard and Scale Highlighting now come back as they were left, kept with the preferences as the reference's song preference data keeps them ([preferences contract](research/preferences-contract.md)). Checked by the preferences and UI suites.

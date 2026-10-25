@@ -4510,6 +4510,7 @@ struct Session::Impl
             const int fullHeight = number ("fullHeightBrowser", 0, 2);
             read.fullHeightBrowser = fullHeight == 1;
             read.drawWithPitchLock = number ("drawWithPitchLock", 0, 2) == 1;
+            read.computerMidiKeyboard = number ("computerMidiKeyboard", 0, 2) == 1; read.highlightScale = number ("highlightScale", 0, 2) == 1;
             read.selectOnLaunch = number ("selectOnLaunch", 1, 2) == 1; read.selectNextSceneOnLaunch = number ("selectNextSceneOnLaunch", 1, 2) == 1;
             read.startPlaybackWithRecord = startPlayback == 1;
             read.startPlaybackWithTapTempo = tapStart == 1;
@@ -4549,6 +4550,7 @@ struct Session::Impl
         xml.setAttribute ("startPlaybackWithTapTempo", next.startPlaybackWithTapTempo ? 1 : 0);
         xml.setAttribute ("fullHeightBrowser", next.fullHeightBrowser ? 1 : 0);
         xml.setAttribute ("drawWithPitchLock", next.drawWithPitchLock ? 1 : 0);
+        xml.setAttribute ("computerMidiKeyboard", next.computerMidiKeyboard ? 1 : 0); xml.setAttribute ("highlightScale", next.highlightScale ? 1 : 0);
         xml.setAttribute ("selectOnLaunch", next.selectOnLaunch ? 1 : 0); xml.setAttribute ("selectNextSceneOnLaunch", next.selectNextSceneOnLaunch ? 1 : 0);
         xml.setAttribute ("preferencesTab", next.preferencesTab);
         for (const auto& folder : next.userFolders) xml.createNewChildElement ("USERFOLDER")->setAttribute ("path", folder);
@@ -8205,6 +8207,8 @@ Result Session::setComputerKeyboardEnabled (bool on)
             if (impl->keyboardHeld[(size_t) note]) impl->playComputerKeyboard (juce::MidiMessage::noteOff (1, note));
     impl->keyboardHeld.reset();
     impl->computerKeys = on;
+    // Kept with the preferences, as the reference keeps its computer MIDI keyboard's state.
+    if (impl->prefs.computerMidiKeyboard != on) { auto next = impl->prefs; next.computerMidiKeyboard = on; setPreferences (next); }
     sendChangeMessage(); return Result::ok();
 }
 bool Session::isComputerKeyboardEnabled() const { return impl->computerKeys; }

@@ -1365,6 +1365,9 @@ public:
         // Draw Mode with Pitch Lock, after the reference's (its song preference data, off): Draw Mode draws notes
         // at one pitch, and Option draws them melodically, the other way round from its default.
         bool drawWithPitchLock = false;
+        // The computer MIDI keyboard (KEYS) and Options > Scale Highlighting (K), which the reference keeps with
+        // its song preference data, both off at first: they come back as they were left.
+        bool computerMidiKeyboard = false, highlightScale = false;
         bool operator== (const Preferences&) const = default;
     };
     // The audio device's latency as it reports it, with Driver Error Compensation. Recordings are placed

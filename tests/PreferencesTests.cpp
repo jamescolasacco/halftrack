@@ -111,6 +111,10 @@ int runPreferencesTests (const juce::File& artifacts)
         auto [pitchLocked, pitchLockedProblem] = reopen ("<HALFTRACKPREFERENCES version=\"1\" drawWithPitchLock=\"1\"/>");
         expected = {}; expected.drawWithPitchLock = true;
         check (pitchLocked == expected && pitchLockedProblem.isEmpty() && ! Session::Preferences {}.drawWithPitchLock, "Draw Mode with Pitch Lock, off by default, is read back");
+        auto [kept, keptProblem] = reopen ("<HALFTRACKPREFERENCES version=\"1\" computerMidiKeyboard=\"1\" highlightScale=\"1\"/>");
+        expected = {}; expected.computerMidiKeyboard = true; expected.highlightScale = true;
+        check (kept == expected && keptProblem.isEmpty() && ! Session::Preferences {}.computerMidiKeyboard && ! Session::Preferences {}.highlightScale,
+               "the computer MIDI keyboard and Scale Highlighting, off by default, are read back on");
         auto [waiting, waitingProblem] = reopen ("<HALFTRACKPREFERENCES version=\"1\" startPlaybackWithRecord=\"0\"/>");
         expected = {}; expected.startPlaybackWithRecord = false;
         check (waiting == expected && waitingProblem.isEmpty(), "Start Playback with Record off is read back");

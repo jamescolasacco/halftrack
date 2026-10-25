@@ -915,6 +915,9 @@ public:
         fitButton.setTooltip ("Fit all clips to the arrangement view");
         session.addChangeListener (this);
         session.knownPlugins().addChangeListener (this);
+        // The computer MIDI keyboard and Scale Highlighting come back as they were left, as the reference's do.
+        scaleHighlighting = session.preferences().highlightScale;
+        if (session.preferences().computerMidiKeyboard) setComputerKeyboard (true);
         updateBrowser();
         refresh();
         startTimerHz (24);
@@ -16423,7 +16426,12 @@ private:
             case menuBrowserPreHear: previewButton.setToggleState (! previewButton.getToggleState(), juce::dontSendNotification); previewButton.onClick(); return;
             case menuFoldToNotes: setFold (! foldToNotes, foldToScale); return;
             case menuFoldToScale: setFold (foldToNotes, ! foldToScale); return;
-            case menuScaleHighlighting: scaleHighlighting = ! scaleHighlighting; pianoRoll.foldChanged(); return;
+            case menuScaleHighlighting:
+            {
+                scaleHighlighting = ! scaleHighlighting; pianoRoll.foldChanged();
+                auto preferences = session.preferences(); preferences.highlightScale = scaleHighlighting; report (session.setPreferences (preferences));
+                return;
+            }
             case menuExternalSync: report (session.setExternalSync (! session.isExternalSync())); break;
             default: break;
         }
@@ -19262,7 +19270,7 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
     {
         // While the computer MIDI keyboard plays, W plays a note in the note editor and Shift+W fits it, as
         // the reference's single-letter shortcuts take Shift then.
-        check (session.setComputerKeyboardEnabled (true).wasOk(), "the computer MIDI keyboard on");
+        check (session.setComputerKeyboardEnabled (true).wasOk() && session.preferences().computerMidiKeyboard, "the computer MIDI keyboard on, kept with the preferences");
         const auto widthBefore = pianoRoll.beatWidth();
         check (pianoRoll.keyPressed (juce::KeyPress ('W', {}, 'w')) && computerKeys.holding() && pianoRoll.beatWidth() == widthBefore, "W plays a note in the note editor, leaving its zoom");
         keyStateChanged (false);
@@ -19272,7 +19280,7 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         check (pianoRoll.keyPressed (juce::KeyPress ('W', juce::ModifierKeys::shiftModifier, 'W')) && ! computerKeys.holding() && std::abs (pianoRoll.beatWidth() - zoomed) > 1e-6,
                "Shift+W fits the note editor instead, playing nothing");
         pianoRoll.zoom (original / pianoRoll.beatWidth());
-        check (session.setComputerKeyboardEnabled (false).wasOk(), "and off again"); refresh();
+        check (session.setComputerKeyboardEnabled (false).wasOk() && ! session.preferences().computerMidiKeyboard, "and off again"); refresh();
     }
     auto click = [&] (juce::Point<float> at, int clicks = 1)
     {
@@ -19707,8 +19715,9 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
             const auto row = pianoRoll.shownNoteBounds ({ {}, outside, 0, 1 });
             const auto pixel = [&] { return pianoRoll.createComponentSnapshot (pianoRoll.getLocalBounds()).getPixelAt (58, juce::roundToInt (row.getCentreY())); };
             const auto plain = pixel();
-            check (handleKey (juce::KeyPress ('k')) && scaleHighlighting && pixel() != plain, "K turns Scale Highlighting on, dimming the rows outside the scale");
-            check (handleKey (juce::KeyPress ('k')) && ! scaleHighlighting && pixel() == plain, "and K turns it off");
+            check (handleKey (juce::KeyPress ('k')) && scaleHighlighting && pixel() != plain && session.preferences().highlightScale,
+                   "K turns Scale Highlighting on, dimming the rows outside the scale, and the preferences keep it, as the reference's song preferences do");
+            check (handleKey (juce::KeyPress ('k')) && ! scaleHighlighting && pixel() == plain && ! session.preferences().highlightScale, "and K turns it off");
         }
         pianoRoll.openNoteTool (Session::NoteTool::fitToScale);
         juce::Component* fit = nullptr;
