@@ -79,7 +79,7 @@ This follows a static reading of the reference's code: its track move (0x10242f8
 
   A track's automation and take lanes count as the track. Return lanes are no place for tracks, and a dragged group has no place inside itself; neither shows a line. A return's header drags among the return lanes only, before a return or after the last. Elsewhere an orange line across the headers shows where the tracks would go.
 
-  Pressing the name of a track selected with others keeps them all selected, so the drag moves them all; releasing without a drag selects that track alone. Shift-clicking adds or removes a track, as before.
+  Pressing the name of a track selected with others keeps them all selected, so the drag moves them all; releasing without a drag selects that track alone. Shift-click and Cmd-click select several tracks (see [Selecting and moving several tracks](#selecting-and-moving-several-tracks-2026-10-25)).
 - **Placement.** Both views place a drop with one rule, the reference's drop target (0x1032c50ac) and the groups it offers at a place (0x1024314c8). "After" an item means the next place in the track order.
   - The groups that place can be in run from the deepest one the items on either side share to the innermost one the item before is in. An unfolded group's header counts as inside itself, so the next place after it is its first.
   - With no nesting level picked, the innermost is used.
@@ -127,7 +127,23 @@ The stems suite exports a group holding only a group, before the group inside it
 Not reproduced:
 - **The strips' look.** The reference keeps the deepest nesting for its arranger layout (LSong +0x800); how it draws the strips was not read. Halftrack's strips are its own.
 - **Audio To.** Reproduced since 2026-10-24: a grouped track plays into its group or leaves it, and grouping switches it between Main and the group, keeping other outputs (see the [routing contract](routing-contract.md)).
-- **Other gestures.** The reference's modifier rules for selecting several headers (not read; Halftrack's Shift adds or removes one track). Header drags scroll the lanes at Halftrack's own speeds (see the [timeline navigation contract](timeline-navigation-contract.md)).
+- **Other gestures.** Header drags scroll the lanes at Halftrack's own speeds (see the [timeline navigation contract](timeline-navigation-contract.md)).
+
+## Selecting and moving several tracks (2026-10-25)
+
+The reference's manual ([Live Keyboard Shortcuts](https://www.ableton.com/en/live-manual/12/live-keyboard-shortcuts/), consulted 2026-10-25):
+
+- Shift-click adds adjacent clips, tracks or scenes to a selection, and Cmd-click (Ctrl elsewhere) nonadjacent ones (section 42.9).
+- Cmd with the arrow keys moves nonadjacent tracks without collapsing them (section 42.19). In the Session, Cmd with Left and Right moves the selected track (section 42.15).
+
+Halftrack:
+
+- **Selecting.** On a track's header, in either view's title row or the Arrangement mixer's titles, Shift-click selects every track from the selected one to the clicked one, those of the clicked one's kind (ordinary tracks or returns). Cmd-click (Ctrl elsewhere) adds a track, or leaves out one already selected; the selected track then leads the rest, or the first of them if it was the one left out. Before, Shift-click added or removed one track. On a header's buttons and controls the modifiers do not select.
+- **Moving.** After a click on a header in the Arrangement, Cmd+Up and Cmd+Down move the selected tracks, or the selected group, a place; in the Session, Cmd+Left and Cmd+Right do. They move among the tracks and groups beside them in their own group, keeping the gaps between them, a group with what is in it, and a track passes a sibling group whole. Returns move among the returns. Nothing moves when one is already at the end, or when they are in different groups. One undo step. Before, the Session keys moved one ungrouped track.
+
+Defaults where the manual is silent are in [open questions](../open-questions.md).
+
+The UI suite Shift-clicks and Cmd/Ctrl-clicks Arrangement headers, moves two nonadjacent tracks down with Cmd+Down keeping their gap, undoes it in one step, checks that Cmd+Up moves nothing with one at the top, and moves them with Cmd+Right in the Session.
 
 ## Deleting (2026-10-23)
 

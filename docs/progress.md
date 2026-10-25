@@ -2797,3 +2797,7 @@ Root area (dependency patch). The UI suite's intermittent crash in `juce::Thread
 ## Several scenes — 2026-10-25
 
 UI area. As the reference's manual describes, Shift-click selects adjacent scenes and Cmd-click (Ctrl elsewhere) nonadjacent ones. A drag drops them together where it ends, and Cmd+Up and Cmd+Down move them keeping their gaps. Delete, Duplicate and a colour act on all of them, each one undo step. After a click on a scene, Delete and Cmd+D now act on the scenes instead of the selected slot ([contract](research/session-clip-editing-contract.md#several-scenes-2026-10-25)). Checked in the UI suite.
+
+## Several tracks — 2026-10-25
+
+UI area. As the reference's manual has it, Shift-click on track headers now selects the adjacent tracks from the selected one, and Cmd-click (Ctrl elsewhere) adds or leaves out one; before, Shift added or removed one track. After a click on a header, Cmd+Up and Cmd+Down in the Arrangement, and Cmd+Left and Cmd+Right in the Session, move the selected tracks or group a place within their group, keeping the gaps between them, as one undo step ([groups contract](research/groups-contract.md#selecting-and-moving-several-tracks-2026-10-25)). Checked in the UI suite.

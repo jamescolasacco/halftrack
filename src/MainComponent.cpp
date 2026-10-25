@@ -1319,6 +1319,9 @@ public:
             if ((code == 'E' || code == 'e') && shift && key.getModifiers().isAltDown()) { menuItemSelected (13, 1); return true; }
             if (code == 'C' && shift) { captureFromUI(); return true; }
             if ((code == 'U' || code == 'u') && key.getModifiers().isAltDown() && ! showSession) { toggleTakeLanes(); return true; }
+            // After a click on a header, Cmd+Up and Down move the selected tracks (see nudgeSelectedTracks).
+            if ((code == juce::KeyPress::upKey || code == juce::KeyPress::downKey) && ! shift && ! key.getModifiers().isAltDown() && ! showSession && headerFocus)
+            { nudgeSelectedTracks (code == juce::KeyPress::upKey ? -1 : 1); return true; }
             if ((code == juce::KeyPress::upKey || code == juce::KeyPress::downKey) && ! showSession && ! showPiano && timeSelection.active())
             {
                 juce::StringArray cycled; // A cycle on a linked track comps its linked tracks too.
@@ -1959,21 +1962,90 @@ private:
         const auto returns = draggedReturns (id);
         aimTrackDrop (returns ? trackDropAt (at, *returns) : std::nullopt); canvas.repaint();
     }
-    // Pressing a track's header: with Shift the track joins or leaves the selected tracks. Where a
-    // drag can start, pressing a track selected with others keeps them all for the drag, and the
-    // result says a click without one then selects the track alone. Otherwise it is selected alone.
-    bool pressTrackHeader (int index, bool shift, bool draggable)
+    // Pressing a track's header, as the reference's title bars select (its manual, section 42.9): with
+    // Shift the tracks from the selected one to it, those of its kind, join the selection; with Cmd
+    // (Ctrl elsewhere) it joins the selection, or leaves it. Where a drag can start, pressing a track
+    // selected with others keeps them all for the drag, and the result says a click without one then
+    // selects the track alone. Otherwise it is selected alone.
+    bool pressTrackHeader (int index, juce::ModifierKeys mods, bool draggable)
     {
-        const auto& id = state.tracks[(size_t) index].id;
-        const bool keep = draggable && ! multiSelectedTracks.empty() && (selectedTrack == index || multiSelectedTracks.contains (id));
-        if (shift || keep)
+        const auto id = state.tracks[(size_t) index].id;
+       #if JUCE_MAC
+        const bool toggle = mods.isCommandDown();
+       #else
+        const bool toggle = mods.isCtrlDown();
+       #endif
+        const bool shift = mods.isShiftDown();
+        auto chosen = groupInfo (selectedChain) != nullptr ? juce::StringArray() : selectedTrackIds();
+        const bool keep = draggable && chosen.size() > 1 && chosen.contains (id);
+        const auto select = [this, &chosen] (const juce::String& lead)
         {
-            if (const auto* current = currentTrack(); current != nullptr && current->id != id) multiSelectedTracks.insert (current->id);
-            if (shift && ! multiSelectedTracks.erase (id)) multiSelectedTracks.insert (id);
+            multiSelectedTracks.clear();
+            if (chosen.size() > 1) for (const auto& other : chosen) multiSelectedTracks.insert (other);
+            selectTrack (trackIndex (lead));
+        };
+        if (shift && selectedTrack >= 0 && ! chosen.isEmpty())
+        {
+            for (int t = std::min (selectedTrack, index); t <= std::max (selectedTrack, index); ++t)
+                if (state.tracks[(size_t) t].isReturn == state.tracks[(size_t) index].isReturn) chosen.addIfNotAlreadyThere (state.tracks[(size_t) t].id);
         }
-        else multiSelectedTracks.clear();
-        selectTrack (index);
-        return keep && ! shift;
+        else if (toggle && ! chosen.isEmpty())
+        {
+            if (chosen.contains (id) && chosen.size() > 1)
+            {
+                // It leaves; the selected track leads the rest, or the first of them if it was this one.
+                chosen.removeString (id);
+                select (currentTrack() != nullptr && currentTrack()->id != id ? currentTrack()->id : chosen[0]);
+                return false;
+            }
+            chosen.addIfNotAlreadyThere (id);
+        }
+        else if (! keep) chosen = { id };
+        select (id);
+        return keep && ! shift && ! toggle;
+    }
+    // Cmd with the arrow keys moves the selected tracks, or the selected group, a place among the tracks
+    // and groups beside them, keeping the gaps between them, as the reference's Move Nonadjacent Tracks
+    // Without Collapsing does (its manual, section 42.19). They move within the group they are in, a
+    // group's contents with it; nothing moves when one is already at the end, or when they are in
+    // different groups. One undo step.
+    void nudgeSelectedTracks (int step)
+    {
+        const auto* group = groupInfo (selectedChain);
+        const auto chosen = group != nullptr ? juce::StringArray { group->id } : selectedTrackIds();
+        if (chosen.isEmpty()) return;
+        const auto parentOf = [this] (const juce::String& id)
+        {
+            if (const auto* g = groupInfo (id)) return g->parentId;
+            const auto t = trackIndex (id);
+            return t >= 0 ? state.tracks[(size_t) t].groupId : juce::String();
+        };
+        const auto returnItem = [this] (const juce::String& id) { const auto t = trackIndex (id); return t >= 0 && state.tracks[(size_t) t].isReturn; };
+        const auto parent = parentOf (chosen[0]);
+        const bool returns = returnItem (chosen[0]);
+        for (const auto& id : chosen) if (parentOf (id) != parent || returnItem (id) != returns) return;
+        juce::StringArray order, moving; // What is beside them, in the views' order, and they among it.
+        for (const auto& item : visualOrder())
+        {
+            const auto id = item.group ? state.groups[(size_t) item.index].id : state.tracks[(size_t) item.index].id;
+            if (parentOf (id) == parent && returnItem (id) == returns) { order.add (id); if (chosen.contains (id)) moving.add (id); }
+        }
+        if (moving.isEmpty() || order.indexOf (step < 0 ? moving[0] : moving[moving.size() - 1]) == (step < 0 ? 0 : order.size() - 1)) return;
+        const auto lead = currentTrack() != nullptr ? currentTrack()->id : juce::String();
+        session.beginEditGesture ("Move tracks");
+        if (step < 0)
+            for (const auto& id : moving) { const auto at = order.indexOf (id); report (session.moveTracks ({ id }, parent, order[at - 1])); order.move (at, at - 1); }
+        else
+            for (int k = moving.size(); --k >= 0;)
+            {
+                const auto at = order.indexOf (moving[k]);
+                report (session.moveTracks ({ moving[k] }, parent, at + 2 < order.size() ? order[at + 2] : juce::String()));
+                order.move (at, at + 1);
+            }
+        session.endEditGesture(); refresh();
+        if (group == nullptr && trackIndex (lead) >= 0) selectTrack (trackIndex (lead));
+        else if (trackIndex (lead) >= 0) selectedTrack = trackIndex (lead);
+        refresh();
     }
     void dropTracks()
     {
@@ -3304,7 +3376,8 @@ private:
                 owner.selectTrack (index); return;
             }
             const bool headerMenu = e.mods.isPopupMenu() && (e.originalComponent == this || e.originalComponent == &name);
-            if (! e.mods.isPopupMenu()) collapseOnUp = owner.pressTrackHeader (index, ! columnLayout && e.mods.isShiftDown(), dragArmed);
+            if (! e.mods.isPopupMenu())
+                collapseOnUp = owner.pressTrackHeader (index, ! columnLayout && (e.originalComponent == this || e.originalComponent == &name) ? e.mods : juce::ModifierKeys(), dragArmed);
             else if (! headerMenu) owner.selectTrack (index);
             // The pan controls' menu switches the pan mode, as the reference's does.
             if (e.mods.isPopupMenu() && (within (pan) || within (leftSplit) || within (rightSplit))) { owner.panModeMenu (trackId, ! splitPan); return; }
@@ -6057,7 +6130,7 @@ private:
                 if (event.y < headerHeight)
                 {
                     headerPressed = owner.state.tracks[(size_t) track].id;
-                    collapseHeadersOnUp = owner.pressTrackHeader (track, event.mods.isShiftDown(), true);
+                    collapseHeadersOnUp = owner.pressTrackHeader (track, event.mods, true);
                 }
                 else owner.selectTrack (track);
                 if (! owner.state.tracks[(size_t) track].isReturn && event.y >= gridArea().getBottom() && event.y < gridArea().getBottom() + stopHeight) { owner.report (owner.session.stopLauncherTrack (track)); owner.refresh(); }
@@ -6362,17 +6435,7 @@ private:
             }
             if (mods.isCommandDown() && ! mods.isShiftDown() && ! mods.isAltDown() && (code == juce::KeyPress::leftKey || code == juce::KeyPress::rightKey))
             {
-                if (const auto* track = owner.currentTrack(); track != nullptr && ! track->isReturn)
-                {
-                    const auto to = owner.selectedTrack + (code == juce::KeyPress::leftKey ? -1 : 1);
-                    if (juce::isPositiveAndBelow (to, (int) owner.state.tracks.size()) && ! owner.state.tracks[(size_t) to].isReturn)
-                    {
-                        const auto id = track->id;
-                        owner.report (owner.session.moveTrack (id, to)); owner.refresh();
-                        for (int t = 0; t < (int) owner.state.tracks.size(); ++t) if (owner.state.tracks[(size_t) t].id == id) owner.selectTrack (t);
-                        owner.refresh();
-                    }
-                }
+                owner.nudgeSelectedTracks (code == juce::KeyPress::leftKey ? -1 : 1); scrollSelectionIntoView();
                 return true;
             }
             if (mods.isCommandDown() && ! mods.isShiftDown() && ! mods.isAltDown() && (code == juce::KeyPress::upKey || code == juce::KeyPress::downKey))
@@ -6637,7 +6700,7 @@ private:
             }
             const int track = columns[(size_t) column].track;
             if (e.mods.isPopupMenu()) { owner.showHeaderMenu (owner.state.tracks[(size_t) track].id, false); return; }
-            owner.pressTrackHeader (track, e.mods.isShiftDown(), false);
+            owner.pressTrackHeader (track, e.mods, false);
             owner.refresh();
         }
         void mouseDrag (const juce::MouseEvent& e) override
@@ -21285,6 +21348,60 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         selectTrack (0);
     }
     {
+        // Several tracks, as the reference's title bars select them (its manual, section 42.9): Shift-click
+        // takes in the adjacent ones and Cmd/Ctrl-click adds or leaves out one; Cmd with the arrows then
+        // moves them keeping the gaps between them (section 42.19).
+        showArrangementView(); refresh();
+        const auto tracksAtStart = state.tracks.size();
+        int added = 0;
+        const auto ordinary = [&] { int n = 0; for (const auto& t : state.tracks) if (! t.isReturn && t.groupId.isEmpty()) ++n; return n; };
+        while (ordinary() < 4) { check (session.addMidiTrack ("Spare " + juce::String (++added)).wasOk(), "a track to select"); refresh(); }
+        check (state.groups.empty() && ! state.tracks[3].isReturn, "four ungrouped tracks first");
+        const auto ids = [&] { juce::StringArray all; for (int t = 0; t < 4; ++t) all.add (state.tracks[(size_t) t].id); return all; };
+        const auto before = ids();
+       #if JUCE_MAC
+        const int adds = juce::ModifierKeys::commandModifier;
+       #else
+        const int adds = juce::ModifierKeys::ctrlModifier;
+       #endif
+        const auto now = juce::Time::getCurrentTime();
+        auto headerClick = [&] (int index, int mods)
+        {
+            auto* row = canvas.getChildComponent (index);
+            const juce::MouseEvent event (juce::Desktop::getInstance().getMainMouseSource(), { 20.0f, 30.0f }, juce::ModifierKeys (juce::ModifierKeys::leftButtonModifier | mods),
+                                          1.0f, 0, 0, 0, 0, row, row, now, { 20.0f, 30.0f }, now, 1, false);
+            row->mouseDown (event); row->mouseUp (event); refresh();
+        };
+        headerClick (0, 0); headerClick (2, juce::ModifierKeys::shiftModifier);
+        check (selectedTrackIds() == juce::StringArray { before[0], before[1], before[2] } && selectedTrack == 2, "Shift-clicking a header selects the tracks from the selected one to it");
+        headerClick (1, adds);
+        check (selectedTrackIds() == juce::StringArray { before[0], before[2] } && selectedTrack == 2, "Cmd/Ctrl-clicking one of them leaves it out");
+        headerClick (3, adds);
+        check (selectedTrackIds() == juce::StringArray { before[0], before[2], before[3] } && selectedTrack == 3, "and Cmd/Ctrl-clicking another adds it");
+        headerClick (3, adds);
+        check (selectedTrackIds() == juce::StringArray { before[0], before[2] } && selectedTrack == 0, "Cmd/Ctrl-clicking the selected track again leaves it out, the first left leading");
+        headerFocus = true; clickedArea = Area::headers;
+        handleKey (juce::KeyPress (juce::KeyPress::downKey, juce::ModifierKeys (juce::ModifierKeys::commandModifier), 0)); refresh();
+        // The history may drop its oldest steps as these are added, so the newest step's name is checked.
+        check (ids() == juce::StringArray { before[1], before[0], before[3], before[2] } && session.undoSteps()[0] == "Move tracks"
+                   && selectedTrackIds() == juce::StringArray { before[0], before[2] },
+               "Cmd+Down moves both a track down keeping the gap between them, still selected");
+        session.undo(); refresh();
+        check (ids() == before, "one undo puts them both back");
+        const auto history = session.undoSteps();
+        handleKey (juce::KeyPress (juce::KeyPress::upKey, juce::ModifierKeys (juce::ModifierKeys::commandModifier), 0)); refresh();
+        check (ids() == before && session.undoSteps() == history, "with one at the top, Cmd+Up moves nothing");
+        showSessionView(); refresh();
+        launcher.keyPressed (juce::KeyPress (juce::KeyPress::rightKey, juce::ModifierKeys (juce::ModifierKeys::commandModifier), 0)); refresh();
+        check (ids() == juce::StringArray { before[1], before[0], before[3], before[2] } && session.undoSteps()[0] == "Move tracks", "in the Session, Cmd+Right moves them the same way");
+        session.undo(); refresh();
+        check (ids() == before, "and one undo puts them back");
+        showArrangementView(); multiSelectedTracks.clear(); selectTrack (0); headerFocus = false; clickedArea = Area::arrangement;
+        for (int k = 0; k < added; ++k) session.undo();
+        refresh();
+        check (state.tracks.size() == tracksAtStart, "undo takes the spare tracks away again");
+    }
+    {
         // Groups: Shift-click extends the track selection, Cmd/Ctrl+G groups it, the header folds it.
         showArrangementView(); refresh();
         const auto firstId = state.tracks[0].id, secondId = state.tracks[1].id;
@@ -23163,13 +23280,12 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
                #endif
                 const auto idAt = [&] (int s) { return state.scenes[(size_t) s].id; };
                 const auto a = idAt (1), b = idAt (2), c = idAt (3);
-                const auto stepsBefore = session.undoSteps().size();
                 clickScene (1, {}); clickScene (3, juce::ModifierKeys (juce::ModifierKeys::shiftModifier));
                 check (sceneSelection() == juce::StringArray { a, b, c }, "Shift-clicking a scene selects the scenes between");
                 clickScene (2, adds);
                 check (sceneSelection() == juce::StringArray { a, c }, "and Cmd/Ctrl-clicking one in them leaves it out");
                 key (juce::KeyPress::downKey, juce::ModifierKeys::commandModifier); refresh();
-                check (idAt (2) == a && idAt (4) == c && idAt (1) == b && session.undoSteps().size() == stepsBefore + 1,
+                check (idAt (2) == a && idAt (4) == c && idAt (1) == b && session.undoSteps()[0] == "Move scenes",
                        "Cmd+Down moves both a row down, keeping the gap between them, one undo step, as the reference's key does");
                 session.undo(); refresh();
                 check (idAt (1) == a && idAt (2) == b && idAt (3) == c, "undo puts them back");
@@ -23180,7 +23296,7 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
                 session.undo(); refresh();
                 clickScene (1, {}); clickScene (3, adds);
                 dropSelectedScenes (0);
-                check (idAt (0) == a && idAt (1) == c && idAt (3) == b && session.undoSteps().size() == stepsBefore + 1,
+                check (idAt (0) == a && idAt (1) == c && idAt (3) == b && session.undoSteps()[0] == "Move scenes",
                        "dropped at the top, the two collapse together there in their order, as the reference's drag does");
                 session.undo(); refresh();
                 const auto scenes = state.scenes.size();
@@ -23191,12 +23307,12 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
                 check (state.scenes.size() == scenes && idAt (1) == a && idAt (3) == c, "one undo brings both back");
                 clickedArea = Area::scenes; clickScene (1, {}); clickScene (3, adds);
                 key ('D', juce::ModifierKeys::commandModifier); refresh();
-                check (state.scenes.size() == scenes + 2 && idAt (1) == a && idAt (3) == b && idAt (4) == c && session.undoSteps().size() == stepsBefore + 1
+                check (state.scenes.size() == scenes + 2 && idAt (1) == a && idAt (3) == b && idAt (4) == c && session.undoSteps()[0] == "Duplicate scenes"
                            && sceneSelection() == juce::StringArray { idAt (2), idAt (5) } && selectedSceneId == idAt (5),
                        "after a click on them, Cmd+D duplicates both scenes, each copy below its own, and selects the copies, one undo step");
                 session.undo(); refresh();
                 clickScene (1, {}); clickScene (3, adds);
-                check (handleKey (juce::KeyPress (juce::KeyPress::deleteKey)) && state.scenes.size() == scenes - 2 && session.undoSteps().size() == stepsBefore + 1
+                check (handleKey (juce::KeyPress (juce::KeyPress::deleteKey)) && state.scenes.size() == scenes - 2 && session.undoSteps()[0] == "Delete scenes"
                            && sceneSelection() == juce::StringArray { b },
                        "and Delete deletes both, not the selected slot's clip, selecting the scene come into the first one's place");
                 session.undo(); refresh();
@@ -23218,7 +23334,7 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
                 launcher.mouseDown (sceneEvent (from, from, 0, false));
                 launcher.mouseDrag (sceneEvent ((from + to) / 2, from, 0, true)); launcher.mouseDrag (sceneEvent (to, from, 0, true));
                 launcher.mouseUp (sceneEvent (to, from, 0, true)); refresh();
-                check (idAt (0) == a && idAt (1) == c && idAt (3) == b && session.undoSteps().size() == stepsBefore + 1,
+                check (idAt (0) == a && idAt (1) == c && idAt (3) == b && session.undoSteps()[0] == "Move scenes",
                        "dragging one of them to the top collapses both there, one undo step");
                 session.undo(); refresh();
                 check (sceneSelection() == juce::StringArray { a, c } && selectedSceneId == c, "the two are still selected");
