@@ -486,16 +486,30 @@ class DetailViewSelector final : public juce::Button
 public:
     explicit DetailViewSelector (bool clipView) : juce::Button (clipView ? "Clip View selector" : "Device View selector"), clip (clipView)
     { setClickingTogglesState (false); setWantsKeyboardFocus (false); setMouseClickGrabsKeyboardFocus (false); }
-    std::function<void()> onMenu;
-    void mouseDown (const juce::MouseEvent& e) override { if (e.mods.isPopupMenu() && onMenu != nullptr) { onMenu(); return; } juce::Button::mouseDown (e); }
+    std::function<void()> onMenu, onToggle;
+    static constexpr int triangleWidth = 12; // The triangle toggle at its left, as the reference's selectors have.
+    void mouseDown (const juce::MouseEvent& e) override
+    {
+        if (e.mods.isPopupMenu() && onMenu != nullptr) { onMenu(); return; }
+        if (e.x < triangleWidth && onToggle != nullptr && ! e.mods.isPopupMenu()) { onToggle(); return; }
+        juce::Button::mouseDown (e);
+    }
     void paintButton (juce::Graphics& g, bool over, bool down) override
     {
         const auto on = getToggleState();
+        const auto body = getLocalBounds().withTrimmedLeft (triangleWidth);
         g.setColour (on ? orange : (over || down) ? raised.brighter (0.08f) : raised);
-        g.fillRect (getLocalBounds().reduced (1));
-        g.setColour (line); g.drawRect (getLocalBounds().reduced (1));
+        g.fillRect (body.reduced (1));
+        g.setColour (line); g.drawRect (body.reduced (1));
+        // The triangle: pointing up while the view is open, right while it is closed.
+        {
+            juce::Path triangle; const auto cx = triangleWidth / 2.0f, cy = getHeight() / 2.0f;
+            if (on) triangle.addTriangle (cx - 3.5f, cy + 2.0f, cx + 3.5f, cy + 2.0f, cx, cy - 2.5f);
+            else triangle.addTriangle (cx - 2.0f, cy - 3.5f, cx - 2.0f, cy + 3.5f, cx + 2.5f, cy);
+            g.setColour (ink.withMultipliedAlpha (isEnabled() ? .8f : .3f)); g.fillPath (triangle);
+        }
         g.setColour ((on ? themes::colour (0xff1a1a1a) : ink).withMultipliedAlpha (isEnabled() ? 1.0f : .4f));
-        const auto r = getLocalBounds().toFloat().reduced (getWidth() * .26f, getHeight() * .24f);
+        const auto r = body.toFloat().reduced (body.getWidth() * .26f, body.getHeight() * .24f);
         g.drawRect (r, 1.0f);
         if (clip)
         {
@@ -589,6 +603,9 @@ public:
         deviceViewSelector.setTooltip ("Device View: show or hide the track's devices (Option+Cmd+4). Option-click switches to the Clip View. Right-click to list the devices.");
         clipViewSelector.onClick = [this] { chooseDetailView (true, juce::ModifierKeys::getCurrentModifiers().isAltDown()); };
         deviceViewSelector.onClick = [this] { chooseDetailView (false, juce::ModifierKeys::getCurrentModifiers().isAltDown()); };
+        // Their triangles open or close each view, keeping the other, so the two can stack.
+        clipViewSelector.onToggle = [this] { toggleDetailView (true); };
+        deviceViewSelector.onToggle = [this] { toggleDetailView (false); };
         deviceViewSelector.onMenu = [this]
         {
             const auto ids = devicesListed();
@@ -927,12 +944,12 @@ public:
             : showPiano && drawMode ? "Draw Mode: drag to draw notes    Alt: one pitch    Click a note: delete    B: leave Draw Mode"
             : showPiano ? "Double-click: add or delete a note    Drag: select    Shift: add to the selection    Ruler: insertion point    B: Draw Mode" : "Space: play / pause     Click ruler: seek     Shift-drag ruler: loop     Double-click MIDI clip: edit notes";
         if (status.isEmpty() && showSession && ! showPiano) message = "Click triangle: launch     Double-click MIDI slot: edit     Enter: launch slot     Shift+Enter: launch scene     Tab: switch view";
-        g.drawText (message, 13, getHeight() - statusHeight, getWidth() - 400, statusHeight, juce::Justification::centredLeft, true);
+        g.drawText (message, 13, getHeight() - statusHeight, getWidth() - 420, statusHeight, juce::Justification::centredLeft, true);
         auto* device = session.audioDeviceManager().getCurrentAudioDevice();
         const auto deviceText = device != nullptr
             ? juce::String (device->getCurrentSampleRate() / 1000.0, 1) + " kHz  /  " + juce::String (device->getCurrentBufferSizeSamples()) + " smp"
             : "Audio device offline";
-        g.drawText (deviceText, getWidth() - 385,
+        g.drawText (deviceText, juce::jmax (0, clipViewSelector.getX() - 258), // Left of the corner's controls.
                     getHeight() - statusHeight, 252, statusHeight, juce::Justification::centredRight);
     }
 
@@ -1002,20 +1019,23 @@ public:
         area.removeFromBottom (statusHeight);
         mixerViewOptions.setBounds (getWidth() - 24, getHeight() - statusHeight + 3, 18, statusHeight - 6);
         mixerViewButton.setBounds (mixerViewOptions.getX() - 30, mixerViewOptions.getY(), 30, mixerViewOptions.getHeight());
-        deviceViewSelector.setBounds (mixerViewButton.getX() - 34, mixerViewOptions.getY(), 28, mixerViewOptions.getHeight());
-        clipViewSelector.setBounds (deviceViewSelector.getX() - 30, mixerViewOptions.getY(), 28, mixerViewOptions.getHeight());
+        deviceViewSelector.setBounds (mixerViewButton.getX() - 46, mixerViewOptions.getY(), 40, mixerViewOptions.getHeight());
+        clipViewSelector.setBounds (deviceViewSelector.getX() - 42, mixerViewOptions.getY(), 40, mixerViewOptions.getHeight());
         clipViewSelector.setToggleState (showDetail && showPiano, juce::dontSendNotification); clipViewSelector.setEnabled (canShowClipView());
-        deviceViewSelector.setToggleState (showDetail && ! showPiano, juce::dontSendNotification);
+        deviceViewSelector.setToggleState (showDetail && (! showPiano || stackDevices), juce::dontSendNotification);
         // MIDI Map Mode shows its mappings in the browser's place, so the browser shows meanwhile.
         const bool browserShown = showBrowser || mapping();
         // The detail view shows either the device chain or, for an open clip, its editor; View > Hide
         // Detail View hides it, as the reference's does.
         // Full-Size Clip View gives the clip view the whole height, beside the browser.
         const bool fullSizeClip = fullSizeClipView && showPiano && showDetail;
+        // Stacked, the device view runs under the clip view, as the reference's views stack.
+        const bool stacked = showDetail && showPiano && stackDevices;
         const int detailHeight = ! showDetail ? 0
                                : fullSizeClip ? area.getHeight()
-                               : showPiano ? juce::jlimit (minimumClipViewHeight, juce::jmax (minimumClipViewHeight, area.getHeight() - 140),
-                                                           juce::roundToInt (area.getHeight() * clipViewFraction))
+                               : showPiano ? juce::jmin (juce::jmax (minimumClipViewHeight, area.getHeight() - 140),
+                                                         juce::jlimit (minimumClipViewHeight, juce::jmax (minimumClipViewHeight, area.getHeight() - 140),
+                                                                       juce::roundToInt (area.getHeight() * clipViewFraction)) + (stacked ? deviceHeight : 0))
                                            : deviceHeight;
         // As the reference's default, the detail view spans the window under the browser; with View >
         // Full Height Browser the browser runs down beside it.
@@ -1035,7 +1055,11 @@ public:
         // Without the browser, the Info View keeps its corner beside the detail view, or below the view without either.
         if (showInfo && ! browserShown) info.setBounds ((showDetail ? detail : area.removeFromBottom (infoHeight)).removeFromLeft (infoCornerWidth).removeFromBottom (infoHeight).reduced (6, 4));
         dividerBounds = showDetail && ! fullSizeClip ? detail.removeFromTop (dividerHeight) : juce::Rectangle<int>();
-        deviceChain.setBounds (detail); deviceChain.setVisible (! showPiano && showDetail);
+        // The clip view's place, and the device view's: the whole detail view, or under the clip view while stacked.
+        const auto devicesBelow = stacked ? detail.removeFromBottom (juce::jmin (deviceHeight, detail.getHeight() / 2)) : juce::Rectangle<int>();
+        if (stacked) detail.removeFromBottom (2);
+        const auto clipArea = detail;
+        deviceChain.setBounds (stacked ? devicesBelow : detail); deviceChain.setVisible (showDetail && (! showPiano || stacked));
         auto browser = browserBounds.reduced (6, 6);
         {
             // Browse Back and Forward sit left of the search bar, as the reference's arrows do.
@@ -1079,7 +1103,7 @@ public:
         const bool clipShown = showPiano && showDetail, audioClip = clipShown && selectedAudioClip() != nullptr;
         // A Session MIDI clip shows its Launch box to the left of the note editor.
         const auto* launchClip = clipShown && ! audioClip ? sessionMidiClip() : nullptr;
-        auto editor = deviceChain.getBounds();
+        auto editor = clipArea;
         midiLaunch.setVisible (launchClip != nullptr);
         if (launchClip != nullptr) { midiLaunch.setBounds (editor.removeFromLeft (LaunchBox::width).reduced (0, 6).withTrimmedLeft (6)); midiLaunch.setClip (*launchClip); }
         // Every MIDI clip shows its Loop box: Start, End, Loop, Position and Length.
@@ -1092,7 +1116,7 @@ public:
         if (grooveClip != nullptr) { clipGroove.setBounds (editor.removeFromLeft (GrooveBox::width).reduced (0, 6).withTrimmedLeft (6)); clipGroove.setClip (*grooveClip); }
         pianoRoll.setBounds (editor);
         pianoRoll.setVisible (clipShown && ! audioClip);
-        audioClipView.setBounds (deviceChain.getBounds());
+        audioClipView.setBounds (clipArea);
         audioClipView.setVisible (audioClip);
         if (audioClip) audioClipView.sync();
         viewport.setVisible (! showSession);
@@ -1145,6 +1169,7 @@ public:
     }
     bool draggingDivider = false, draggingBrowserEdge = false;
     bool fullSizeClipView = false; // View > Full-Size Clip View, while the clip view shows.
+    bool stackDevices = false; // The device view shows under the clip view, as the reference's stacked views.
     // The browser's right edge drags to resize it, as the reference's does; the width lasts while the window is open.
     int browserWidth = defaultBrowserWidth;
     static constexpr int defaultBrowserWidth = 300, minimumBrowserWidth = 220;
@@ -14384,10 +14409,25 @@ private:
     // with toggle (Option held) it switches between the Clip View and the Device View.
     void chooseDetailView (bool clip, bool toggle)
     {
-        if (toggle) { if (canShowClipView()) { showDetail = true; showClipView (! showPiano); resized(); repaint(); } return; }
+        if (toggle) { if (canShowClipView()) setDetailViews (! clipViewOpen(), clipViewOpen()); return; }
         if (clip && ! canShowClipView()) return;
-        if (showDetail && showPiano == clip) showDetail = false;
-        else { showDetail = true; showClipView (clip); }
+        const bool only = clip ? clipViewOpen() && ! deviceViewOpen() : deviceViewOpen() && ! clipViewOpen();
+        setDetailViews (! only && clip, ! only && ! clip);
+    }
+    // The triangles: one view opens or closes, the other staying, so the two can stack.
+    void toggleDetailView (bool clip)
+    {
+        if (clip && ! clipViewOpen() && ! canShowClipView()) return;
+        setDetailViews (clip ? ! clipViewOpen() : clipViewOpen(), clip ? deviceViewOpen() : ! deviceViewOpen());
+    }
+    bool clipViewOpen() const { return showDetail && showPiano; }
+    bool deviceViewOpen() const { return showDetail && (! showPiano || stackDevices); }
+    // Opens the views asked for: either alone, both stacked, or neither, hiding the detail view.
+    void setDetailViews (bool clip, bool devices)
+    {
+        clip = clip && canShowClipView();
+        if (! clip && ! devices) showDetail = false;
+        else { showDetail = true; stackDevices = clip && devices; showClipView (clip); }
         resized(); repaint();
     }
     // The Device View selector's menu: the devices of the chain the device view shows, in order.
@@ -21908,6 +21948,27 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
                 check (showDetail && ! showPiano && selectedDevices.contains (listed[listed.size() - 1]), "choosing one shows the device view with it selected");
                 session.undo(); refresh(); selectedDevices.clear();
                 showDetail = true; showClipView (true); resized();
+                // The selectors' triangles open or close each view, so the two stack, as the reference's do.
+                const auto now = juce::Time::getCurrentTime();
+                const juce::Point<float> onTriangle { 4.0f, deviceViewSelector.getHeight() / 2.0f };
+                deviceViewSelector.mouseDown (juce::MouseEvent (juce::Desktop::getInstance().getMainMouseSource(), onTriangle, juce::ModifierKeys (juce::ModifierKeys::leftButtonModifier), 1.0f,
+                                                                0, 0, 0, 0, &deviceViewSelector, &deviceViewSelector, now, onTriangle, now, 1, false));
+                check (clipViewOpen() && deviceViewOpen() && stackDevices && deviceChain.isVisible() && pianoRoll.isVisible() && deviceChain.getY() >= pianoRoll.getBottom()
+                           && clipViewSelector.getToggleState() && deviceViewSelector.getToggleState(), "the Device View selector's triangle stacks the device view under the clip view");
+                if (const auto* configured = std::getenv ("HALFTRACK_TEST_UI_SNAPSHOT_DIRECTORY"))
+                    if (const juce::File directory (juce::String::fromUTF8 (configured)); directory.createDirectory().wasOk())
+                    {
+                        juce::PNGImageFormat png; const auto output = directory.getChildFile ("stacked-detail.png");
+                        if (auto stream = output.createOutputStream(); stream && stream->setPosition (0) && stream->truncate().wasOk()
+                            && png.writeImageToStream (createComponentSnapshot (getLocalBounds(), true, 1.0f), *stream))
+                            std::cout << "UI SNAPSHOT " << output.getFullPathName() << std::endl;
+                    }
+                toggleDetailView (true);
+                check (! clipViewOpen() && deviceViewOpen() && ! pianoRoll.isVisible() && deviceChain.isVisible(), "the Clip View selector's closes the clip view, the device view staying");
+                toggleDetailView (true);
+                check (clipViewOpen() && deviceViewOpen() && deviceChain.getY() >= pianoRoll.getBottom(), "and opens it again above it");
+                clipViewSelector.onClick();
+                check (clipViewOpen() && ! deviceViewOpen() && ! deviceChain.isVisible() && ! stackDevices, "a click on the Clip View selector shows the clip view alone");
             }
             session.undo(); selectedClip = -1; closeClipView(); refresh();
             showBrowser = false; resized();

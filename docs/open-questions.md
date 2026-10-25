@@ -847,7 +847,7 @@ Open Recent Project ([menu contract](research/main-menu-contract.md)). Defaults 
 
 Window layout ([contract](research/window-layout-contract.md)). With Full Height Browser off, the Info View stays under the browser, above the detail view; where the reference puts it then was not read. Full-Size Clip View keeps the browser beside the clip view and lasts while the window is open; the item's name follows the manual's shortcut list, and whether the reference keeps the browser or the setting was not read.
 
-The Clip View and Device View selectors' look and their click on the view already shown, which hides the detail view, are Halftrack's defaults; the reference's were not read.
+The Clip View and Device View selectors' look and their click on the view already shown, which hides the detail view, are Halftrack's defaults; the reference's were not read. Stacked, the device view runs under the clip view, as the reference's breakout view's name and height suggest, at Halftrack's device view height; the views' open states last while the window is open, where the reference keeps them with the Set for each view.
 
 Clip View tabs ([contract](research/clip-view-contract.md)). The View menu names the tabs Notes (or Sample), Envelopes and MPE, as the shortcut list names them; the reference's item texts were not read. The tab shown lasts while the window is open, for every clip. Halftrack's MIDI controller lanes move to the Envelopes tab under a MIDI Ctrl heading, as the reference's controllers are envelopes. The Envelopes tab's lane fills the editor without the notes, and opens on the clip's first modulation envelope or its pitch bend. The reference's MPE pitch editing on the notes and its stacked lanes are not matched.
 

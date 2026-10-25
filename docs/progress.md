@@ -2721,3 +2721,7 @@ UI area. As the reference's Clip View does, the note editor now has Notes, Envel
 ## The Clip View and Device View selectors — 2026-10-24
 
 UI area. As the reference's corner has them, the Clip View and Device View selectors sit left of the mixer view control. Each is lit while its view shows; a click shows it, or hides the detail view while it shows; Option-click switches between them, and a right-click on the Device View selector lists the chain's devices, choosing one showing it selected ([layout contract](research/window-layout-contract.md)). Checked in the UI suite.
+
+## Stacked Clip and Device Views — 2026-10-24
+
+UI area. As the reference's manual describes, the triangles on the Clip View and Device View selectors open or close each view while the other stays, so the two stack: the device view runs under the clip view. A click on a selector shows its view alone ([layout contract](research/window-layout-contract.md)). Checked in the UI suite.
