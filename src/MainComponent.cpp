@@ -8617,7 +8617,16 @@ private:
             }
             if (e.y >= headerHeight && e.y < gridTop)
             {
-                grabKeyboardFocus(); endGesture(); clearSelection();
+                grabKeyboardFocus(); endGesture();
+                // Cmd-click moves the start marker there and Cmd+Shift-click the end marker, as the reference's
+                // keys do (its manual, section 42.8).
+                if (e.mods.isCommandDown() && ! e.mods.isPopupMenu())
+                {
+                    const auto shown = *clip;
+                    owner.setClipMarker (shown, e.mods.isShiftDown() ? Impl::ClipMarker::end : Impl::ClipMarker::start, std::round (beatAt (e.x) / snapBeats()) * snapBeats());
+                    return;
+                }
+                clearSelection();
                 insertionBeat = juce::jlimit (0.0, contentEndBeat (*clip), std::round (beatAt (e.x) / snapBeats()) * snapBeats());
                 // Launcher playback has a clip-local clock. Its insertion cursor
                 // must not seek unrelated arrangement transport state.
@@ -23859,6 +23868,22 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
                 placeInsert (1.5);
                 check (handleKey (juce::KeyPress (juce::KeyPress::F9Key, juce::ModifierKeys (juce::ModifierKeys::commandModifier), 0)) && loopClip().contentStartBeat == 1.5,
                        "Cmd+F9 sets the clip's start at the insert marker");
+                {
+                    // Cmd-click in the ruler moves the start marker there, and Cmd+Shift-click an unlooped clip's end marker.
+                    const auto rulerClick = [&] (double beat, int modifiers)
+                    {
+                        const auto x = (float) (55 + beat * rollBeat), y = 48.0f;
+                        const auto when = juce::Time::getCurrentTime();
+                        const juce::MouseEvent click (juce::Desktop::getInstance().getMainMouseSource(), { x, y }, juce::ModifierKeys (juce::ModifierKeys::leftButtonModifier | modifiers), 1.0f, 0, 0, 0, 0,
+                                                      &pianoRoll, &pianoRoll, when, { x, y }, when, 1, false);
+                        pianoRoll.mouseDown (click); pianoRoll.mouseUp (click); refresh();
+                    };
+                    rulerClick (1, juce::ModifierKeys::commandModifier);
+                    check (loopClip().contentStartBeat == 1, "Cmd-click in the note editor's ruler moves the start marker there, as the reference's key does");
+                    loopButton->setToggleState (false, juce::dontSendNotification); loopButton->onClick(); refresh();
+                    rulerClick (2.5, juce::ModifierKeys::commandModifier | juce::ModifierKeys::shiftModifier);
+                    check (! loopClip().loop.on && std::abs (loopClip().contentStartBeat + loopClip().lengthBeats - 2.5) < 1e-9, "and Cmd+Shift-click an unlooped clip's end marker");
+                }
                 const auto grid = state.launchQuantisation;
                 check (session.setLaunchQuantisation (Session::LaunchQuantisation::none).wasOk(), "no launch quantization, so the play position is used as it is");
                 session.seek (0); check (session.play().wasOk(), "play the clip from its start"); pumpSyntheticTestDevice (session, 48000 / 256 / 4); refresh();
