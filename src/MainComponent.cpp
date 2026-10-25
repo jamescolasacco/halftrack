@@ -21502,11 +21502,13 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
                    "Show in Browser shows the sample's folder in the browser, the sample selected");
             leavePlace(); browserFolder = folder; setBrowserCategory (category);
         }
-        // The colour grid colours the clip.
+        // The colour grid colours the clip. (Its colour before may already be the swatch's, as automatic colours come
+        // from the palette.)
+        const auto clipColourBefore = clip().colour;
         chooseArrangementItem (arrangementColour, onClip, 5);
         check (clip().colour == paletteColour (5), "a swatch gives the clip its colour");
         session.undo(); refresh();
-        check (clip().colour != paletteColour (5), "one undo takes it back");
+        check (clip().colour == clipColourBefore, "one undo takes it back");
         // The clip's own info text shows in the Info view while pointing at it.
         check (session.setInfoText (clipId, "Breath before the line").wasOk(), "give the clip an info text"); refresh();
         {
@@ -24607,10 +24609,11 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
                 for (juce::PopupMenu::MenuItemIterator items (menu); items.next();)
                 { renames = renames || (items.getItem().itemID == clipTitleRename && items.getItem().isEnabled); colours = colours || (items.getItem().itemID == clipTitleColour && items.getItem().customComponent != nullptr); }
                 check (renames && colours, "its menu offers Rename and the clip colours");
+                const auto titleColourBefore = currentMidiClip()->colour;
                 chooseClipTitleItem (clipTitleColour, 5);
                 check (currentMidiClip()->id == id && currentMidiClip()->colour == paletteColour (5), "choosing a colour colours the clip");
                 session.undo(); session.undo(); session.undo(); refresh(); // The colour and both activations.
-                check (currentMidiClip() != nullptr && currentMidiClip()->active && currentMidiClip()->colour != paletteColour (5), "three undo steps take them back");
+                check (currentMidiClip() != nullptr && currentMidiClip()->active && currentMidiClip()->colour == titleColourBefore, "three undo steps take them back");
                 // Fold, from a double-click or the menu, minimizes the panels to a strip, the editor taking their width.
                 const auto editorWas = pianoRoll.getBounds();
                 const auto when = juce::Time::getCurrentTime();
@@ -27376,13 +27379,14 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
                     // The colour grid colours the selected tracks, and marks the colour in use.
                     multiSelectedTracks.insert (second); refresh();
                     check (selectForHeaderMenu (second) && selectedTrackIds() == juce::StringArray { first, second }, "right-clicking a selected track keeps the selection");
+                    const auto coloursBefore = std::pair { state.tracks[(size_t) indexOf (first)].colour, state.tracks[(size_t) indexOf (second)].colour };
                     chooseHeaderItem (headerColour, first, true, 3, false); refresh();
                     check (state.tracks[(size_t) indexOf (first)].colour == paletteColour (3) && state.tracks[(size_t) indexOf (second)].colour == paletteColour (3),
                            "a colour picked in the grid colours both selected tracks");
                     ColourGrid grid ({ paletteColour (3) }, colour);
                     check (grid.marked (3) && ! grid.marked (4) && grid.swatchAt (grid.swatchCentre (17)) == 17, "the grid marks the colour in use and finds its swatches");
                     session.undo(); refresh();
-                    check (state.tracks[(size_t) indexOf (first)].colour != paletteColour (3), "one undo takes both colours back");
+                    check (std::pair { state.tracks[(size_t) indexOf (first)].colour, state.tracks[(size_t) indexOf (second)].colour } == coloursBefore, "one undo takes both colours back");
                     multiSelectedTracks.clear(); refresh();
                     // From a Session title, Assign Track Color to Clips colours the track's Session clips,
                     // which keep the colour they showed when the track changes colour.
