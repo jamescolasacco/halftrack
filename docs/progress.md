@@ -2853,3 +2853,7 @@ Engine and UI areas. Built-in devices keep two states, A and B, as the reference
 ## Computer MIDI keyboard and Scale Highlighting kept — 2026-10-25
 
 UI area. The computer MIDI keyboard and Scale Highlighting now come back as they were left, kept with the preferences as the reference's song preference data keeps them ([preferences contract](research/preferences-contract.md)). Checked by the preferences and UI suites.
+
+## Start marker keys — 2026-10-25
+
+UI area. A clicked start marker in the note editor now takes Left and Right, a grid step each, and with Option or Shift a looped clip's loop moves with it, as the reference's manual and key list describe ([clip loops contract](research/clip-loops-contract.md)). Checked in the UI suite.
