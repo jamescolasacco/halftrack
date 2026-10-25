@@ -6834,6 +6834,8 @@ struct Session::Impl
         struct Curve { juce::String key; std::vector<Point> points; float startValue = 0, endValue = 0; };
         struct Track { bool midi = false; std::vector<juce::ValueTree> clips; std::vector<Curve> curves; };
         std::vector<Track> tracks;
+        // The time signature markers inside the range, in beats from its start, which Paste Time inserts.
+        std::vector<Session::TimeSignatureChange> meters;
         std::map<juce::String, std::unique_ptr<juce::TemporaryFile>> media; // By the audio's own path.
     };
     std::unique_ptr<RangeClipboard> rangeClipboard;
@@ -12865,6 +12867,20 @@ Result Session::setClipColours (const juce::StringArray& clipIds, juce::Colour c
     for (auto* c : clips) c->state.setProperty (clipColourProperty, value, &impl->edit->getUndoManager());
     impl->changed(); return Result::ok();
 }
+// The time signature markers from one beat up to another, in beats from the first.
+std::vector<Session::TimeSignatureChange> metersInside (const std::vector<Session::TimeSignatureChange>& markers, double fromBeat, double toBeat)
+{
+    std::vector<Session::TimeSignatureChange> inside;
+    for (const auto& m : markers)
+        if (m.beat >= fromBeat - 1.0e-9 && m.beat < toBeat - 1.0e-9) inside.push_back ({ m.beat - fromBeat, m.meter });
+    return inside;
+}
+Session::TimeSignature meterAt (const std::vector<Session::TimeSignatureChange>& markers, double beat)
+{
+    Session::TimeSignature meter;
+    for (const auto& m : markers) if (m.beat <= beat + 1.0e-9) meter = m.meter;
+    return meter;
+}
 Result Session::copyRange (const juce::StringArray& trackIds, double start, double end, bool cut, const juce::StringArray& onlyClips)
 {
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
@@ -12880,6 +12896,7 @@ Result Session::copyRange (const juce::StringArray& trackIds, double start, doub
         for (auto* t : tracks) for (const auto at : { from, to }) if (auto r = splittableAt (*t, at); r.failed()) return r;
     auto clipboard = std::make_unique<Impl::RangeClipboard>();
     clipboard->start = start; clipboard->length = end - start;
+    clipboard->meters = metersInside (snapshot().timeSignatures, beatsAt (start), beatsAt (end));
     for (auto* t : tracks)
     {
         Impl::RangeClipboard::Track copied;
@@ -13299,6 +13316,20 @@ Result Session::deleteTime (double start, double length)
     impl->refreshParameterValues();
     impl->changed(); return Result::ok();
 }
+// Time pasted at a beat brings the markers copied with it, as the reference's time commands affect the
+// markers in the time (its manual, section 6.11); after it, the meter the time it was pasted into had
+// goes on.
+Result Session::pasteMeters (double atBeat, double lengthBeats, const std::vector<TimeSignatureChange>& copied, TimeSignature after)
+{
+    for (const auto& m : copied)
+    {
+        const auto beat = atBeat + m.beat;
+        if (auto r = beat < 1.0 / 960 ? setTimeSignatureChange (0, m.meter) : insertTimeSignatureChange (beat, m.meter); r.failed()) return r;
+    }
+    const auto end = atBeat + lengthBeats;
+    if (copied.empty() || meterAt (snapshot().timeSignatures, end) == after) return Result::ok();
+    return insertTimeSignatureChange (end, after);
+}
 // The reference's Cut, Paste and Duplicate Time: as Delete Time and Insert Silence, across every
 // track, with the time's material through the range clipboard. Each is one undo step; a step that
 // fails undoes the others.
@@ -13329,8 +13360,12 @@ Result Session::pasteTime (const String& firstTrackId, double at)
     auto r = Result::ok();
     {
         const juce::ScopedValueSetter<bool> one (impl->composite, true);
+        const auto after = meterAt (snapshot().timeSignatures, beatsAt (at));
+        const auto meters = impl->rangeClipboard->meters;
+        const auto lengthBeats = beatsAt (at + impl->rangeClipboard->length) - beatsAt (at);
         r = insertTime (at, impl->rangeClipboard->length);
         if (r.wasOk()) r = pasteRange (firstTrackId, at);
+        if (r.wasOk()) r = pasteMeters (beatsAt (at), lengthBeats, meters, after);
     }
     if (r.failed()) impl->edit->getUndoManager().undoCurrentTransactionOnly();
     impl->changed(); return r;
@@ -13348,8 +13383,13 @@ Result Session::duplicateTime (double start, double end)
     {
         impl->transaction ("Duplicate time");
         const juce::ScopedValueSetter<bool> one (impl->composite, true);
+        const auto markers = snapshot().timeSignatures;
+        const auto meters = metersInside (markers, beatsAt (start), beatsAt (end));
+        const auto after = meterAt (markers, beatsAt (end));
+        const auto lengthBeats = beatsAt (end) - beatsAt (start);
         r = insertTime (end, end - start);
         if (r.wasOk() && ! tracks.isEmpty()) r = pasteRange (tracks[0], end);
+        if (r.wasOk()) r = pasteMeters (beatsAt (end), lengthBeats, meters, after);
         if (r.failed()) impl->edit->getUndoManager().undoCurrentTransactionOnly();
     }
     impl->restoreClipboards (std::move (kept));

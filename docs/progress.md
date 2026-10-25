@@ -2817,3 +2817,7 @@ UI area. A drag along a group's Arrangement lane now selects that time on every 
 ## Macro variations and Rand — 2026-10-25
 
 Engine and UI areas. Racks now keep macro variations, as the reference's manual describes: New stores the macros as "Variation N", a row's launch button gives them back except macros excluded from variations, its overwrite button stores the current state, and its menu renames, duplicates or deletes it. Rand gives each mapped macro not excluded from randomization a random whole value. Each is one undo step, and variations and exclusions are saved, validated on load and kept in rack presets ([racks contract](research/racks-contract.md#macro-variations-and-rand-2026-10-25)). Checked by the racks and UI suites.
+
+## Time signature markers in time commands — 2026-10-25
+
+Engine area. As the reference's manual says the time commands affect the time signature markers in the selected time, Paste Time and Duplicate Time now insert the markers inside the copied time, kept on the range clipboard, and give back the following meter after the new time when its markers would change it; Insert, Delete and Cut Time already moved or removed them ([contract](research/time-commands-contract.md)). Checked by the time edit suite.

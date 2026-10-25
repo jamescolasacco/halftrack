@@ -1943,6 +1943,8 @@ private:
     juce::Result beginRecording (bool waitForPlay);
     void finishRecording (bool stopTransport);
     void recordIfWaiting(); // A launch or Continue started the transport: a waiting Record starts.
+    // Inserts time signature markers copied with pasted time, and the meter that goes on after it.
+    juce::Result pasteMeters (double atBeat, double lengthBeats, const std::vector<TimeSignatureChange>& copied, TimeSignature after);
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (Session)
 };
 

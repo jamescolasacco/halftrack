@@ -166,6 +166,27 @@ int runTimeEditTests (const juce::File& artifacts)
         check (st.audio.size() == 2 && near (st.audio[1].start, 3) && st.locators == before.locators && st.volume == before.volume && st.midi.size() == 1,
                "one undo removes the duplicate");
 
+        // Time signature markers inside the time come with it, as the reference's time commands affect them
+        // (its manual, section 6.11), and after pasted time the meter it was pasted into goes on.
+        {
+            Session m (false);
+            ok (m.insertTimeSignatureChange (4, { 3, 4 }), "a 3/4 marker at beat 4");
+            ok (m.insertTimeSignatureChange (10, { 4, 4 }), "and 4/4 again at beat 10");
+            using Meters = std::vector<std::pair<double, int>>;
+            const auto meters = [&] { Meters v; for (const auto& t : m.snapshot().timeSignatures) v.push_back ({ t.beat, t.meter.numerator }); return v; };
+            const Meters original { { 0, 4 }, { 4, 3 }, { 10, 4 } };
+            ok (m.duplicateTime (1, 3), "duplicate beats 2 to 6");
+            check (meters() == Meters { { 0, 4 }, { 4, 3 }, { 8, 3 }, { 14, 4 } }, "the 3/4 marker inside repeats in the copy, and the 4/4 marker after it moves on four beats");
+            m.undo();
+            check (meters() == original, "one undo takes the copied marker away");
+            ok (m.cutTime (1, 2), "cut beats 2 to 6");
+            check (meters() == Meters { { 0, 4 }, { 6, 4 } }, "cutting the time takes its marker with it");
+            ok (m.pasteTime (m.snapshot().tracks[0].id, 1), "paste the time back at beat 2");
+            check (meters() == Meters { { 0, 4 }, { 4, 3 }, { 6, 4 }, { 10, 4 } }, "pasting it brings the marker back, and the 4/4 it went into goes on after it");
+            m.undo();
+            check (meters() == Meters { { 0, 4 }, { 6, 4 } }, "one undo removes the pasted time and its markers");
+        }
+
         // A warped clip crossing the edit cannot be split, so nothing changes.
         Session warped (false);
         ok (warped.importAudio (longSource, 0, 0), "import a clip to warp");
