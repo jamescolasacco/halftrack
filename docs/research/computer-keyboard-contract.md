@@ -17,6 +17,7 @@ Halftrack's computer MIDI keyboard follows the reference's Computer MIDI Keyboar
 - **Velocity.** C and V move the velocity down and up from 100 in steps of 20, between 1 and 127. A change of octave or velocity is shown in the status bar.
 - **Releasing.** A held key repeating plays nothing more. Releasing a key ends the note it began, even if the octave changed meanwhile. Releases are found from the key state when it changes, and from the window timer.
 - **Other shortcuts.** While the keyboard is on, these keys play instead of their shortcuts, as in the reference: A for Automation Mode, Z and X for zoom, T for audition. Command, Option and Control combinations and typing in text fields are left alone.
+- **Shift for the letters' shortcuts.** While the keyboard is on, Shift with a letter gives that letter's own shortcut, in the main window and the note editor, as the reference's manual has it (section 42.24, consulted 2026-10-25: "Single letter shortcuts can still be used when the Computer MIDI Keyboard is active by adding Shift", with Shift+S soloing a track as its example).
 
 ## Auto-Arm
 
@@ -59,7 +60,9 @@ The UI suite checks that the keyboard starts off with KEYS in the control bar. I
 - A plays a note rather than switching Automation Mode.
 - The key's release ends the note.
 - X and Z move the octave, and the status bar names it.
+- Shift+A switches Automation Mode while the keyboard is on, and again switches it back.
 - The KEYS switch turns it off and ends a held note, after which A switches Automation Mode again.
+- In the note editor, W plays a note while the keyboard is on and Shift+W fits the editor, playing nothing.
 
 ## Not yet covered
 

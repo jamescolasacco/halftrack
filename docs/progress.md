@@ -2773,3 +2773,7 @@ UI area. A scene's tempo and time signature fields in the Session drag by their 
 ## Clip bar and body — 2026-10-25
 
 UI area. As the reference's manual has it, only an Arrangement clip's bar, its name strip, moves it: a click in its waveform or notes selects the clip and places the insert marker, and a drag there selects time within it. Shift-click there extends the selection, so a Shift-click inside the selected clip selects part of it as time, and Shift+Option along the bar selects time ([contract](research/arrangement-selection-contract.md#a-clips-bar-and-body-2026-10-25)). The UI suite's moving tests now grab clip bars. Checked in the UI suite.
+
+## Shortcut fixes from the key audit — 2026-10-25
+
+UI area. A comparison of the reference manual's shortcut chapter with Halftrack's keys found gaps; the first fixes: with the computer MIDI keyboard on, Shift with a letter gives the letter's own shortcut, in the window and the note editor (manual section 42.24), and in the Session End from the last track goes to the scene itself, whose cell then shows the selection instead of a slot (section 42.15) ([computer keyboard contract](research/computer-keyboard-contract.md), [menu contract](research/main-menu-contract.md)). Checked in the UI suite.

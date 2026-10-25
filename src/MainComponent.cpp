@@ -1243,6 +1243,7 @@ public:
     bool handleKey (const juce::KeyPress& key)
     {
         if (session.isExporting()) return true;
+        if (const auto letter = shiftedLetter (key)) { const juce::ScopedValueSetter<bool> asShortcut (lettersAsShortcuts, true); return handleKey (*letter); }
         if (mappedKey (key)) return true;
         if (computerKeyboardKey (key)) return true;
         if (const auto repeat = latchKey (key)) return *repeat;
@@ -5612,7 +5613,8 @@ private:
                     if (! bounds.intersects (grid)) continue;
                     const auto* slot = slotAt (t, scene);
                     const bool filled = slot != nullptr && slot->hasClip;
-                    const bool selected = (selectedTrack && owner.state.scenes[(size_t) scene].id == owner.selectedSceneId) || owner.isSlotSelected (t, scene);
+                    // With the scene itself selected, its cell shows the selection instead of a slot.
+                    const bool selected = (selectedTrack && owner.state.scenes[(size_t) scene].id == owner.selectedSceneId && owner.clickedArea != Area::scenes) || owner.isSlotSelected (t, scene);
                     const bool queued = slot != nullptr && (slot->queued || slot->stopQueued);
                     const bool blink = owner.ticks % 16 < 8;
                     const auto cell = bounds.reduced (1, 0).withTrimmedBottom (1);
@@ -5688,6 +5690,7 @@ private:
                 // A scene that changes the tempo or meter lights its launch button.
                 const bool settings = info.tempo.has_value() || info.timeSignature.has_value();
                 g.setColour (selected ? orange : settings ? green : ink.withAlpha (0.8f)); drawTriangle (g, cell.getX() + 6, cell.getCentreY() - 5);
+                if (selected && owner.clickedArea == Area::scenes) { g.setColour (orange); g.drawRect (cell, 2); }
                 auto nameArea = cell.withTrimmedLeft (20).withTrimmedRight (6);
                 // Its tempo and time signature fields, while they show: its own, or the song's dimmed.
                 if (owner.state.sceneSettingsShown)
@@ -6188,8 +6191,8 @@ private:
             const auto mods = key.getModifiers();
             // The reference's Session keys: Cmd+Return stops the selected slot's track; Return launches the
             // scene when its column was clicked; Page Up and Down move eight scenes; Home and End go to the
-            // first and last track; Cmd with Left and Right moves the selected track, with Up and Down the
-            // selected scene.
+            // first and last track, and End from the last track to the scene itself (its manual, section
+            // 42.15); Cmd with Left and Right moves the selected track, with Up and Down the selected scene.
             if (code == juce::KeyPress::returnKey && mods.isCommandDown())
             {
                 if (const auto* track = owner.currentTrack(); track != nullptr && ! track->isReturn) owner.report (owner.session.stopLauncherTrack (owner.selectedTrack));
@@ -6201,8 +6204,20 @@ private:
                 int track = juce::jmax (0, owner.selectedTrack), scene = juce::jmax (0, owner.selectedSceneIndex());
                 if (code == juce::KeyPress::pageUpKey || code == juce::KeyPress::pageDownKey) scene += code == juce::KeyPress::pageUpKey ? -8 : 8;
                 else if (code == juce::KeyPress::homeKey) track = 0;
-                else for (int t = 0; t < (int) owner.state.tracks.size(); ++t) if (! owner.state.tracks[(size_t) t].isReturn) track = t;
+                else
+                {
+                    int last = 0;
+                    for (int t = 0; t < (int) owner.state.tracks.size(); ++t) if (! owner.state.tracks[(size_t) t].isReturn) last = t;
+                    if (track == last && owner.clickedArea != Area::scenes)
+                    {
+                        owner.selectedSceneId = owner.state.scenes[(size_t) juce::jlimit (0, (int) owner.state.scenes.size() - 1, scene)].id;
+                        owner.clickedArea = Area::scenes; owner.headerFocus = false;
+                        scrollSelectionIntoView(); owner.refresh(); repaint(); return true;
+                    }
+                    track = last;
+                }
                 owner.selectLauncherSlot (juce::jlimit (0, (int) owner.state.tracks.size() - 1, track), juce::jlimit (0, (int) owner.state.scenes.size() - 1, scene));
+                owner.clickedArea = Area::session;
                 scrollSelectionIntoView(); owner.refresh(); return true;
             }
             if (mods.isCommandDown() && ! mods.isShiftDown() && ! mods.isAltDown() && (code == juce::KeyPress::leftKey || code == juce::KeyPress::rightKey))
@@ -8689,6 +8704,7 @@ private:
             for (auto* focused = juce::Component::getCurrentlyFocusedComponent(); focused != nullptr; focused = focused->getParentComponent())
                 if (dynamic_cast<juce::TextEditor*> (focused) != nullptr) return false;
             if (owner.session.isExporting()) return true;
+            if (const auto letter = owner.shiftedLetter (key)) { const juce::ScopedValueSetter<bool> asShortcut (owner.lettersAsShortcuts, true); return keyPressed (*letter); }
             endGesture(); originalNotes.clear(); drawing = false; marquee = false; erasing = false;
             const auto* clip = owner.currentMidiClip();
             const auto code = key.getKeyCode();
@@ -8818,7 +8834,7 @@ private:
             const auto mods = key.getModifiers();
             const bool vertical = code == juce::KeyPress::upKey || code == juce::KeyPress::downKey, up = code == juce::KeyPress::upKey;
             // The computer MIDI keyboard's own keys play it instead, as in the reference.
-            if (owner.session.isComputerKeyboardEnabled() && ! mods.isCommandDown() && ! mods.isAltDown() && ComputerKeyboard::handles (key.getTextCharacter())) return false;
+            if (owner.session.isComputerKeyboardEnabled() && ! owner.lettersAsShortcuts && ! mods.isCommandDown() && ! mods.isAltDown() && ComputerKeyboard::handles (key.getTextCharacter())) return false;
             if (mods.isCommandDown() && vertical && hasSelectedNote())
             {
                 if (mods.isAltDown()) nudgeChance (up ? .01f : -.01f);
@@ -11270,9 +11286,21 @@ private:
     }
     // A key while the computer keyboard is on: a note key or Z X C V is played and kept from
     // other shortcuts, as in the reference.
+    // While the computer MIDI keyboard plays the letters, Shift with a letter gives the letter's own
+    // shortcut, as the reference's manual has it (section 42.24): the letter without Shift, which the
+    // keyboard then leaves alone.
+    bool lettersAsShortcuts = false;
+    std::optional<juce::KeyPress> shiftedLetter (const juce::KeyPress& key) const
+    {
+        const auto mods = key.getModifiers();
+        const auto character = key.getTextCharacter();
+        if (lettersAsShortcuts || ! session.isComputerKeyboardEnabled() || ! mods.isShiftDown() || mods.isCommandDown() || mods.isAltDown() || mods.isCtrlDown()
+            || ! juce::CharacterFunctions::isLetter (character)) return std::nullopt;
+        return juce::KeyPress (key.getKeyCode(), juce::ModifierKeys(), juce::CharacterFunctions::toLowerCase (character));
+    }
     bool computerKeyboardKey (const juce::KeyPress& key)
     {
-        if (! session.isComputerKeyboardEnabled() || key.getModifiers().isCommandDown() || key.getModifiers().isAltDown() || key.getModifiers().isCtrlDown()) return false;
+        if (lettersAsShortcuts || ! session.isComputerKeyboardEnabled() || key.getModifiers().isCommandDown() || key.getModifiers().isAltDown() || key.getModifiers().isCtrlDown()) return false;
         const auto character = key.getTextCharacter();
         if (! ComputerKeyboard::handles (character)) return false;
         for (auto* focused = juce::Component::getCurrentlyFocusedComponent(); focused; focused = focused->getParentComponent())
@@ -18439,6 +18467,21 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
     check (std::abs (state.position - clickedBeat * 60.0 / state.tempo) < 0.001 && std::abs (clickedBeat - 2) < 1.0 / beatWidth + 1e-9,
            "arrangement MIDI ruler seeks the global transport");
     pianoRoll.keyPressed (juce::KeyPress (juce::KeyPress::escapeKey));
+    {
+        // While the computer MIDI keyboard plays, W plays a note in the note editor and Shift+W fits it, as
+        // the reference's single-letter shortcuts take Shift then.
+        check (session.setComputerKeyboardEnabled (true).wasOk(), "the computer MIDI keyboard on");
+        const auto widthBefore = pianoRoll.beatWidth();
+        check (pianoRoll.keyPressed (juce::KeyPress ('W', {}, 'w')) && computerKeys.holding() && pianoRoll.beatWidth() == widthBefore, "W plays a note in the note editor, leaving its zoom");
+        keyStateChanged (false);
+        const auto original = pianoRoll.beatWidth();
+        pianoRoll.zoom (original < 100 ? 2.0 : 0.5);
+        const auto zoomed = pianoRoll.beatWidth();
+        check (pianoRoll.keyPressed (juce::KeyPress ('W', juce::ModifierKeys::shiftModifier, 'W')) && ! computerKeys.holding() && std::abs (pianoRoll.beatWidth() - zoomed) > 1e-6,
+               "Shift+W fits the note editor instead, playing nothing");
+        pianoRoll.zoom (original / pianoRoll.beatWidth());
+        check (session.setComputerKeyboardEnabled (false).wasOk(), "and off again"); refresh();
+    }
     auto click = [&] (juce::Point<float> at, int clicks = 1)
     {
         const auto parentPoint = getLocalPoint (&pianoRoll, at.toInt());
@@ -20736,6 +20779,10 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         check (handleKey (juce::KeyPress ('A', {}, 'a')) && automationMode == automation && computerKeys.holding(), "A plays a note instead of switching Automation Mode");
         keyStateChanged (false);
         check (! computerKeys.holding(), "the key's release ends it");
+        check (handleKey (juce::KeyPress ('A', juce::ModifierKeys::shiftModifier, 'A')) && automationMode != automation && ! computerKeys.holding(),
+               "Shift+A switches Automation Mode, as the reference's single-letter shortcuts take Shift while the keyboard plays");
+        handleKey (juce::KeyPress ('A', juce::ModifierKeys::shiftModifier, 'A')); refresh();
+        check (automationMode == automation, "and again switches it back");
         handleKey (juce::KeyPress ('X', {}, 'x'));
         check (computerKeys.octave() == 4 && status.contains ("C4"), "X moves the octave up and says so");
         handleKey (juce::KeyPress ('Z', {}, 'z'));
@@ -22645,7 +22692,11 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
             key (juce::KeyPress::pageUpKey);
             check (selectedSceneIndex() == 0, "Page Up eight up");
             key (juce::KeyPress::endKey);
-            check (selectedTrack == lastTrack, "End goes to the last track");
+            check (selectedTrack == lastTrack && clickedArea == Area::session, "End goes to the last track");
+            key (juce::KeyPress::endKey);
+            check (selectedTrack == lastTrack && clickedArea == Area::scenes && selectedSceneIndex() == 0, "End again, from the last track, goes to the scene itself, as the reference's key does");
+            key (juce::KeyPress::endKey);
+            check (selectedTrack == lastTrack && clickedArea == Area::session, "and End once more back to the last track");
             key (juce::KeyPress::homeKey);
             check (selectedTrack == 0, "Home to the first");
             selectLauncherSlot (firstTrack, 0); refresh();
