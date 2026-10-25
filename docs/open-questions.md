@@ -847,6 +847,8 @@ Open Recent Project ([menu contract](research/main-menu-contract.md)). Defaults 
 
 Window layout ([contract](research/window-layout-contract.md)). With Full Height Browser off, the Info View stays under the browser, above the detail view; where the reference puts it then was not read. Full-Size Clip View keeps the browser beside the clip view and lasts while the window is open; the item's name follows the manual's shortcut list, and whether the reference keeps the browser or the setting was not read.
 
+Clip View tabs ([contract](research/clip-view-contract.md)). The View menu names the tabs Notes (or Sample), Envelopes and MPE, as the shortcut list names them; the reference's item texts were not read. The tab shown lasts while the window is open, for every clip. Halftrack's MIDI controller lanes move to the Envelopes tab under a MIDI Ctrl heading, as the reference's controllers are envelopes. The Envelopes tab's lane fills the editor without the notes, and opens on the clip's first modulation envelope or its pitch bend. The reference's MPE pitch editing on the notes and its stacked lanes are not matched.
+
 Browser width. The browser's right edge drags to resize it, from 220 pixels to the smaller of 640 and half the window, starting at 300; the width lasts while the window is open. The reference's limits, and whether it keeps the width with the Set, were not read.
 
 Hot-Swap ([presets contract](research/presets-contract.md#hot-swap-2026-10-24)). A category the device's kin are not in ends the link, standing in for the reference's "navigating from the browser to another view"; after a swap the link follows the new device. The built-in synth's row cannot be swapped in, as it is not a device of its own.

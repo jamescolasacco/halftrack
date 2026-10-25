@@ -1239,6 +1239,14 @@ public:
                 if (dynamic_cast<juce::TextEditor*> (focused)) return false;
             return code == 'Z' ? zoomToSelection() : zoomBackFromSelection();
         }
+        // Option+Tab (Ctrl+Tab on Windows and Linux) steps through the clip view editor's tabs, Shift going
+        // back, as the reference's key does.
+       #if JUCE_MAC
+        const bool editorTabKey = key.getModifiers().isAltDown();
+       #else
+        const bool editorTabKey = cmd;
+       #endif
+        if (code == juce::KeyPress::tabKey && editorTabKey) { if (clipEditorShown()) stepEditorTab (shift ? -1 : 1); return true; }
         if (code == juce::KeyPress::tabKey && shift) { if (showPiano) closeClipView(); else openPianoRoll(); return true; }
         if (code == juce::KeyPress::tabKey) { if (showSession) showArrangementView(); else showSessionView(); return true; }
         if (code == juce::KeyPress::spaceKey && shift && ! cmd) { if (state.playing) session.stop(); else report (session.continuePlayback()); refresh(); return true; }
@@ -1992,6 +2000,10 @@ private:
     static constexpr const char* infoTitleProperty = "infoTitle";
     static constexpr const char* infoTextProperty = "infoText";
     bool headerFocus = false;
+    // The clip view editor's tabs, as the reference's: the clip's content (Notes, or Sample for an
+    // audio clip), its Envelopes, and its notes' MPE expression.
+    enum class EditorTab { content, envelopes, expression };
+    EditorTab editorTab = EditorTab::content;
     // The area last clicked, which the menu bar's Edit commands act on (see editArea).
     enum class Area { arrangement, session, headers, scenes, notes, devices };
     Area clickedArea = Area::arrangement;
@@ -6970,8 +6982,22 @@ private:
                 const auto id = envelopeChoice.getSelectedId() - envelopeChoiceBase;
                 envelope.choice.reset();
                 if (juce::isPositiveAndBelow (id, (int) envelopeList.size())) envelope.choice = envelopeList[(size_t) id];
+                if (envelope.choice && tab != EditorTab::envelopes) { keptEnvelope = envelope.choice; owner.setEditorTab (EditorTab::envelopes); }
                 repaint();
             };
+            // The editor's tabs, as the reference's: the sample, with its warp markers and loop, and the
+            // clip's envelopes drawn over it.
+            for (auto [tabButton, shows, name] : { std::tuple { &sampleTab, EditorTab::content, "Sample tab" }, std::tuple { &envelopesTab, EditorTab::envelopes, "Envelopes tab" } })
+            {
+                addAndMakeVisible (*tabButton); tabButton->setName (name); tabButton->setClickingTogglesState (false);
+                tabButton->setColour (juce::TextButton::buttonOnColourId, themes::colour (0xff5a5a5a)); tabButton->setColour (juce::TextButton::textColourOnId, ink);
+                tabButton->setWantsKeyboardFocus (false); tabButton->setMouseClickGrabsKeyboardFocus (false);
+                tabButton->onClick = [this, shows = shows] { owner.setEditorTab (shows); };
+            }
+            sampleTab.setTooltip ("Sample: the waveform, its warp markers and loop  |  Option+Shift+1");
+            envelopesTab.setTooltip ("Envelopes: the clip's envelopes, drawn over the waveform  |  Option+Shift+2");
+            sampleTab.setToggleState (true, juce::dontSendNotification);
+            envelopeChoice.setVisible (false);
             thumbnail.addChangeListener (this);
         }
         ~AudioClipView() override { thumbnail.removeChangeListener (this); if (gesture) owner.session.endEditGesture(); }
@@ -7049,6 +7075,30 @@ private:
             }
             envelopeChoice.setSelectedId (keep, juce::dontSendNotification);
         }
+        // Shows the tab, the Sample tab keeping the envelope shown for the Envelopes tab's return; the
+        // Envelopes tab shows it, or the clip's first envelope.
+        void showTab (EditorTab next)
+        {
+            if (next == EditorTab::expression) next = EditorTab::content;
+            sampleTab.setToggleState (next == EditorTab::content, juce::dontSendNotification); envelopesTab.setToggleState (next == EditorTab::envelopes, juce::dontSendNotification);
+            if (next == tab) return;
+            tab = next;
+            if (tab == EditorTab::content) { keptEnvelope = envelope.choice; envelope.choice.reset(); }
+            else
+            {
+                refreshEnvelopeChoices();
+                const auto first = std::find_if (envelopeList.begin(), envelopeList.end(), [] (const auto& c) { return c.mode == Session::EnvelopeMode::modulation; });
+                envelope.choice = keptEnvelope ? keptEnvelope : first != envelopeList.end() ? std::optional<EnvelopeChoice> (*first) : std::nullopt;
+            }
+            int shown = 1;
+            if (envelope.choice)
+                for (size_t i = 0; i < envelopeList.size(); ++i)
+                    if (envelopeList[i].target == envelope.choice->target && envelopeList[i].mode == envelope.choice->mode) shown = envelopeChoiceBase + (int) i;
+            envelopeChoice.setSelectedId (shown, juce::dontSendNotification);
+            envelopeChoice.setVisible (tab == EditorTab::envelopes);
+            resized(); repaint();
+        }
+        EditorTab shownTab() const noexcept { return tab; }
         void resized() override
         {
             launch.setBounds (clipBox().getRight() + 6, 6, LaunchBox::width, getHeight() - 12);
@@ -7075,7 +7125,9 @@ private:
             transpose.setBounds (row.removeFromLeft (third)); detune.setBounds (row.removeFromLeft (third)); gain.setBounds (row);
             sample.removeFromTop (6);
             reverse.setBounds (sample.removeFromTop (22).reduced (6, 0));
-            envelopeChoice.setBounds (clipBox().reduced (8, 0).removeFromBottom (32).withTrimmedBottom (8));
+            auto tabs = tabRow();
+            sampleTab.setBounds (tabs.removeFromLeft (54)); tabs.removeFromLeft (2); envelopesTab.setBounds (tabs.removeFromLeft (66)); tabs.removeFromLeft (8);
+            envelopeChoice.setBounds (tabs.withWidth (juce::jmin (tabs.getWidth(), 220)));
         }
         void paint (juce::Graphics& g) override
         {
@@ -7190,7 +7242,9 @@ private:
         int launchSpace() const { return (launch.isVisible() ? LaunchBox::width + 6 : 0) + (loopBox.isVisible() ? LoopBox::width + 6 : 0); }
         juce::Rectangle<int> clipBox() const { return { 6, 6, 170, getHeight() - 12 }; }
         juce::Rectangle<int> sampleBox() const { return { 182 + launchSpace(), 6, 200, getHeight() - 12 }; }
-        juce::Rectangle<int> waveBounds() const { return { 390 + launchSpace(), 6, juce::jmax (40, getWidth() - 396 - launchSpace()), getHeight() - 12 }; }
+        // The tabs' row over the waveform.
+        juce::Rectangle<int> tabRow() const { return { 390 + launchSpace(), 6, juce::jmax (40, getWidth() - 396 - launchSpace()), 22 }; }
+        juce::Rectangle<int> waveBounds() const { return { 390 + launchSpace(), 32, juce::jmax (40, getWidth() - 396 - launchSpace()), juce::jmax (20, getHeight() - 38) }; }
         // Chooser items in the reference's order, with Halftrack's cheaper Complex last.
         static constexpr Session::WarpMode chooserModes[] { Session::WarpMode::beats, Session::WarpMode::tones, Session::WarpMode::texture, Session::WarpMode::repitch,
                                                             Session::WarpMode::stretch, Session::WarpMode::complexPro, Session::WarpMode::efficient };
@@ -7445,6 +7499,9 @@ private:
         static constexpr int envelopeChoiceBase = 1000;
         std::vector<EnvelopeChoice> envelopeList;
         juce::StringArray envelopeSignature;
+        EditorTab tab = EditorTab::content;
+        std::optional<EnvelopeChoice> keptEnvelope; // The Envelopes tab's envelope, while the Sample tab shows.
+        juce::TextButton sampleTab { "Sample" }, envelopesTab { "Envelopes" };
     };
 
     class PianoRoll final : public juce::Component, private juce::ScrollBar::Listener
@@ -7454,7 +7511,22 @@ private:
         {
             setName ("Piano roll editor");
             setWantsKeyboardFocus (true);
-            for (auto* c : std::initializer_list<juce::Component*> { &gridButton, &noteLength, &velocity, &noteTools, &laneChoice, &laneView, &foldButton, &scaleButton, &scaleRoot, &scaleMode, &horizontal, &vertical, &previewSwitch }) addAndMakeVisible (c);
+            for (auto* c : std::initializer_list<juce::Component*> { &gridButton, &noteLength, &velocity, &noteTools, &laneChoice, &laneView, &foldButton, &scaleButton, &scaleRoot, &scaleMode, &horizontal, &vertical, &previewSwitch,
+                                                                    &notesTab, &envelopesTab, &expressionTab }) addAndMakeVisible (c);
+            // The editor's tabs, as the reference's: the notes with their velocity and chance lanes, the
+            // clip's envelopes (its MIDI controllers among them) filling the editor, and its notes' MPE.
+            for (auto [tabButton, shows, name] : { std::tuple { &notesTab, EditorTab::content, "Notes tab" }, std::tuple { &envelopesTab, EditorTab::envelopes, "Envelopes tab" },
+                                                   std::tuple { &expressionTab, EditorTab::expression, "MPE tab" } })
+            {
+                tabButton->setName (name); tabButton->setClickingTogglesState (false);
+                tabButton->setColour (juce::TextButton::buttonOnColourId, themes::colour (0xff5a5a5a)); tabButton->setColour (juce::TextButton::textColourOnId, ink);
+                tabButton->setWantsKeyboardFocus (false); tabButton->setMouseClickGrabsKeyboardFocus (false);
+                tabButton->onClick = [this, shows = shows] { owner.setEditorTab (shows); };
+            }
+            notesTab.setTooltip ("Notes: the notes, with their velocity and chance in the lane below  |  Option+Shift+1");
+            envelopesTab.setTooltip ("Envelopes: the clip's envelopes and MIDI controllers, filling the editor  |  Option+Shift+2");
+            expressionTab.setTooltip ("MPE: each note's own pitch bend, slide and pressure  |  Option+Shift+3");
+            notesTab.setToggleState (true, juce::dontSendNotification);
             foldButton.setName ("Fold"); foldButton.setClickingTogglesState (true); foldButton.setTooltip ("Fold: show only the rows with notes  |  F");
             foldButton.setColour (juce::TextButton::buttonOnColourId, orange); foldButton.setColour (juce::TextButton::textColourOnId, themes::colour (0xff1a1a1a));
             foldButton.setWantsKeyboardFocus (false); foldButton.setMouseClickGrabsKeyboardFocus (false);
@@ -7586,24 +7658,46 @@ private:
         }
         void resized() override
         {
-            // The header flows left to right. A narrower editor (beside the Groove and Launch boxes)
-            // shortens the clip name, then the widest controls.
-            const int tier = getWidth() >= 1216 ? 0 : getWidth() >= 940 ? 1 : 2;
+            // The header flows left to right: the tabs and the lane they choose from, Fold and Scale, as the
+            // reference's editor header has them, then Halftrack's grid, note tools, velocity, the clip's
+            // scale and the new-note length. A narrower editor (beside the clip's boxes) narrows the widest
+            // controls, then hides the last ones that do not fit; the clip name takes what room is left.
+            const int tier = getWidth() >= 1380 ? 0 : getWidth() >= 1100 ? 1 : 2;
             const int velocityWidth = std::array { 142, 104, 80 }[(size_t) tier], laneWidth = std::array { 116, 100, 90 }[(size_t) tier];
             const int modeWidth = std::array { 132, 108, 96 }[(size_t) tier], toolsWidth = std::array { 100, 88, 76 }[(size_t) tier];
-            const int fixed = 7 + 34 + 66 + 8 + 48 + 76 + 12 + 56 + velocityWidth + 12 + toolsWidth + 12 + 32 + laneWidth + 10 + 44 + 50 + 54 + modeWidth;
-            nameWidth = juce::jlimit (0, 225, getWidth() - 24 - fixed);
+            notesTab.setBounds (8, 7, 44, 23); envelopesTab.setBounds (54, 7, 66, 23); expressionTab.setBounds (122, 7, 38, 23);
+            nameX = 8 + 44 + 2 + 66 + 2 + 38 + 10;
+            struct Part { int label; std::vector<std::pair<juce::Component*, int>> controls; int gap; int* labelAt; };
+            const std::vector<Part> parts {
+                { 32, { { &laneChoice, laneWidth } }, 10, &labelX[3] }, { 0, { { &foldButton, 40 } }, 4, nullptr }, { 0, { { &scaleButton, 48 } }, 12, nullptr },
+                { 34, { { &gridButton, 66 } }, 8, &labelX[0] }, { 0, { { &noteTools, toolsWidth } }, 12, nullptr },
+                { 56, { { &velocity, velocityWidth } }, 12, &labelX[2] }, { 0, { { &scaleRoot, 52 }, { &scaleMode, modeWidth } }, 12, nullptr },
+                { 48, { { &noteLength, 76 } }, 12, &labelX[1] } };
+            const auto partWidth = [] (const Part& part) { int w = part.label + part.gap; for (const auto& [c, width] : part.controls) w += width + 2; return w; };
+            const int room = getWidth() - 14 - nameX;
+            int used = 0; size_t shown = 0;
+            while (shown < parts.size() && used + partWidth (parts[shown]) <= room) used += partWidth (parts[shown++]);
+            nameWidth = juce::jlimit (0, 225, room - used - 12);
             if (nameWidth < 40) nameWidth = 0;
-            int x = nameWidth > 0 ? 12 + nameWidth + 7 : 8;
-            labelX[0] = x; x += 34; gridButton.setBounds (x, 7, 66, 23); x += 66 + 8; updateGridButton();
-            labelX[1] = x; x += 48; noteLength.setBounds (x, 7, 76, 23); x += 76 + 12;
-            labelX[2] = x; x += 56; velocity.setBounds (x, 5, velocityWidth, 27); x += velocityWidth + 12;
-            noteTools.setBounds (x, 7, toolsWidth, 23); x += toolsWidth + 12;
-            labelX[3] = x; x += 32; laneChoice.setBounds (x, 7, laneWidth, 23); x += laneWidth + 10;
-            foldButton.setBounds (x, 7, 40, 23); x += 44;
-            scaleButton.setBounds (x, 7, 48, 23); x += 50; scaleRoot.setBounds (x, 7, 52, 23); x += 54; scaleMode.setBounds (x, 7, modeWidth, 23);
-            infoX = x + modeWidth + 6;
-            if (laneView.isVisible()) laneView.setBounds (0, getHeight() - scrollSize - laneHeight, getWidth() - scrollSize, laneHeight);
+            int x = nameWidth > 0 ? nameX + nameWidth + 12 : nameX;
+            for (size_t i = 0; i < parts.size(); ++i)
+            {
+                const auto& part = parts[i];
+                if (part.labelAt != nullptr) *part.labelAt = x;
+                x += part.label;
+                for (const auto& [c, width] : part.controls)
+                {
+                    c->setVisible (i < shown);
+                    c->setBounds (x, c == &velocity ? 5 : 7, width, c == &velocity ? 27 : 23); x += width + 2;
+                }
+                if (i < shown) infoX = x + part.gap - 6;
+                x += part.gap;
+            }
+            updateGridButton();
+            // In the Envelopes tab the lane is the editor, under the ruler; otherwise it runs under the notes.
+            if (tab == EditorTab::envelopes) laneView.setBounds (0, gridTop, getWidth() - scrollSize, juce::jmax (laneHeight, getHeight() - gridTop - scrollSize));
+            else if (laneView.isVisible()) laneView.setBounds (0, getHeight() - scrollSize - laneHeight, getWidth() - scrollSize, laneHeight);
+            vertical.setVisible (tab != EditorTab::envelopes);
             horizontal.setBounds (keysWidth, getHeight() - scrollSize, getWidth() - keysWidth - scrollSize, scrollSize);
             vertical.setBounds (getWidth() - scrollSize, gridTop, scrollSize, gridBounds().getHeight());
             previewSwitch.setBounds (4, headerHeight + 3, keysWidth - 8, rulerHeight - 6); // Above the keys, as the reference's.
@@ -7615,12 +7709,12 @@ private:
             g.setColour (panel); g.fillRect (0, 0, getWidth(), headerHeight);
             g.setColour (ink); g.setFont (font (11.5f, true));
             const auto* clip = owner.currentMidiClip();
-            if (nameWidth > 0) g.drawText (clip == nullptr ? "SELECT A MIDI CLIP" : clip->name, 12, 0, nameWidth, headerHeight, juce::Justification::centredLeft, true);
+            if (nameWidth > 0) g.drawText (clip == nullptr ? "SELECT A MIDI CLIP" : clip->name, nameX, 0, nameWidth, headerHeight, juce::Justification::centredLeft, true);
             g.setColour (muted); g.setFont (font (10.0f));
-            g.drawText ("Grid", labelX[0], 0, 32, headerHeight, juce::Justification::centredLeft);
-            g.drawText ("Length", labelX[1], 0, 45, headerHeight, juce::Justification::centredLeft);
-            g.drawText ("Velocity", labelX[2], 0, 52, headerHeight, juce::Justification::centredLeft);
-            g.drawText ("Lane", labelX[3], 0, 30, headerHeight, juce::Justification::centredLeft);
+            if (gridButton.isVisible()) g.drawText ("Grid", labelX[0], 0, 32, headerHeight, juce::Justification::centredLeft);
+            if (noteLength.isVisible()) g.drawText ("Length", labelX[1], 0, 45, headerHeight, juce::Justification::centredLeft);
+            if (velocity.isVisible()) g.drawText ("Velocity", labelX[2], 0, 52, headerHeight, juce::Justification::centredLeft);
+            if (laneChoice.isVisible()) g.drawText ("Lane", labelX[3], 0, 30, headerHeight, juce::Justification::centredLeft);
             g.drawText ((typedVelocity.isNotEmpty() ? "Velocity " + typedVelocity + "_  |  " : juce::String())
                         + (selectedNoteIds.empty() ? juce::String() : juce::String ((int) selectedNoteIds.size()) + " selected  |  ")
                         + "Insert " + juce::String (insertionBeat + 1, 2), infoX, 0, juce::jmax (0, getWidth() - infoX - 14), headerHeight, juce::Justification::centredRight);
@@ -8693,7 +8787,7 @@ private:
         LaneView laneView { *this };
         juce::ComboBox noteLength, laneChoice, scaleRoot, scaleMode;
         juce::TextButton gridButton;
-        int nameWidth = 225, infoX = 1210;
+        int nameWidth = 225, nameX = 12, infoX = 1210;
         std::array<int, 4> labelX { 244, 352, 488, 810 };
         juce::TextButton noteTools { "Note tools" }, scaleButton { "Scale" }, foldButton { "Fold" };
         void editScale()
@@ -8963,6 +9057,7 @@ private:
             const auto envelopes = clip != nullptr && track != nullptr ? EnvelopeEditor::choices (owner, *track, owner.selectedLauncherClipId.isNotEmpty()) : std::vector<EnvelopeChoice>();
             juce::StringArray signature;
             for (const auto& c : envelopes) signature.add (c.target.pluginId + "|" + juce::String (c.target.parameter) + "|" + juce::String ((int) c.mode) + "|" + c.device + "|" + c.control);
+            signature.add ("tab " + juce::String ((int) tab));
             if (others == laneOthers && signature == envelopeSignature && laneChoice.getNumItems() > 0) return;
             laneOthers = others; envelopeSignature = signature; envelopeChoices = envelopes;
             auto keep = laneChoice.getSelectedId();
@@ -8975,15 +9070,23 @@ private:
                 if (at == envelopes.end()) laneView.envelope.choice.reset();
             }
             laneChoice.clear (juce::dontSendNotification);
-            laneChoice.addItem ("Velocity", 1); laneChoice.addItem ("Chance", chanceChoice);
+            // Each tab offers its own lanes: Notes the notes' velocity and chance, MPE their expression,
+            // and Envelopes the MIDI controllers (as the reference's MIDI Ctrl envelopes) and envelopes.
+            if (tab != EditorTab::envelopes)
+            {
+                if (tab == EditorTab::content) { laneChoice.addItem ("Velocity", 1); laneChoice.addItem ("Chance", chanceChoice); }
+                else for (int i = 0; i < 3; ++i) laneChoice.addItem (LaneView::expressionName (static_cast<Session::NoteExpression> (i)), expressionChoice + i);
+                laneChoice.addSeparator(); laneChoice.addItem ("Hide lane", hiddenLane);
+                const int first = tab == EditorTab::content ? 1 : expressionChoice;
+                selectLane (keep > 0 && laneChoice.indexOfItemId (keep) >= 0 ? keep : first, keep);
+                return;
+            }
+            laneChoice.addSectionHeading ("MIDI Ctrl");
             for (int i = 0; i < (int) std::size (commonLanes); ++i) laneChoice.addItem (LaneView::laneName (commonLanes[i]), 2 + i);
             for (const auto lane : others) laneChoice.addItem (LaneView::laneName (lane), 100 + lane);
             juce::PopupMenu more;
             for (int cc = 0; cc < 120; ++cc) if (! common (cc) && ! others.contains (cc)) more.addItem (100 + cc, "CC " + juce::String (cc));
             laneChoice.getRootMenu()->addSubMenu ("Other controller", more);
-            juce::PopupMenu expressions;
-            for (int i = 0; i < 3; ++i) expressions.addItem (expressionChoice + i, LaneView::expressionName (static_cast<Session::NoteExpression> (i)));
-            laneChoice.getRootMenu()->addSubMenu ("Note Expression (MPE)", expressions);
             // Clip envelopes, by device, for modulation and, on Session clips, automation.
             for (const auto mode : { Session::EnvelopeMode::modulation, Session::EnvelopeMode::automation })
             {
@@ -9000,9 +9103,28 @@ private:
                 if (modeMenu.getNumItems() > 0)
                     laneChoice.getRootMenu()->addSubMenu (mode == Session::EnvelopeMode::modulation ? "Envelope" : "Envelope automation", modeMenu);
             }
-            laneChoice.addSeparator(); laneChoice.addItem ("Hide lane", hiddenLane);
-            laneChoice.setSelectedId (keep > 0 && laneChoice.indexOfItemId (keep) >= 0 ? keep : 1, juce::dontSendNotification);
+            // At first the clip's first envelope, or its pitch bend.
+            const auto firstEnvelope = std::find_if (envelopes.begin(), envelopes.end(), [] (const auto& c) { return c.mode == Session::EnvelopeMode::modulation; });
+            const int first = firstEnvelope != envelopes.end() ? envelopeChoiceBase + (int) (firstEnvelope - envelopes.begin()) : 2;
+            selectLane (keep > 0 && keep != hiddenLane && laneChoice.indexOfItemId (keep) >= 0 ? keep : first, keep);
         }
+        // Shows the lane chosen, telling the lane when it changed.
+        void selectLane (int id, int was) { laneChoice.setSelectedId (id, id != was ? juce::sendNotificationSync : juce::dontSendNotification); }
+    public:
+        // Shows the tab's lanes; Owner::setEditorTab chooses it.
+        void showTab (EditorTab next)
+        {
+            for (auto [tabButton, shows] : { std::pair { &notesTab, EditorTab::content }, std::pair { &envelopesTab, EditorTab::envelopes }, std::pair { &expressionTab, EditorTab::expression } })
+                tabButton->setToggleState (shows == next, juce::dontSendNotification);
+            if (next == tab) return;
+            tab = next;
+            refreshLaneChoices (owner.currentMidiClip());
+            resized(); repaint();
+        }
+        EditorTab shownTab() const noexcept { return tab; }
+    private:
+        EditorTab tab = EditorTab::content;
+        juce::TextButton notesTab { "Notes" }, envelopesTab { "Envelopes" }, expressionTab { "MPE" };
         juce::Array<int> laneOthers;
         static constexpr int envelopeChoiceBase = 1000;
         std::vector<EnvelopeChoice> envelopeChoices;
@@ -13699,7 +13821,7 @@ private:
                     menuMidiPrelisten, menuBrowserPreHear, menuLockEnvelopes,
                     menuArrangementInOut, menuArrangementVolume, menuArrangementTrackOptions, menuArrangementReturns, menuArrangementOverdub,
                     menuAddFolder, menuRemoveUnavailableProjects, menuClearRecentProjects, menuShowBackups, menuRevealBackups, menuSnapAutomation, menuSaveTemplate,
-                    menuQuantizeSettings, menuStartWithTap, menuDelayCompensation, menuFullHeightBrowser, menuFullSizeClip,
+                    menuQuantizeSettings, menuStartWithTap, menuDelayCompensation, menuFullHeightBrowser, menuFullSizeClip, menuContentEditor, menuEnvelopeEditor, menuExpressionEditor,
                     menuLastCommand, // New commands go before this.
                     menuSlice = 400, // Plus Session::SliceBy.
                     menuTimeFormat = 410, // Plus Session::TimeFormat.
@@ -13752,7 +13874,8 @@ private:
             { menuFullscreen, key (KeyPress::F11Key) },
            #endif
             { 93, key ('1', cmd) }, { 94, key ('2', cmd) }, { 95, key ('3', cmd) }, { 96, key ('4', cmd) }, { 97, key ('5', cmd) }, { 13, key ('e', cmd | shift | alt) },
-            { menuFullSizeClip, key ('e', cmd | alt) } };
+            { menuFullSizeClip, key ('e', cmd | alt) }, { menuContentEditor, key ('1', alt | shift) }, { menuEnvelopeEditor, key ('2', alt | shift) },
+            { menuExpressionEditor, key ('3', alt | shift) } };
         for (const auto& [id, press] : shortcuts)
         {
             if (menuKeys.getCommandForID (id) == nullptr)
@@ -14206,6 +14329,22 @@ private:
     }
     // The clip view and the device view share the detail view, as the reference's do.
     void showClipView (bool clip) { if (clip == showPiano) return; if (clip) openPianoRoll(); else closeClipView(); }
+    // The clip view editor's tab (see EditorTab); an audio clip, without MPE, shows its sample instead.
+    EditorTab shownEditorTab() const { return editorTab == EditorTab::expression && selectedAudioClip() != nullptr ? EditorTab::content : editorTab; }
+    void setEditorTab (EditorTab tab)
+    {
+        if (tab == EditorTab::expression && selectedAudioClip() != nullptr) tab = EditorTab::content;
+        editorTab = tab;
+        pianoRoll.showTab (tab); audioClipView.showTab (tab);
+        resized(); repaint();
+    }
+    // Option+Tab's next tab, or with Shift the one before, as the reference's key steps through them.
+    void stepEditorTab (int step)
+    {
+        const int count = selectedAudioClip() != nullptr ? 2 : 3;
+        setEditorTab ((EditorTab) (((int) shownEditorTab() + step + count) % count));
+    }
+    bool clipEditorShown() const { return showPiano && showDetail && (currentMidiClip() != nullptr || selectedAudioClip() != nullptr); }
     bool canShowClipView() const { return showPiano || (showSession ? selectedSlot() != nullptr && selectedSlot()->hasClip : (loneClip() != nullptr || currentMidiClip() != nullptr)); }
 
     juce::PopupMenu getMenuForIndex (int index, const juce::String&) override
@@ -14394,6 +14533,12 @@ private:
             add (menuFullSizeClip, "Full-Size Clip View", canShowClipView(), fullSizeClipView && showPiano && showDetail);
             add (menuDetailView, showDetail ? "Hide Detail View" : "Show Detail View");
             popup.addSeparator();
+            // The clip view editor's tabs, as the reference's View menu switches them.
+            const bool audioShown = selectedAudioClip() != nullptr;
+            add (menuContentEditor, audioShown ? "Sample" : "Notes", clipEditorShown(), clipEditorShown() && shownEditorTab() == EditorTab::content);
+            add (menuEnvelopeEditor, "Envelopes", clipEditorShown(), clipEditorShown() && shownEditorTab() == EditorTab::envelopes);
+            add (menuExpressionEditor, "MPE", clipEditorShown() && ! audioShown, clipEditorShown() && shownEditorTab() == EditorTab::expression);
+            popup.addSeparator();
             add (menuBrowser, "Browser", ! mapping(), showBrowser || mapping()); add (menuGroovePool, "Groove Pool", true, groovePool != nullptr && groovePool->isShowing());
             add (menuFullHeightBrowser, "Full Height Browser", true, session.preferences().fullHeightBrowser);
             popup.addSeparator();
@@ -14516,6 +14661,10 @@ private:
             case menuAddFolder: addFolderToBrowser(); return;
             case menuSaveTemplate: saveTemplateDialog(); return;
             case menuDelayCompensation: session.setDelayCompensation (! session.delayCompensation()); refresh(); return;
+            case menuContentEditor: case menuEnvelopeEditor: case menuExpressionEditor:
+                if (! clipEditorShown()) return;
+                setEditorTab (id == menuContentEditor ? EditorTab::content : id == menuEnvelopeEditor ? EditorTab::envelopes : EditorTab::expression);
+                return;
             case menuFullSizeClip:
                 // The clip view takes the whole height, as the reference's Toggle Full-Size Clip View does; it shows first if it was hidden.
                 if (! canShowClipView()) return;
@@ -17759,7 +17908,25 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
                "Cmd-dragging a velocity bar to the top gives the note a range up to full velocity, keeping its velocity");
         pianoRoll.keyPressed (undo);
         check (currentMidiClip()->notes.front().velocityRange == 0, "one undo removes the range");
+        // The editor's tabs, as the reference's: Notes offers the notes' velocity and chance, and Envelopes the
+        // clip's MIDI controllers and envelopes, filling the editor.
+        const auto underNotes = laneView->getBounds();
+        auto* envelopesTab = dynamic_cast<juce::Button*> (findNamed (pianoRoll, "Envelopes tab"));
+        check (pianoRoll.shownTab() == EditorTab::content && laneMenu->indexOfItemId (2) < 0 && laneMenu->indexOfItemId (97) >= 0 && envelopesTab != nullptr
+                   && dynamic_cast<juce::Button*> (findNamed (pianoRoll, "Notes tab"))->getToggleState(), "the Notes tab shows, its lanes the notes' velocity and chance");
+        envelopesTab->onClick(); refresh();
+        check (pianoRoll.shownTab() == EditorTab::envelopes && editorTab == EditorTab::envelopes && envelopesTab->getToggleState() && laneView->isVisible()
+                   && laneView->getY() < underNotes.getY() && laneView->getHeight() > underNotes.getHeight() && laneMenu->indexOfItemId (2) >= 0 && laneMenu->indexOfItemId (1) < 0,
+               "the Envelopes tab shows the clip's MIDI controllers and envelopes, filling the editor");
         laneMenu->setSelectedId (2, juce::sendNotificationSync);
+        if (const auto* configured = std::getenv ("HALFTRACK_TEST_UI_SNAPSHOT_DIRECTORY"))
+            if (const juce::File directory (juce::String::fromUTF8 (configured)); directory.createDirectory().wasOk())
+            {
+                juce::PNGImageFormat png; const auto output = directory.getChildFile ("piano-envelopes-tab.png");
+                if (auto stream = output.createOutputStream(); stream && stream->setPosition (0) && stream->truncate().wasOk()
+                    && png.writeImageToStream (pianoRoll.createComponentSnapshot (pianoRoll.getLocalBounds(), true, 1.0f), *stream))
+                    std::cout << "UI SNAPSHOT " << output.getFullPathName() << std::endl;
+            }
         const auto beat2 = juce::Point<float> ((float) (55 + 2 * beatWidth), 6);
         laneView->mouseDown (laneEvent (beat2, beat2)); laneView->mouseUp (laneEvent (beat2, beat2));
         const auto bend = [&] { return currentMidiClip()->controllers; };
@@ -17767,6 +17934,16 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
                "clicking the Pitch Bend lane adds a full upward bend at beat 2");
         laneView->mouseDown (laneEvent (beat2, beat2, false, 2)); laneView->mouseUp (laneEvent (beat2, beat2, false, 2));
         check (bend().empty(), "double-clicking a point deletes it");
+        {
+            const auto alt = juce::ModifierKeys::altModifier, shift = juce::ModifierKeys::shiftModifier;
+            check (handleKey (juce::KeyPress (juce::KeyPress::tabKey, juce::ModifierKeys (JUCE_MAC ? alt : juce::ModifierKeys::commandModifier), 0)) && pianoRoll.shownTab() == EditorTab::expression
+                       && laneMenu->indexOfItemId (90) >= 0 && laneMenu->getSelectedId() == 90 && laneView->getBounds() == underNotes,
+                   "Option+Tab steps to the MPE tab, its lanes the notes' expression under them");
+            check (handleKey (juce::KeyPress (juce::KeyPress::tabKey, juce::ModifierKeys (shift | (JUCE_MAC ? alt : juce::ModifierKeys::commandModifier)), 0))
+                       && pianoRoll.shownTab() == EditorTab::envelopes, "and with Shift back to Envelopes");
+            check (handleKey (juce::KeyPress ('1', juce::ModifierKeys (alt | shift), 0)) && pianoRoll.shownTab() == EditorTab::content && laneMenu->getSelectedId() == 1
+                       && laneView->getBounds() == underNotes && showPiano, "Option+Shift+1 shows the Notes tab again, the velocity lane under the notes");
+        }
         laneMenu->setSelectedId (99, juce::sendNotificationSync);
         check (! laneView->isVisible(), "Hide lane gives the notes the full height");
         laneMenu->setSelectedId (1, juce::sendNotificationSync);
@@ -21428,7 +21605,7 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         expect ("Playback", { "Play", "Continue Playback", "Play from Insert Marker", "Move Insert Marker to Playhead", "Playback Options >", "-", "Record in Arrangement", "Arm Record in Arrangement",
                               "Record in Session", "-", "Metronome", "Metronome Only While Recording", "-", "Back to Arrangement" });
         const juce::String folds = std::any_of (state.tracks.begin(), state.tracks.end(), [] (const auto& t) { return ! t.folded; }) ? "Fold All Tracks" : "Unfold All Tracks";
-        juce::StringArray view { "Fullscreen", "Zoom >", "-", "Info", "Undo History", "-", "Toggle Arrangement/Session View", "-", "Clip View", "Device View", "Toggle Clip/Device View", "Full-Size Clip View", "Hide Detail View", "-",
+        juce::StringArray view { "Fullscreen", "Zoom >", "-", "Info", "Undo History", "-", "Toggle Arrangement/Session View", "-", "Clip View", "Device View", "Toggle Clip/Device View", "Full-Size Clip View", "Hide Detail View", "-", "Notes", "Envelopes", "MPE", "-",
                                  "Browser", "Groove Pool", "Full Height Browser", "-", "Search in Browser", "Show Similar Files", "-", "Plug-In Windows" };
        #if JUCE_MAC
         view.add ("Video Window");
@@ -22014,9 +22191,20 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         canvas.mouseDoubleClick (juce::MouseEvent (juce::Desktop::getInstance().getMainMouseSource(), clipPoint, juce::ModifierKeys(), 1.0f, 0, 0, 0, 0,
                                                    &canvas, &canvas, now, clipPoint, now, 2, false));
         auto* chooser = dynamic_cast<juce::ComboBox*> (findNamed (audioClipView, "Clip envelope"));
-        const int volumeItem = chooser != nullptr ? findItem (*chooser, "Modulation", "Track Volume") : 0;
-        check (audioClipView.isVisible() && chooser != nullptr && chooser->isVisible() && volumeItem > 0 && findItem (*chooser, "Automation", "Track Volume") == 0,
-               "the audio clip view offers Arrangement clips modulation envelopes only");
+        auto* envelopesButton = dynamic_cast<juce::Button*> (findNamed (audioClipView, "Envelopes tab"));
+        const auto viewEntry = [this] (int id)
+        {
+            const auto menu = getMenuForIndex (getMenuBarNames().indexOf ("View"), "View");
+            for (juce::PopupMenu::MenuItemIterator items (menu, true); items.next();) if (items.getItem().itemID == id) return items.getItem();
+            return juce::PopupMenu::Item();
+        };
+        check (audioClipView.isVisible() && chooser != nullptr && ! chooser->isVisible() && envelopesButton != nullptr && audioClipView.shownTab() == EditorTab::content
+                   && viewEntry (menuContentEditor).text == "Sample" && viewEntry (menuContentEditor).isTicked && ! viewEntry (menuExpressionEditor).isEnabled,
+               "an audio clip's editor shows its Sample tab at first, without envelopes, and has no MPE tab");
+        envelopesButton->onClick(); refresh();
+        const int volumeItem = findItem (*chooser, "Modulation", "Track Volume");
+        check (chooser->isVisible() && audioClipView.shownTab() == EditorTab::envelopes && envelopesButton->getToggleState() && volumeItem > 0 && findItem (*chooser, "Automation", "Track Volume") == 0,
+               "its Envelopes tab offers Arrangement clips modulation envelopes only");
         chooser->setSelectedId (volumeItem, juce::sendNotificationSync);
         const auto area = audioClipView.envelopeArea();
         const auto [first, length] = audioClipView.envelopeBeats();
@@ -22066,6 +22254,7 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         selectedClip = 0; openPianoRoll(); refresh(); pianoRoll.fit();
         auto* laneBox = dynamic_cast<juce::ComboBox*> (findNamed (pianoRoll, "Lane"));
         auto* laneComponent = findNamed (pianoRoll, "Controller lane");
+        setEditorTab (EditorTab::envelopes);
         const int panItem = laneBox != nullptr ? findItem (*laneBox, "Envelope", "Track Panning") : 0;
         check (laneBox != nullptr && laneComponent != nullptr && panItem > 0, "the piano roll's lane chooser offers clip envelopes");
         laneBox->setSelectedId (panItem, juce::sendNotificationSync);
@@ -22103,11 +22292,13 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         check (session.addMidiNote (currentMidiClip()->id, 60, 0, 4, .8f).wasOk(), "a note to bend"); refresh();
         const auto noteCentre = pianoRoll.shownNoteBounds (currentMidiClip()->notes[0]).getCentre();
         pianoRoll.mouseDown (press (pianoRoll, noteCentre, noteCentre, false, 1)); pianoRoll.mouseUp (press (pianoRoll, noteCentre, noteCentre, false, 1)); refresh();
-        const int bendItem = findItem (*laneBox, "Note Expression (MPE)", "Note Pitch Bend");
-        check (bendItem > 0, "the lane chooser offers note expression");
+        setEditorTab (EditorTab::expression);
+        const int bendItem = laneBox->indexOfItemId (90) >= 0 && laneBox->getItemText (laneBox->indexOfItemId (90)) == "Note Pitch Bend" ? 90 : 0;
+        check (bendItem > 0, "the MPE tab's lane chooser offers note expression");
         laneBox->setSelectedId (bendItem, juce::sendNotificationSync);
-        // The lane shares the grid's beat positions.
-        const juce::Point<float> bendPoint { pianoRoll.shownNoteBounds (currentMidiClip()->notes[0]).getCentreX(), plotBottom - (plotBottom - plotTop) * .75f };
+        // The lane shares the grid's beat positions; under the notes it is shorter than the Envelopes tab's.
+        const auto laneBottom = (float) laneComponent->getHeight() - 4;
+        const juce::Point<float> bendPoint { pianoRoll.shownNoteBounds (currentMidiClip()->notes[0]).getCentreX(), laneBottom - (laneBottom - plotTop) * .75f };
         laneComponent->mouseDown (press (*laneComponent, bendPoint, bendPoint, false, 1)); laneComponent->mouseUp (press (*laneComponent, bendPoint, bendPoint, false, 1)); refresh();
         const auto bendNote = currentMidiClip()->notes[0];
         check (bendNote.pitchBend.size() == 1 && std::abs (bendNote.pitchBend[0].value - 24) < 1 && bendNote.pitchBend[0].beat > 1 && bendNote.pitchBend[0].beat < 3,
@@ -22115,10 +22306,12 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         session.undo(); refresh();
         check (currentMidiClip()->notes[0].pitchBend.empty(), "undo removes the bend");
         session.undo(); refresh();
-        laneBox->setSelectedId (1, juce::sendNotificationSync); closeClipView();
+        setEditorTab (EditorTab::content); laneBox->setSelectedId (1, juce::sendNotificationSync); closeClipView();
         check (session.addMidiClipToSlot (currentTrack()->id, 0, 4).wasOk(), "a Session MIDI clip"); refresh();
         showSessionView(); selectLauncherSlot (lane, 0); openPianoRoll(); refresh();
-        check (findItem (*laneBox, "Envelope automation", "Track Volume") > 0, "a Session clip's lane offers automation envelopes too");
+        setEditorTab (EditorTab::envelopes);
+        check (findItem (*laneBox, "Envelope automation", "Track Volume") > 0, "a Session clip's Envelopes tab offers automation envelopes too");
+        setEditorTab (EditorTab::content);
         closeClipView(); showArrangementView(); refresh();
         check (session.removeTrack (lane).wasOk(), "remove the envelope track"); refresh();
         selectTrack (0); refresh();
@@ -22247,7 +22440,8 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
                 };
                 // The view spans the loop, so its end is the waveform's right edge: grab it just inside.
                 const auto from = audioClipView.beatX (2) - 2, to = from + (audioClipView.beatX (2) - audioClipView.beatX (1));
-                audioClipView.mouseDown (braceEvent (from, 9, from, false)); audioClipView.mouseDrag (braceEvent (to, 9, from, true)); audioClipView.mouseUp (braceEvent (to, 9, from, true));
+                const auto top = audioClipView.envelopeArea().getY() - 3; // The brace runs along the waveform's top, 6 pixels above the envelope's.
+                audioClipView.mouseDown (braceEvent (from, top, from, false)); audioClipView.mouseDrag (braceEvent (to, top, from, true)); audioClipView.mouseUp (braceEvent (to, top, from, true));
                 refresh(); audioClipView.sync();
                 const auto looped = state.tracks[(size_t) clickTrack].clips[0].loop;
                 check (looped.on && std::abs (looped.start) < 1e-6 && std::abs (looped.length - 3) < 1e-6, "dragging the brace's end lengthens the warped clip's loop to three beats");
