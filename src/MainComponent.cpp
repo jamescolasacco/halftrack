@@ -1685,19 +1685,22 @@ private:
         { report (session.moveTakeLane (draggedTakeLane, target)); refresh(); resized(); }
     }
     void endTakeLaneDrag() { if (std::exchange (draggedTakeLane, juce::String()).isNotEmpty()) { session.endEditGesture(); refresh(); } }
-    // Sounds dropped onto a take lane go into it one after another from the drop, or with Cmd (Ctrl elsewhere) one to a
-    // lane from that one down, new lanes made past the last, as one undo step.
+    // Sounds and MIDI files dropped onto a take lane go into it one after another from the drop, or with Cmd (Ctrl
+    // elsewhere) one to a lane from that one down, new lanes made past the last, as one undo step.
     void importToTakeLane (juce::String laneId, const juce::StringArray& files, double time, bool acrossLanes)
     {
         int track = -1, index = -1;
         if (takeLaneInfo (laneId, &track, &index) == nullptr) return;
         const auto trackId = state.tracks[(size_t) track].id;
-        session.beginEditGesture (files.size() > 1 ? "Import audio to take lanes" : "Import audio to take lane");
+        const bool midiOnly = std::all_of (files.begin(), files.end(), [] (const juce::String& path) { return juce::File (path).hasFileExtension ("mid;midi"); });
+        session.beginEditGesture (juce::String (midiOnly ? "Import MIDI to take lane" : "Import audio to take lane") + (files.size() > 1 ? "s" : ""));
         double at = time;
         bool first = true;
         for (const auto& path : files)
         {
-            if (! isAudio (juce::File (path))) continue;
+            const juce::File file (path);
+            const bool midi = file.hasFileExtension ("mid;midi");
+            if (! midi && ! isAudio (file)) continue;
             if (acrossLanes && ! std::exchange (first, false))
             {
                 ++index; at = time;
@@ -1705,7 +1708,8 @@ private:
                 if (index >= (int) state.tracks[(size_t) track].takeLanes.size()) break;
                 laneId = state.tracks[(size_t) track].takeLanes[(size_t) index].id;
             }
-            const auto result = session.importAudioToTakeLane (laneId, juce::File (path), at);
+            juce::String clipId;
+            const auto result = midi ? session.importMidiFileToTrack ({}, laneId, file, beatsAt (at), clipId) : session.importAudioToTakeLane (laneId, file, at);
             report (result); refresh();
             if (result.failed()) break;
             if (const auto* lane = takeLaneInfo (laneId))
@@ -17564,6 +17568,29 @@ private:
     {
         if (track >= 0 && track < (int) state.tracks.size() && state.tracks[(size_t) track].isReturn)
         { report (juce::Result::fail ("Return tracks receive audio from sends. Import clips into an audio track.")); return; }
+        // MIDI files dropped onto a MIDI track go onto it one after another from the drop, each a clip; elsewhere each
+        // comes in as Import File brings it, a track for each of its parts.
+        juce::StringArray midiFiles;
+        for (const auto& path : files) if (juce::File (path).hasFileExtension ("mid;midi")) midiFiles.add (path);
+        if (! midiFiles.isEmpty())
+        {
+            if (track >= 0 && track < (int) state.tracks.size() && state.tracks[(size_t) track].isMidi)
+            {
+                const auto trackId = state.tracks[(size_t) track].id;
+                session.beginEditGesture (midiFiles.size() > 1 ? "Import MIDI files" : "Import MIDI file");
+                auto beat = beatsAt (at);
+                for (const auto& path : midiFiles)
+                {
+                    juce::String clipId;
+                    const auto result = session.importMidiFileToTrack (trackId, {}, juce::File (path), beat, clipId);
+                    report (result); refresh();
+                    if (result.failed()) break;
+                    for (const auto& clip : state.tracks[(size_t) track].clips) if (clip.id == clipId) beat = clip.startBeat + clip.lengthBeats;
+                }
+                session.endEditGesture(); refresh();
+            }
+            else for (const auto& path : midiFiles) importMidiSelection (juce::File (path), beatsAt (at));
+        }
         std::vector<juce::File> audioFiles;
         for (const auto& path : files)
         {
@@ -19943,7 +19970,7 @@ private:
     bool isInterestedInFileDrag (const juce::StringArray& files) override
     {
         for (const auto& path : files)
-            if (isAudio (juce::File (path)) || juce::File (path).hasFileExtension ("halftrack") || (video::supported() && video::isMovie (juce::File (path)))) return true;
+            if (isAudio (juce::File (path)) || juce::File (path).hasFileExtension ("halftrack;mid;midi") || (video::supported() && video::isMovie (juce::File (path)))) return true;
         return droppedFolders (files);
     }
     // Folders dropped on the browser join Places, as the reference's sidebar takes them.
@@ -22419,6 +22446,53 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         check (handleKey (juce::KeyPress ('T', juce::ModifierKeys::shiftModifier | juce::ModifierKeys::altModifier, 0)) && state.tracks[(size_t) t].takeLanes.size() == 3,
                "Shift+Option+T inserts a take lane");
         check (session.removeTrack (t).wasOk(), "remove the take track"); refresh();
+    }
+    {
+        // A MIDI file dropped onto a MIDI track's take lane, or its main lane, becomes a clip there (the reference's
+        // manual, section 21.4).
+        showArrangementView(); refresh();
+        check (session.addMidiTrack ("Dropped MIDI").wasOk(), "add a MIDI track for dropped files"); refresh();
+        const int t = (int) state.tracks.size() - 1; const auto trackId = state.tracks[(size_t) t].id;
+        juce::String laneId;
+        check (session.insertTakeLane (trackId, laneId).wasOk(), "give it a take lane");
+        takeLanesShown.insert (trackId); refresh(); resized();
+        juce::TemporaryFile midiFile (".mid");
+        {
+            juce::MidiMessageSequence sequence;
+            for (const auto& [pitch, beat] : { std::pair { 60, 0.0 }, std::pair { 64, 1.0 } })
+            {
+                auto on = juce::MidiMessage::noteOn (1, pitch, (juce::uint8) 100); on.setTimeStamp (beat * 960); sequence.addEvent (on);
+                auto off = juce::MidiMessage::noteOff (1, pitch, (juce::uint8) 64); off.setTimeStamp ((beat + 1) * 960); sequence.addEvent (off);
+            }
+            sequence.updateMatchedPairs();
+            juce::MidiFile midi; midi.setTicksPerQuarterNote (960); midi.addTrack (sequence);
+            auto out = midiFile.getFile().createOutputStream();
+            check (out != nullptr && out->setPosition (0) && out->truncate().wasOk() && midi.writeTo (*out, 1), "write a MIDI file of two notes");
+        }
+        check (isInterestedInFileDrag ({ midiFile.getFile().getFullPathName() }), "the window takes a MIDI file dragged over it");
+        const auto laneOf = [&] (bool take) -> const Lane* { for (const auto& l : lanes) if (! l.group && l.index == t && l.automation < 0 && (l.take >= 0) == take) return &l; return nullptr; };
+        const auto dropOnto = [&] (const Lane& lane, double seconds)
+        {
+            viewport.setViewPosition (0, juce::jmax (0, lane.y - 10));
+            const auto at = getLocalPoint (&canvas, juce::Point<int> ((int) ((seconds - viewStart) * pixelsPerSecond), lane.y + lane.height / 2));
+            filesDropped ({ midiFile.getFile().getFullPathName() }, at.x, at.y); refresh();
+        };
+        check (laneOf (true) != nullptr && laneOf (false) != nullptr, "find the track's main lane and take lane");
+        dropOnto (*laneOf (true), 2);
+        const auto& take = state.tracks[(size_t) t].takeLanes[0];
+        check (take.clips.size() == 1 && take.clips[0].notes.size() == 2 && std::abs (take.clips[0].start - 2) < 1e-6 && state.tracks[(size_t) t].clips.empty()
+                   && session.undoSteps()[0] == "Import MIDI to take lane",
+               "a MIDI file dropped onto the take lane goes into it at the drop, the main lane unchanged, one undo step");
+        session.undo(); refresh();
+        check (state.tracks[(size_t) t].takeLanes[0].clips.empty(), "undo takes it back");
+        dropOnto (*laneOf (false), 1);
+        const auto& main = state.tracks[(size_t) t].clips;
+        check (main.size() == 1 && main[0].notes.size() == 2 && std::abs (main[0].start - 1) < 1e-6 && std::abs (main[0].lengthBeats - 2) < 1e-6 && session.undoSteps()[0] == "Import MIDI file",
+               "dropped onto the main lane it becomes a clip there, two beats long, one undo step");
+        session.undo(); refresh();
+        check (state.tracks[(size_t) t].clips.empty(), "undo takes it back");
+        takeLanesShown.erase (trackId);
+        check (session.removeTrack (t).wasOk(), "remove the MIDI drop track"); refresh();
     }
     {
         // Automation Mode, as in the reference: A shows envelopes over the tracks. Clicking the line adds

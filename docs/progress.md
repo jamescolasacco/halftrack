@@ -2920,7 +2920,7 @@ Engine, UI and root areas. As the reference's manual describes (chapter 13), Con
 
 ## Samples onto take lanes — 2026-10-25
 
-Engine and UI areas. As the reference's manual describes (section 21.4), sounds dropped onto a take lane from the Finder or the browser now go into it, several one after another, or with Cmd one to a lane, new lanes made as needed (`Session::importAudioToTakeLane`, one undo step) ([take lanes contract](research/take-lanes-contract.md#samples-onto-lanes-2026-10-25)). Checked in the take lanes and UI suites.
+Engine and UI areas. As the reference's manual describes (section 21.4), sounds dropped onto a take lane from the Finder or the browser now go into it, several one after another, or with Cmd one to a lane, new lanes made as needed (`Session::importAudioToTakeLane`, one undo step) ([take lanes contract](research/take-lanes-contract.md#samples-and-midi-files-onto-lanes-2026-10-25)). Checked in the take lanes and UI suites.
 
 ## Rhythm, Shape, Stacks and Time Warp — 2026-10-25
 
@@ -2943,4 +2943,8 @@ Engine and UI areas. A research agent read five small behaviours of the referenc
 - **Device activators.** Clicked within a selection of several devices, an activator switches the selection's span in one undo step (`Session::setPluginsEnabled`).
 - **Chain solo.** Chain solo follows Exclusive Solo, Cmd/Ctrl alone reversing it ([racks contract](research/racks-contract.md)).
 - **Left for later.** Reduced Latency When Monitoring.
+
+## MIDI files onto tracks and take lanes — 2026-10-25
+
+Engine and UI areas. As the reference's manual describes for take lanes (section 21.4), a MIDI file dropped onto a MIDI track's take lane now goes into it, several one after another or with Cmd one to a lane. Dropped onto a MIDI track's main lane it becomes a clip there; dropped elsewhere it imports as Import File does, where before drops of MIDI files were ignored. `Session::importMidiFileToTrack` puts every track of the file into one clip named for it, one undo step. The MIDI file reading shared with Import File moved into `readMidiFileParts` ([take lanes contract](research/take-lanes-contract.md#samples-and-midi-files-onto-lanes-2026-10-25)).
 

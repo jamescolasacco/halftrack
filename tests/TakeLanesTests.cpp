@@ -175,6 +175,48 @@ int runTakeLanesTests (const juce::File& artifacts)
             s.undo();
             check (track().takeLanes[0].clips.size() == laneClips, "undo takes it out");
         }
+        // A MIDI file put onto a MIDI track's take lane or main lane: its tracks together in one clip (section 21.4).
+        {
+            const auto midiFile = root.getChildFile ("Lane Notes.mid");
+            {
+                juce::MidiFile midi; midi.setTicksPerQuarterNote (960);
+                for (const auto& [channel, pitch] : { std::pair { 1, 60 }, std::pair { 2, 67 } })
+                {
+                    juce::MidiMessageSequence part;
+                    auto on = juce::MidiMessage::noteOn (channel, pitch, (juce::uint8) 100); on.setTimeStamp (960); part.addEvent (on);
+                    auto off = juce::MidiMessage::noteOff (channel, pitch, (juce::uint8) 50); off.setTimeStamp (3 * 960); part.addEvent (off);
+                    part.updateMatchedPairs(); midi.addTrack (part);
+                }
+                std::unique_ptr<juce::OutputStream> stream (midiFile.createOutputStream());
+                check (stream != nullptr && midi.writeTo (*stream, 1), "write a MIDI file of two tracks");
+            }
+            ok (s.addMidiTrack ("Lane MIDI"), "add a MIDI track");
+            const auto midiTrack = s.snapshot().tracks.back().id;
+            juce::String midiLane;
+            ok (s.insertTakeLane (midiTrack, midiLane), "with a take lane");
+            const auto midiTrackInfo = [&] { const auto snap = s.snapshot(); for (const auto& t : snap.tracks) if (t.id == midiTrack) return t; return Session::TrackInfo {}; };
+            juce::String clipId;
+            ok (s.importMidiFileToTrack ({}, midiLane, midiFile, 4, clipId), "put it into the MIDI track's take lane at beat 4");
+            const auto lane = midiTrackInfo().takeLanes[0];
+            std::vector<int> pitches;
+            if (! lane.clips.empty()) for (const auto& n : lane.clips[0].notes) pitches.push_back (n.pitch);
+            std::sort (pitches.begin(), pitches.end());
+            check (lane.clips.size() == 1 && lane.clips[0].id == clipId && near (lane.clips[0].startBeat, 4) && near (lane.clips[0].lengthBeats, 3)
+                       && pitches == std::vector<int> { 60, 67 } && lane.clips[0].name == "Lane Notes" && midiTrackInfo().clips.empty() && s.undoSteps()[0] == "Import MIDI file",
+                   "the lane holds one clip named for the file with both its tracks' notes, at beat 4 and three beats long, the main lane unchanged, one undo step");
+            s.undo();
+            check (midiTrackInfo().takeLanes[0].clips.empty(), "undo takes it out");
+            ok (s.importMidiFileToTrack (midiTrack, {}, midiFile, 2, clipId), "put it onto the MIDI track's main lane at beat 2");
+            check (midiTrackInfo().clips.size() == 1 && midiTrackInfo().clips[0].id == clipId && near (midiTrackInfo().clips[0].startBeat, 2) && midiTrackInfo().clips[0].notes.size() == 2,
+                   "the main lane holds it");
+            s.undo();
+            check (s.importMidiFileToTrack ({}, firstLane, midiFile, 0, clipId).failed() && s.importMidiFileToTrack ({}, "missing", midiFile, 0, clipId).failed()
+                       && s.importMidiFileToTrack (midiTrack, {}, root.getChildFile ("none.mid"), 0, clipId).failed(),
+                   "an audio track's lane, an unknown lane and a missing file are refused");
+            const auto tracksNow = s.snapshot().tracks;
+            const auto index = (int) (std::find_if (tracksNow.begin(), tracksNow.end(), [&] (const auto& t) { return t.id == midiTrack; }) - tracksNow.begin());
+            ok (s.removeTrack (index), "remove the MIDI track");
+        }
 
         // Reopening.
         ok (s.setTrackArmed (0, false), "disarm");

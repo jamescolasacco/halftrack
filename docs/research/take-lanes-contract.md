@@ -93,7 +93,7 @@ Halftrack:
 
 The take lanes suite moves Take 2 above Take 1 in one undo step, refuses an unknown lane, undoes the move, sets a lane 80 pixels high outside the undo history, refuses 10 pixels, reopens the project with the height and refuses one with a lane 5 pixels high. The UI suite moves Take 2 above Take 1 with Cmd+Up after a click on its header, drags Take 1's header below Take 2, each one undo step, and makes Take 1 30 pixels taller by its edge, a quarter taller with Option+= and a little shorter by Option-scrolling.
 
-## Samples onto lanes (2026-10-25)
+## Samples and MIDI files onto lanes (2026-10-25)
 
 The reference's manual (section 21.4, consulted 2026-10-25): samples and MIDI files can be dragged onto take lanes from the browser or the Finder, and with several samples Cmd (Ctrl elsewhere) inserts each into the next lane.
 
@@ -101,8 +101,8 @@ Halftrack:
 
 - `importAudioToTakeLane (laneId, file, start)` puts an audio file into a take lane at a time: copied into the project's media as an import is, made as an imported clip (default fades, the Clip Color setting), and leaving the main lane as it is. It is one undo step, refused for a MIDI track's lanes, an unknown lane or a missing file.
 - A sound dropped onto a take lane, from the Finder or from the browser, goes into it at the drop, on the grid. Several play one after another from there; with Cmd held, each goes into the next lane down, new lanes made past the last. One undo step takes them all back.
-- MIDI files dropped onto take lanes are not taken yet.
+- **MIDI files** (2026-10-25). `importMidiFileToTrack (trackId, laneId, file, startBeat, clipId)` puts a MIDI file into a MIDI track's take lane, or onto its main lane without a lane: every track and channel of the file together in one clip named for the file, lasting to its last event, one undo step. It is refused for an audio track, an unknown lane or an unreadable file. A MIDI file dropped onto a MIDI track's take lane goes into it at the drop as a sound does, several one after another, or one to a lane with Cmd. Dropped onto a MIDI track's main lane it becomes a clip there; dropped anywhere else it comes in as Import File brings it, a track for each of its parts. Which of the file's tracks the reference keeps apart in a drop is not known.
 
-The take lanes suite puts a half-second sample into Take 1 at 3 s from the project's media, the main lane unchanged, refuses an unknown lane and a missing file, and undoes it. The UI suite drops a sound onto Take 2 in one undo step, and two sounds with Cmd, one going to Take 2 and one to a new lane, which one undo takes back with the lane.
+The take lanes suite puts a half-second sample into Take 1 at 3 s from the project's media, the main lane unchanged, refuses an unknown lane and a missing file, and undoes it. It puts a MIDI file of two tracks into a MIDI track's take lane at beat 4: one clip named for the file, with both tracks' notes, three beats long, the main lane unchanged, undone in one step. It then puts the file onto the main lane, and refuses an audio track's lane, an unknown lane and a missing file. The UI suite drops a sound onto Take 2 in one undo step, and two sounds with Cmd, one going to Take 2 and one to a new lane, which one undo takes back with the lane. It drops a MIDI file onto a MIDI track's take lane and its main lane, each one undo step.
 
-Missing: moving a split between MIDI comp parts, MIDI files dropped onto lanes, and MIDI comping through the UI.
+Missing: moving a split between MIDI comp parts, MIDI comping through the UI, and MIDI files dropped into Session slots.

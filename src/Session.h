@@ -844,6 +844,10 @@ public:
     // Imports a MIDI file's tracks from a beat; with `timeSignatures` its time signatures become
     // markers from there, as the reference offers when importing. One undo step.
     juce::Result importMidiFile (const juce::File&, double startBeat, std::vector<juce::String>& clipIds, bool timeSignatures = false);
+    // A MIDI file dropped onto a MIDI track, as the reference takes MIDI files dragged onto tracks and take lanes (its
+    // manual, section 21.4): every track of the file in one clip named for it, from a beat, on the track's main lane,
+    // or in the take lane `laneId` names. One undo step; `clipId` names the new clip.
+    juce::Result importMidiFileToTrack (const juce::String& trackId, const juce::String& laneId, const juce::File&, double startBeat, juce::String& clipId);
     // A MIDI file's valid time signatures, in its beats.
     static std::vector<TimeSignatureChange> midiFileTimeSignatures (const juce::File&);
     juce::Result exportMidiClip (const juce::String& clipId, const juce::File&);

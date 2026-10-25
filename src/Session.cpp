@@ -8982,16 +8982,20 @@ std::vector<Session::TimeSignatureChange> Session::midiFileTimeSignatures (const
     for (const auto& m : meters) { if (! unique.empty() && std::abs (unique.back().beat - m.beat) < 1.0 / 960) unique.back() = m; else unique.push_back (m); }
     return unique;
 }
-Result Session::importMidiFile (const File& file, double startBeat, std::vector<String>& importedIds, bool timeSignatures)
+namespace
 {
-    if (impl->exporting || impl->edit->getTransport().isRecording()) return Result::fail ("Stop recording or finish exporting before importing MIDI.");
+// A MIDI file's performance, a part for each channel of each of its tracks, each holding its notes, controllers and
+// SysEx in beats from the file's start, and lasting to its last event. Imports placing it from a beat check it fits
+// the timeline from there.
+struct MidiFilePart { String name; double length = 0; std::unique_ptr<te::MidiList> list; };
+Result readMidiFileParts (const File& file, double startBeat, te::Edit& edit, std::vector<MidiFilePart>& parts)
+{
     if (! std::isfinite (startBeat) || startBeat < 0 || startBeat >= 1000000) return Result::fail ("Choose a valid MIDI insertion position.");
     if (! file.existsAsFile() || file.getSize() > 16*1024*1024) return Result::fail ("Choose a readable MIDI file no larger than 16 MiB.");
     juce::FileInputStream input (file); juce::MidiFile midi; int type = -1;
     if (! input.openedOk() || ! midi.readFrom (input,false,&type) || (type != 0 && type != 1) || midi.getTimeFormat() <= 0)
         return Result::fail ("Import requires a type 0 or type 1 MIDI file with ticks-per-quarter timing.");
-    struct Part { String name; double length; std::unique_ptr<te::MidiList> list; };
-    std::vector<Part> parts; int eventCount = 0;
+    int eventCount = 0;
     const auto ppq = (double)midi.getTimeFormat();
     for (int trackIndex = 0; trackIndex < midi.getNumTracks(); ++trackIndex)
     {
@@ -9038,7 +9042,7 @@ Result Session::importMidiFile (const File& file, double startBeat, std::vector<
         if (channels.empty() && sysex) channels.insert (1);
         if (parts.size()+channels.size() > 64) return Result::fail ("The MIDI file would create more than 64 tracks.");
         if (name.isEmpty()) name = file.getFileNameWithoutExtension().substring (0,96)+" / "+String(trackIndex+1);
-        if (impl->edit->tempoSequence.toTime (te::BeatPosition::fromBeats(startBeat+length)).inSeconds() > te::Edit::maximumLength)
+        if (edit.tempoSequence.toTime (te::BeatPosition::fromBeats(startBeat+length)).inSeconds() > te::Edit::maximumLength)
             return Result::fail ("The imported MIDI clips would exceed the 48-hour timeline.");
         sequence.updateMatchedPairs();
         for (int channel : channels)
@@ -9064,6 +9068,14 @@ Result Session::importMidiFile (const File& file, double startBeat, std::vector<
         }
     }
     if (parts.empty()) return Result::fail ("The file contains no supported MIDI performance events.");
+    return Result::ok();
+}
+}
+Result Session::importMidiFile (const File& file, double startBeat, std::vector<String>& importedIds, bool timeSignatures)
+{
+    if (impl->exporting || impl->edit->getTransport().isRecording()) return Result::fail ("Stop recording or finish exporting before importing MIDI.");
+    std::vector<MidiFilePart> parts;
+    if (auto read = readMidiFileParts (file, startBeat, *impl->edit, parts); read.failed()) return read;
     beginEditGesture ("Import MIDI file"); std::vector<String> created;
     for (const auto& part : parts)
     {
@@ -9085,6 +9097,48 @@ Result Session::importMidiFile (const File& file, double startBeat, std::vector<
             if (result.failed()) { endEditGesture(); undo(); return result; }
         }
     endEditGesture();impl->changed();importedIds=std::move(created);return Result::ok();
+}
+Result Session::importMidiFileToTrack (const String& trackId, const String& laneId, const File& file, double startBeat, String& clipId)
+{
+    if (impl->exporting || impl->anyRecording()) return Result::fail ("Stop recording or finish exporting before importing MIDI.");
+    te::AudioTrack* track = nullptr;
+    juce::ValueTree lane;
+    if (laneId.isNotEmpty())
+    {
+        auto [owner, found] = impl->takeLane (laneId);
+        if (owner == nullptr) return Result::fail ("Take lane not found.");
+        track = owner; lane = found;
+    }
+    else
+    {
+        track = impl->track (trackId);
+        if (auto frozen = impl->unfrozen (track); frozen.failed()) return frozen;
+    }
+    if (track == nullptr || isReturn (*track) || ! static_cast<bool> (track->state.getProperty (midiTrackProperty))) return Result::fail ("Put MIDI files on a MIDI track.");
+    std::vector<MidiFilePart> parts;
+    if (auto read = readMidiFileParts (file, startBeat, *impl->edit, parts); read.failed()) return read;
+    // The file's tracks and channels together, on its first part's channel.
+    te::MidiList merged;
+    merged.setMidiChannel (parts.front().list->getMidiChannel());
+    double length = 0;
+    for (const auto& part : parts) { merged.addFrom (*part.list, nullptr); length = std::max (length, part.length); }
+    impl->transaction ("Import MIDI file");
+    const auto time = impl->edit->tempoSequence.toTime (te::BeatRange { te::BeatPosition::fromBeats (startBeat), te::BeatPosition::fromBeats (startBeat + length) });
+    auto clip = track->insertMIDIClip (file.getFileNameWithoutExtension().substring (0, 96), time, nullptr);
+    if (! clip) return Result::fail ("Could not create the MIDI clip.");
+    clip->setSyncType (te::Clip::syncBarsBeats);
+    impl->colourNewClip (*clip);
+    auto* undo = &impl->edit->getUndoManager();
+    clip->getSequence().copyFrom (merged, undo);
+    clipId = clip->itemID.toString();
+    // Into a take lane, made on the track as an import is and then moved there, leaving the main lane as it was.
+    if (lane.isValid())
+    {
+        const auto state = clip->state.createCopy();
+        clip->removeFromParent();
+        lane.appendChild (state, undo);
+    }
+    impl->changed(); return Result::ok();
 }
 Result Session::exportMidiClip (const String& id, const File& destination)
 {
