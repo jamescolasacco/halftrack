@@ -51,6 +51,7 @@ What moved with the rebuild:
 - Audio & MIDI Setup and Plug-Ins became tabs of the one Preferences window, as the reference's (see the [preferences contract](preferences-contract.md)).
 - Undo History is a window of its own beside the main one, Halftrack's, listing the steps by Edit's step names after a Start row; the steps Redo would do again are dimmed. Escape closes it, as the reference's Esc closes its windows and dialogs (manual section 42.1). The reference's window was not read.
 - Save a Copy writes the project to another file, with its media collected beside it, and keeps the open project's file, media and unsaved changes. Every Halftrack save collects its media, where the reference collects only with Collect All and Save (see [open questions](../open-questions.md)).
+- Collect All and Save (2026-10-25) follows Save a Copy, as the reference's File menu has it (its Save Self-Contained command, `seco`, read in the menu table above): since every Halftrack save collects the project's media, it saves the project, or asks where for a project never saved. It is always enabled.
 - Import Audio and Import MIDI File became Import File, which takes both. Cmd+F searches the browser, and Follow moved to Option+Shift+F; Cmd+I inserts a scene in the Session; Shift+Cmd+R exports; Option+Cmd+O is the overview's, not Open's.
 
 ## Keys outside the menus
@@ -71,7 +72,7 @@ From the reference's list of keys ([Live keyboard shortcuts](https://www.ableton
 
 ## Left out
 
-Navigate's Focus Transport, Help, Tuning and Clip Panels, its previous and next focus commands and Tab navigation options; Close Window, Collect All and Save, Apply Algorithm, the note span command, Automation Fitting, Emoji & Symbols, the Convert to MIDI commands, Return Play Position, Link, Second Window, Lessons, File Manager, Expand Clip Detail View, the clip view layouts and editors, Tuning Pool, Mod Matrix, Max for Live, Accessibility, Reduced Latency When Monitoring, Snap Automation to Grid, Step Input, Chase MIDI Notes, the controller and retune options, Legacy HiQ, and Help's items. Halftrack has none of these commands yet.
+Navigate's Focus Transport, Help, Tuning and Clip Panels, its previous and next focus commands and Tab navigation options; Close Window, Apply Algorithm, the note span command, Automation Fitting, Emoji & Symbols, the Convert to MIDI commands, Return Play Position, Link, Second Window, Lessons, File Manager, Expand Clip Detail View, the clip view layouts and editors, Tuning Pool, Mod Matrix, Max for Live, Accessibility, Reduced Latency When Monitoring, Step Input, Chase MIDI Notes, the controller and retune options, Legacy HiQ, and Help's items. Halftrack has none of these commands yet.
 
 ## Evidence in Halftrack
 

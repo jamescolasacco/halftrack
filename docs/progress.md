@@ -2857,3 +2857,7 @@ UI area. The computer MIDI keyboard and Scale Highlighting now come back as they
 ## Start marker keys — 2026-10-25
 
 UI area. A clicked start marker in the note editor now takes Left and Right, a grid step each, and with Option or Shift a looped clip's loop moves with it, as the reference's manual and key list describe ([clip loops contract](research/clip-loops-contract.md)). Checked in the UI suite.
+
+## Collect All and Save — 2026-10-25
+
+UI area. The File menu has the reference's Collect All and Save after Save a Copy; as every Halftrack save collects the project's media, it saves ([menu contract](research/main-menu-contract.md)). The menu contract's list of missing commands no longer names Snap Automation to Grid, which Options already has. Checked in the UI suite.

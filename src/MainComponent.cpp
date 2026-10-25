@@ -15228,6 +15228,7 @@ private:
                     menuArrangementInOut, menuArrangementVolume, menuArrangementTrackOptions, menuArrangementReturns, menuArrangementOverdub,
                     menuAddFolder, menuRemoveUnavailableProjects, menuClearRecentProjects, menuShowBackups, menuRevealBackups, menuSnapAutomation, menuSaveTemplate,
                     menuQuantizeSettings, menuStartWithTap, menuDelayCompensation, menuFullHeightBrowser, menuFullSizeClip, menuContentEditor, menuEnvelopeEditor, menuExpressionEditor,
+                    menuCollectAndSave,
                     menuLastCommand, // New commands go before this.
                     menuSlice = 400, // Plus Session::SliceBy.
                     menuTimeFormat = 410, // Plus Session::TimeFormat.
@@ -15994,6 +15995,8 @@ private:
             popup.addSeparator();
             // Save while there is something to save, as the reference's: changes, or a project never saved.
             add (3, "Save Project", state.dirty || state.projectFile == juce::File()); add (4, "Save Project As..."); add (menuSaveCopy, "Save a Copy...");
+            // Collect All and Save, after the reference's: every Halftrack save collects the project's media, so this saves.
+            add (menuCollectAndSave, "Collect All and Save");
             add (menuSaveTemplate, "Save as Template...", userLibrary != juce::File()); add (11, "Save as Default Set", userLibrary != juce::File());
             popup.addSeparator();
             add (6, "Export Audio..."); add (10, "Export MIDI Clip...", currentMidiClip() != nullptr);
@@ -16269,6 +16272,7 @@ private:
             case 3: saveProject (false); break;
             case 4: saveProject (true); break;
             case menuSaveCopy: saveCopyDialog(); return;
+            case menuCollectAndSave: saveProject (false); return;
             case menuAddFolder: addFolderToBrowser(); return;
             case menuSaveTemplate: saveTemplateDialog(); return;
             case menuDelayCompensation: session.setDelayCompensation (! session.delayCompensation()); refresh(); return;
@@ -23471,6 +23475,9 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         const auto renamed = root.getChildFile ("Three.halftrack");
         check (session.saveProject (renamed).wasOk(), "save the project under a new name"); refresh();
         check (session.preferences().recentProjects[0] == renamed.getFullPathName(), "a project saved under a new name joins the list at the top");
+        check (session.addAudioTrack ("Changed").wasOk(), "change the project"); refresh();
+        menuItemSelected (menuCollectAndSave, 0); refresh();
+        check (state.projectFile == renamed && ! state.dirty, "File > Collect All and Save saves it, its media collected as every save collects them");
         for (int i = 0; i < 12; ++i) rememberRecentProject (root.getChildFile ("Many " + juce::String (i) + ".halftrack"));
         check (session.preferences().recentProjects.size() == maximumRecentProjects && session.preferences().recentProjects[0].endsWith ("Many 11.halftrack"),
                "the list keeps the latest ten");
@@ -23552,7 +23559,7 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
        #endif
         const auto expect = [&] (const juce::String& name, const juce::StringArray& wanted)
         { const auto shown = texts (name); check (shown == wanted, name + " holds the reference's items in its order (" + shown.joinIntoString (" | ") + ")"); };
-        expect ("File", { "New Project", "Open Project...", "Open Recent Project >", "-", "Install Pack...", "Add Folder to Browser...", "-", "Locate Missing Media...", "Backups >", "-", "Save Project", "Save Project As...", "Save a Copy...", "Save as Template...", "Save as Default Set",
+        expect ("File", { "New Project", "Open Project...", "Open Recent Project >", "-", "Install Pack...", "Add Folder to Browser...", "-", "Locate Missing Media...", "Backups >", "-", "Save Project", "Save Project As...", "Save a Copy...", "Collect All and Save", "Save as Template...", "Save as Default Set",
                           "-", "Export Audio...", "Export MIDI Clip..." });
         const juce::String loop = state.looping ? "Deactivate Loop" : "Activate Loop";
         const auto history = [this]
