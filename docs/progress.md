@@ -2833,3 +2833,7 @@ Engine and UI areas. Notes can now form probability groups, as the reference's m
 ## Key track height and H — 2026-10-25
 
 UI area. The note editor's key tracks now have a height of their own, as the reference's manual describes: dragging across the keys sets it, Option-scrolling changes it, a double-click on the keys fits the selected notes into the height, and H fits the clip's notes (Fit Content to View Height) ([note drawing contract](research/note-drawing-contract.md#keys)). Checked in the UI suite.
+
+## Apply Current MIDI Tool Settings — 2026-10-25
+
+UI area. As the reference's key list has it, Cmd+Return in the note editor applies the MIDI tool last opened or applied again with its last settings ([MIDI tools contract](research/midi-tools-contract.md#apply-current-midi-tool-settings-2026-10-25)). Checked in the UI suite.

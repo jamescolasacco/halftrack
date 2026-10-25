@@ -9060,6 +9060,9 @@ private:
                 if ((code == 'E' || code == 'e') && ! key.getModifiers().isShiftDown() && ! key.getModifiers().isAltDown()) { noteCommand (NoteCommand::split); return true; }
                 if ((code == 'G' || code == 'g') && ! key.getModifiers().isAltDown())
                 { if (key.getModifiers().isShiftDown()) ungroupSelectedNotes(); else groupSelectedNotes (std::nullopt); return true; }
+                // Cmd+Return applies the current MIDI tool's settings, as the reference's key does (its manual, section 42.12).
+                if (code == juce::KeyPress::returnKey && ! key.getModifiers().isShiftDown() && ! key.getModifiers().isAltDown())
+                { if (currentTool) applyNoteTool (toolSettingsFor (*currentTool)); return true; }
                 // Cmd+U quantizes with the Quantize tool's settings, and Shift+Cmd+U opens them, as the reference's keys do.
                 if (code == 'U' || code == 'u')
                 { if (key.getModifiers().isShiftDown()) openNoteTool (Session::NoteTool::quantize); else quantizeNotes(); return true; }
@@ -10383,6 +10386,8 @@ private:
         };
         // Each tool's settings as last chosen, or its defaults.
         std::map<int, Session::NoteToolSettings> toolSettings;
+        // The tool last opened or applied, whose settings Cmd+Return applies again (Apply Current MIDI Tool Settings).
+        std::optional<Session::NoteTool> currentTool;
         Session::NoteToolSettings toolSettingsFor (Session::NoteTool tool) const
         {
             const auto found = toolSettings.find ((int) tool);
@@ -10392,6 +10397,7 @@ private:
         void quantizeNotes() { applyNoteTool (toolSettingsFor (Session::NoteTool::quantize)); }
         void openNoteTool (Session::NoteTool tool)
         {
+            currentTool = tool;
             auto initial = toolSettingsFor (tool);
             // Fit to Scale starts from the clip's own scale.
             if (const auto* clip = owner.currentMidiClip(); clip && tool == Session::NoteTool::fitToScale && clip->scale.enabled)
@@ -10401,6 +10407,7 @@ private:
         void applyNoteTool (const Session::NoteToolSettings& settings)
         {
             const auto* clip = owner.currentMidiClip(); if (! clip) return;
+            currentTool = settings.tool;
             endGesture();
             const bool generator = notetools::generates (settings.tool);
             juce::StringArray ids;
@@ -19583,6 +19590,13 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         check (chopped.size() == before.size() + 1 && pianoRoll.hasSelectedNote(), "Apply chops the note into two and selects the parts");
         pianoRoll.keyPressed (undo);
         check (currentMidiClip()->notes.size() == before.size(), "one undo restores the note");
+        // Cmd+Return applies the current tool's settings again, as the reference's key does (its manual, section 42.12).
+        pianoRoll.keyPressed (juce::KeyPress ('a', juce::ModifierKeys (juce::ModifierKeys::commandModifier), 0));
+        const auto all = currentMidiClip()->notes.size();
+        check (pianoRoll.keyPressed (juce::KeyPress (juce::KeyPress::returnKey, juce::ModifierKeys (juce::ModifierKeys::commandModifier), 0))
+                   && pianoRoll.selectedNoteCount() == (int) all * 2 && currentMidiClip()->notes.size() == all * 2, "Cmd/Ctrl+Return chops the selected notes again with the tool's settings");
+        pianoRoll.keyPressed (undo);
+        check (currentMidiClip()->notes.size() == before.size(), "one undo restores them");
         if (auto* window = panel->findParentComponentOfClass<juce::DialogWindow>()) delete window;
     }
     {

@@ -59,3 +59,9 @@ The reference's manual: the Quantize tool moves or stretches the selected notes 
 - **Keys and menus.** Edit > Quantize and Cmd+U apply the tool with its last settings, Current Grid, Start on, End off and Amount 100% at first. Edit > Quantize Settings... and Shift+Cmd+U open its window. Every note tool now keeps its last settings while Halftrack runs.
 
 `tests/MidiToolTests.cpp` checks the defaults; starts to the current and 1/4 grids; Amount at 50%; ends alone, one end going past its start; starts and ends together; triplet and combined grids; Current Grid following the editor's; and a quantized note keeping its identity and chance. In a Session it checks that the notes move on the given grid as one Quantize step keeping their IDs and chance, that undo restores them and that a zero grid is refused. The UI suite opens the window from Shift+Cmd+U and from Edit > Quantize Settings, sets Amount to 50% and finds Cmd+U moving the notes halfway.
+
+## Apply Current MIDI Tool Settings (2026-10-25)
+
+The reference's key list gives Cmd+Return for Apply Current MIDI Tool Settings in the MIDI Note Editor ([Live keyboard shortcuts](https://www.ableton.com/en/live-manual/12/live-keyboard-shortcuts/), section 42.12, consulted 2026-10-25). In Halftrack the current tool is the one last opened or applied, Quantize included; Cmd+Return applies it again with its last settings to the selected notes (a transformation to every note without a selection), one undo step, as its window's Apply does. Before any tool is used it does nothing.
+
+The UI suite applies Chop with two parts from its window, then selects every note and finds Cmd+Return chopping them again, each note into two, undone in one step.
