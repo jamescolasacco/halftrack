@@ -1409,6 +1409,7 @@ public:
         {
             if (headerFocus) { deleteSelectedHeaders(); return true; }
             if (! showPiano && ! showSession && selectedFadeClip.isNotEmpty()) { deleteSelectedFade(); return true; }
+            if (editArea() == EditArea::scenes) { runAreaCommand (22); return true; } // After a click on a scene, its scenes.
             if (showPiano) pianoRoll.deleteSelectedNote(); else if (showSession) clearSelectedSlot();
             else if (timeSelection.active()) selectionCommand (78); else deleteSelectedClip();
             return true;
@@ -5811,7 +5812,7 @@ private:
             for (int scene = 0; scene < (int) owner.state.scenes.size(); ++scene)
             {
                 const auto cell = juce::Rectangle<int> (sceneX, sceneY (scene), sceneWidth, rowHeight).reduced (1, 0).withTrimmedBottom (1);
-                const bool selected = owner.state.scenes[(size_t) scene].id == owner.selectedSceneId;
+                const bool selected = owner.isSceneSelected (owner.state.scenes[(size_t) scene].id);
                 const auto& info = owner.state.scenes[(size_t) scene];
                 // A scene with a colour of its own fills its cell with it, lighter while selected.
                 const bool coloured = ! info.colour.isTransparent();
@@ -6005,7 +6006,15 @@ private:
             const auto scene = sceneAt (event.getPosition());
             if (scene >= 0)
             {
-                owner.selectedSceneId = owner.state.scenes[(size_t) scene].id;
+                // A plain click on one of several selected scenes keeps them for a drag, and on release without
+                // one selects it alone.
+                collapseScenesOnUp = false;
+                if (event.mods.isPopupMenu() || event.mods.isShiftDown() || event.mods.isCommandDown() || event.mods.isCtrlDown()
+                    || ! owner.isSceneSelected (owner.state.scenes[(size_t) scene].id))
+                {
+                    if (! event.mods.isPopupMenu() || ! owner.isSceneSelected (owner.state.scenes[(size_t) scene].id)) owner.clickScene (scene, event.mods);
+                }
+                else { owner.focusSelectedScene (owner.state.scenes[(size_t) scene].id); collapseScenesOnUp = true; }
                 if (const auto [tempoField, signatureField] = sceneFields (scene); owner.state.sceneSettingsShown && ! event.mods.isPopupMenu()
                     && (tempoField.contains (event.getPosition()) || signatureField.contains (event.getPosition())))
                 {
@@ -6212,8 +6221,10 @@ private:
                 if (std::exchange (sceneDragging, false) && drop >= 0)
                 {
                     const auto from = owner.launcherIndices ({}, scene).second;
-                    if (from >= 0 && drop != from && drop != from + 1) { owner.report (owner.session.moveScene (scene, drop > from ? drop - 1 : drop)); owner.refresh(); }
+                    if (owner.sceneSelection().size() > 1) owner.dropSelectedScenes (drop);
+                    else if (from >= 0 && drop != from && drop != from + 1) { owner.report (owner.session.moveScene (scene, drop > from ? drop - 1 : drop)); owner.refresh(); }
                 }
+                else if (std::exchange (collapseScenesOnUp, false)) { owner.extraSelectedScenes.clear(); owner.extraScenesFor.clear(); }
                 repaint(); return;
             }
             if (headerPressed.isNotEmpty())
@@ -6366,9 +6377,7 @@ private:
             }
             if (mods.isCommandDown() && ! mods.isShiftDown() && ! mods.isAltDown() && (code == juce::KeyPress::upKey || code == juce::KeyPress::downKey))
             {
-                const auto scene = owner.selectedSceneIndex(), to = scene + (code == juce::KeyPress::upKey ? -1 : 1);
-                if (scene >= 0 && juce::isPositiveAndBelow (to, (int) owner.state.scenes.size()))
-                { owner.report (owner.session.moveScene (owner.selectedSceneId, to)); owner.refresh(); scrollSelectionIntoView(); }
+                if (owner.selectedSceneIndex() >= 0) { owner.nudgeSelectedScenes (code == juce::KeyPress::upKey ? -1 : 1); scrollSelectionIntoView(); }
                 return true;
             }
             if (code == juce::KeyPress::returnKey)
@@ -6391,6 +6400,7 @@ private:
             if (const auto mods = key.getModifiers(); mods.isCommandDown() && ! mods.isShiftDown() && ! mods.isAltDown() && (code == 'C' || code == 'X' || code == 'V' || code == 'D'))
             {
                 if (code == 'D' && owner.headerFocus) { owner.duplicateSelectedHeaders(); return true; } // After a click on a title.
+                if (code == 'D' && owner.editArea() == EditArea::scenes) { owner.runAreaCommand (menuDuplicate); return true; } // Or on a scene.
                 if (owner.headerFocus) { owner.trackClipboardCommand ((char) code); return true; }
                 return owner.slotCommand (code == 'X' ? 84 : code == 'C' ? 85 : code == 'V' ? 86 : 87);
             }
@@ -6438,7 +6448,7 @@ private:
         int dropLineX = -1;
         // A scene pressed in the scene column, which a drag moves, and the line it would land on.
         juce::String scenePressed;
-        bool sceneDragging = false;
+        bool sceneDragging = false, collapseScenesOnUp = false;
         int sceneDrop = -1;
         void releasePressed (std::pair<int, int>& cell)
         {
@@ -12352,6 +12362,87 @@ private:
         return { track, scene };
     }
     int selectedSceneIndex() const { return launcherIndices ({}, selectedSceneId).second; }
+    // Scenes selected beside the selected one, as the reference's Shift-click (adjacent) and Cmd-click (Ctrl
+    // elsewhere, nonadjacent) select several (its manual, section 7.2). They hold while the scene they were
+    // chosen with stays selected; selecting another scene any other way drops them.
+    std::set<juce::String> extraSelectedScenes;
+    juce::String extraScenesFor;
+    juce::StringArray sceneSelection() const
+    {
+        juce::StringArray ids;
+        for (const auto& scene : state.scenes)
+            if (scene.id == selectedSceneId || (extraScenesFor == selectedSceneId && extraSelectedScenes.count (scene.id) != 0)) ids.add (scene.id);
+        return ids;
+    }
+    bool isSceneSelected (const juce::String& id) const { return sceneSelection().contains (id); }
+    // Makes a selected scene the one the selection follows, keeping the others selected.
+    void focusSelectedScene (const juce::String& id)
+    {
+        const auto chosen = sceneSelection();
+        selectedSceneId = id; extraScenesFor = id; extraSelectedScenes.clear();
+        for (const auto& other : chosen) if (other != id) extraSelectedScenes.insert (other);
+    }
+    void clickScene (int scene, juce::ModifierKeys mods)
+    {
+        if (! juce::isPositiveAndBelow (scene, (int) state.scenes.size())) return;
+        const auto id = state.scenes[(size_t) scene].id;
+        auto chosen = sceneSelection();
+       #if JUCE_MAC
+        const bool toggle = mods.isCommandDown();
+       #else
+        const bool toggle = mods.isCtrlDown();
+       #endif
+        const auto from = selectedSceneIndex();
+        if (mods.isShiftDown() && from >= 0)
+            for (int s = std::min (from, scene); s <= std::max (from, scene); ++s) chosen.addIfNotAlreadyThere (state.scenes[(size_t) s].id);
+        else if (toggle && from >= 0)
+        {
+            if (chosen.contains (id) && chosen.size() > 1) chosen.removeString (id); else chosen.addIfNotAlreadyThere (id);
+        }
+        else chosen = { id };
+        selectedSceneId = chosen.contains (id) ? id : chosen[0];
+        extraSelectedScenes.clear();
+        for (const auto& other : chosen) if (other != selectedSceneId) extraSelectedScenes.insert (other);
+        extraScenesFor = selectedSceneId;
+    }
+    // The selected scenes, rearranged to a new order of every scene's id, one move at a time, as one undo step.
+    void reorderScenes (const juce::StringArray& order)
+    {
+        session.beginEditGesture ("Move scenes");
+        for (int place = 0; place < order.size(); ++place)
+        {
+            const auto now = session.snapshot();
+            if (place < (int) now.scenes.size() && now.scenes[(size_t) place].id != order[place]) report (session.moveScene (order[place], place));
+        }
+        session.endEditGesture(); refresh();
+    }
+    // Cmd with Up or Down moves the selected scenes a row, keeping the gaps between them, as the reference's
+    // Ctrl with the arrows moves nonadjacent scenes without collapsing them.
+    void nudgeSelectedScenes (int step)
+    {
+        const auto chosen = sceneSelection();
+        juce::StringArray order;
+        for (const auto& scene : state.scenes) order.add (scene.id);
+        if (chosen.isEmpty() || (step < 0 && order.indexOf (chosen[0]) == 0) || (step > 0 && order.indexOf (chosen[chosen.size() - 1]) == order.size() - 1)) return;
+        if (step < 0) { for (const auto& id : chosen) { const auto at = order.indexOf (id); order.move (at, at - 1); } }
+        else for (int k = chosen.size(); --k >= 0;) { const auto at = order.indexOf (chosen[k]); order.move (at, at + 1); }
+        reorderScenes (order);
+    }
+    // A drag of the selected scenes collapses them together where they are dropped, in their order.
+    void dropSelectedScenes (int drop)
+    {
+        const auto chosen = sceneSelection();
+        juce::StringArray rest;
+        int before = 0;
+        for (int s = 0; s < (int) state.scenes.size(); ++s)
+        {
+            const auto& id = state.scenes[(size_t) s].id;
+            if (chosen.contains (id)) { if (s < drop) ++before; } else rest.add (id);
+        }
+        juce::StringArray order (rest);
+        for (int k = 0; k < chosen.size(); ++k) order.insert (drop - before + k, chosen[k]);
+        reorderScenes (order);
+    }
     const Session::SlotInfo* selectedSlot() const
     {
         const auto* track = currentTrack(); const int scene = selectedSceneIndex();
@@ -12365,7 +12456,7 @@ private:
     void selectLauncherSlot (int track, int scene)
     {
         if (track < 0 || track >= (int) state.tracks.size() || scene < 0 || scene >= (int) state.scenes.size()) return;
-        selectTrack (track); selectedClip = -1;
+        selectTrack (track); selectedClip = -1; extraSelectedScenes.clear();
         if (currentTrack()->isReturn) { selectedLauncherClipId.clear(); return; }
         selectedSceneId = state.scenes[(size_t) scene].id;
         const auto* slot = selectedSlot(); selectedLauncherClipId = slot != nullptr && slot->hasClip ? slot->clip.id : juce::String();
@@ -14156,6 +14247,40 @@ private:
     {
         const auto index = launcherIndices ({}, sceneId).second;
         if (index < 0) return;
+        // A command on a scene of several selected acts on them all, as the reference's scene commands do.
+        const auto chosen = isSceneSelected (sceneId) ? sceneSelection() : juce::StringArray { sceneId };
+        if (chosen.size() > 1 && (result == sceneDelete || result == sceneDuplicate))
+        {
+            session.beginEditGesture (result == sceneDelete ? "Delete scenes" : "Duplicate scenes");
+            const auto first = launcherIndices ({}, chosen[0]).second;
+            juce::StringArray copies;
+            for (int k = chosen.size(); --k >= 0;)
+            {
+                if (result == sceneDelete) { if (const auto at = launcherIndices ({}, chosen[k]).second; at >= 0 && session.snapshot().scenes.size() > 1) report (session.removeScene (at)); }
+                else
+                {
+                    juce::String created;
+                    report (session.duplicateScene (chosen[k], created));
+                    if (created.isNotEmpty()) copies.insert (0, created);
+                }
+            }
+            session.endEditGesture();
+            // The scene that comes into the first deleted one's place is selected.
+            if (result == sceneDelete) { extraSelectedScenes.clear(); selectedSceneId = session.snapshot().scenes.empty() ? juce::String() : session.snapshot().scenes[(size_t) juce::jlimit (0, (int) session.snapshot().scenes.size() - 1, first)].id; }
+            else if (! copies.isEmpty())
+            {
+                // The copies are selected in their scenes' places, the one made from the scene clicked leading.
+                const auto lead = copies[juce::jmax (0, chosen.indexOf (sceneId))];
+                selectedSceneId = lead; extraScenesFor = lead; extraSelectedScenes.clear();
+                for (const auto& copy : copies) if (copy != lead) extraSelectedScenes.insert (copy);
+            }
+            refresh(); return;
+        }
+        if (chosen.size() > 1 && (result == sceneColour || result == sceneResetColour))
+        {
+            report (session.setSceneColours (chosen, result == sceneColour && colour >= 0 ? std::optional<juce::Colour> (paletteColour (colour)) : std::nullopt));
+            refresh(); return;
+        }
         selectedSceneId = sceneId;
         switch (result)
         {
@@ -21512,6 +21637,7 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         check (session.setPreferences (prefsBefore).wasOk(), "restore the preferences");
         report (session.stopAllLauncherClips()); session.stop(); session.undo(); refresh(); // The key mapping.
         check (state.keyMappings.empty() || std::none_of (state.keyMappings.begin(), state.keyMappings.end(), [&] (const auto& m) { return m.target == "scene:" + third; }), "one undo removes the key mapping");
+        clickedArea = Area::session; // The grid again, for the slot keys below.
     }
     std::vector<bool> overrides; for (const auto& track : state.tracks) overrides.push_back (track.launcherActive);
     showArrangementView(); refresh();
@@ -23028,6 +23154,77 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
             check (state.scenes[1].id == sceneId && selectedSceneIndex() == 1, "Cmd+Down moves the selected scene down");
             key (juce::KeyPress::upKey, juce::ModifierKeys::commandModifier);
             check (state.scenes[0].id == sceneId, "Cmd+Up moves it back");
+            {
+                // Several scenes, as the reference's Shift-click (adjacent) and Cmd/Ctrl-click (nonadjacent) select them.
+               #if JUCE_MAC
+                const juce::ModifierKeys adds (juce::ModifierKeys::commandModifier);
+               #else
+                const juce::ModifierKeys adds (juce::ModifierKeys::ctrlModifier);
+               #endif
+                const auto idAt = [&] (int s) { return state.scenes[(size_t) s].id; };
+                const auto a = idAt (1), b = idAt (2), c = idAt (3);
+                const auto stepsBefore = session.undoSteps().size();
+                clickScene (1, {}); clickScene (3, juce::ModifierKeys (juce::ModifierKeys::shiftModifier));
+                check (sceneSelection() == juce::StringArray { a, b, c }, "Shift-clicking a scene selects the scenes between");
+                clickScene (2, adds);
+                check (sceneSelection() == juce::StringArray { a, c }, "and Cmd/Ctrl-clicking one in them leaves it out");
+                key (juce::KeyPress::downKey, juce::ModifierKeys::commandModifier); refresh();
+                check (idAt (2) == a && idAt (4) == c && idAt (1) == b && session.undoSteps().size() == stepsBefore + 1,
+                       "Cmd+Down moves both a row down, keeping the gap between them, one undo step, as the reference's key does");
+                session.undo(); refresh();
+                check (idAt (1) == a && idAt (2) == b && idAt (3) == c, "undo puts them back");
+                clickScene (1, {}); clickScene (3, adds);
+                chooseSceneItem (sceneColour, a, 3);
+                check (state.scenes[1].colour == state.scenes[3].colour && ! state.scenes[1].colour.isTransparent() && state.scenes[2].colour != state.scenes[1].colour,
+                       "a colour chosen from the menu of one of them colours both");
+                session.undo(); refresh();
+                clickScene (1, {}); clickScene (3, adds);
+                dropSelectedScenes (0);
+                check (idAt (0) == a && idAt (1) == c && idAt (3) == b && session.undoSteps().size() == stepsBefore + 1,
+                       "dropped at the top, the two collapse together there in their order, as the reference's drag does");
+                session.undo(); refresh();
+                const auto scenes = state.scenes.size();
+                clickScene (1, {}); clickScene (3, adds);
+                chooseSceneItem (sceneDelete, a);
+                check (state.scenes.size() == scenes - 2 && launcherIndices ({}, a).second < 0 && launcherIndices ({}, c).second < 0, "Delete from the menu of one deletes both");
+                session.undo(); refresh();
+                check (state.scenes.size() == scenes && idAt (1) == a && idAt (3) == c, "one undo brings both back");
+                clickedArea = Area::scenes; clickScene (1, {}); clickScene (3, adds);
+                key ('D', juce::ModifierKeys::commandModifier); refresh();
+                check (state.scenes.size() == scenes + 2 && idAt (1) == a && idAt (3) == b && idAt (4) == c && session.undoSteps().size() == stepsBefore + 1
+                           && sceneSelection() == juce::StringArray { idAt (2), idAt (5) } && selectedSceneId == idAt (5),
+                       "after a click on them, Cmd+D duplicates both scenes, each copy below its own, and selects the copies, one undo step");
+                session.undo(); refresh();
+                clickScene (1, {}); clickScene (3, adds);
+                check (handleKey (juce::KeyPress (juce::KeyPress::deleteKey)) && state.scenes.size() == scenes - 2 && session.undoSteps().size() == stepsBefore + 1
+                           && sceneSelection() == juce::StringArray { b },
+                       "and Delete deletes both, not the selected slot's clip, selecting the scene come into the first one's place");
+                session.undo(); refresh();
+                clickedArea = Area::session;
+                clickScene (1, {});
+                check (sceneSelection() == juce::StringArray { a }, "a plain click selects one scene again");
+                // The same through the launcher's own clicks, and a drag of them that collapses them where it ends.
+                const auto now = juce::Time::getCurrentTime();
+                const auto scenePoint = [&] (int s) { return juce::Point<float> ((float) launcher.masterX() + 30.0f, (float) launcher.sceneFields (s).first.getCentreY()); };
+                const auto sceneEvent = [&] (juce::Point<float> p, juce::Point<float> down, int mods, bool dragged)
+                { return juce::MouseEvent (juce::Desktop::getInstance().getMainMouseSource(), p, juce::ModifierKeys (juce::ModifierKeys::leftButtonModifier | mods), 1.0f, 0, 0, 0, 0, &launcher, &launcher, now, down, now, 1, dragged); };
+                const auto clickAt = [&] (int s, int mods) { const auto p = scenePoint (s); launcher.mouseDown (sceneEvent (p, p, mods, false)); launcher.mouseUp (sceneEvent (p, p, mods, false)); refresh(); };
+                clickAt (1, 0); clickAt (3, adds.getRawFlags());
+                check (sceneSelection() == juce::StringArray { a, c }, "Cmd/Ctrl-clicking a second scene in the launcher selects both");
+                clickAt (3, 0);
+                check (sceneSelection() == juce::StringArray { c }, "and a plain click on one of them, without a drag, selects it alone");
+                clickAt (1, 0); clickAt (3, adds.getRawFlags());
+                const auto from = scenePoint (3), to = scenePoint (0) - juce::Point<float> (0, (float) launcher.sceneFields (0).first.getHeight() / 2.0f + 2.0f);
+                launcher.mouseDown (sceneEvent (from, from, 0, false));
+                launcher.mouseDrag (sceneEvent ((from + to) / 2, from, 0, true)); launcher.mouseDrag (sceneEvent (to, from, 0, true));
+                launcher.mouseUp (sceneEvent (to, from, 0, true)); refresh();
+                check (idAt (0) == a && idAt (1) == c && idAt (3) == b && session.undoSteps().size() == stepsBefore + 1,
+                       "dragging one of them to the top collapses both there, one undo step");
+                session.undo(); refresh();
+                check (sceneSelection() == juce::StringArray { a, c } && selectedSceneId == c, "the two are still selected");
+                selectLauncherSlot (firstTrack, 3);
+                check (sceneSelection() == juce::StringArray { c }, "selecting a slot, even in the scene the others were chosen with, drops them");
+            }
             check (session.importAudioToSlot (audioFixture, firstTrack, 0).wasOk(), "a clip to launch"); refresh();
             selectLauncherSlot (firstTrack, 0); refresh();
             check (session.launchSlot (firstTrack, 0).wasOk(), "launch it"); pumpSyntheticTestDevice (session, 48000 / 256); refresh();

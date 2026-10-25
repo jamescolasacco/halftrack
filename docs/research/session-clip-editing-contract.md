@@ -96,7 +96,28 @@ The reference's manual: clips move "from the Session View to the Arrangement and
 
 The UI suite drags a slot clip over the Arrangement selector and onto a lane, and an Arrangement clip over the Session selector and onto a slot, checking the view switches, the aims, the copies and their notes, the originals kept, and the undo steps.
 
+## Several scenes (2026-10-25)
+
+The reference's manual ([Session View](https://www.ableton.com/en/live-manual/12/session-view/), section 7.2, consulted 2026-10-25):
+
+- Shift-click selects adjacent scenes and Ctrl-click nonadjacent ones.
+- Scenes reorder by drag-and-drop. A selection of nonadjacent scenes collapses together when dropped.
+- Ctrl with the up or down arrow keys moves nonadjacent scenes without collapsing them.
+
+The manual does not say what Duplicate or Delete do to several scenes.
+
+Halftrack:
+
+- **Selecting.** Shift-click adds the scenes from the selected scene to the clicked one. Cmd-click (Ctrl elsewhere) adds a scene, or leaves out one already selected. A plain click on one of them keeps them for a drag and, released without one, selects that scene alone. They stay selected while the scene they were chosen with stays selected; a click on a slot, the arrow keys or any other selection drops them.
+- **Moving.** Dragging one of them drops them all together, in their order, where the drag ends. Cmd+Up and Cmd+Down (Ctrl elsewhere) move them a row, keeping the gaps between them; nothing moves when one is already at the top or bottom.
+- **Commands.** Delete and Duplicate act on all of them, from the menu of one of them, from the Edit menu, or by Delete and Cmd/Ctrl+D after a click on a scene. Each copy goes below the scene it copies, and the copies are then selected. A colour chosen from the menu colours them all.
+
+Each is one undo step. After a click on a scene, Delete and Cmd/Ctrl+D act on the scenes even when only one is selected; before, they acted on the selected slot.
+
+The UI suite Shift-clicks and Cmd/Ctrl-clicks scenes, directly and through the launcher's own mouse handlers. It moves two nonadjacent scenes with Cmd+Down keeping their gap, drops them at the top by a drag, colours both, and deletes and duplicates both from the menu and the keys. It checks each undo step and that a slot click drops the other scenes.
+
 ## Not yet covered
 
 - Pasting a time selection (several tracks' clips) into the Session, which the reference lays out top to bottom, and dragging several clips or slots between the views.
 - Dragging a clip onto a group column or a scene's launch button.
+- Shift with the arrow keys extending a scene selection, launching several selected scenes, and Cut, Copy and Paste of scenes (the reference's manual, section 7.4.3, lists them among the Edit commands that apply to scenes). After a click on a scene, Cmd/Ctrl+C, X and V still act on the selected slot.

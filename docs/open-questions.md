@@ -919,3 +919,5 @@ A clip's bar and body ([contract](research/arrangement-selection-contract.md#a-c
 - **Shift-click from a selected clip.** The selection runs from the clip's farther edge to the click, from its start when both edges are as far.
 
 Take lane source highlights ([contract](research/take-lanes-contract.md#source-highlights-and-drawing-comps-2026-10-25)). Defaults where the manual is silent: the unused shade is the clip's colour at a quarter of its saturation, a quarter darker; a highlight's edge takes a drag within 4 pixels, nearest the pointer first; a split moves only between audio parts, each kept at least 10 ms long.
+
+Several scenes ([contract](research/session-clip-editing-contract.md#several-scenes-2026-10-25)). Defaults where the manual is silent: Duplicate puts each copy below the scene it copies, rather than the copies together after the last, and selects the copies; Delete selects the scene that comes into the first deleted one's place; a plain click on a selected scene's launch button launches that scene alone and keeps the others selected.
