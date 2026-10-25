@@ -717,6 +717,125 @@ void allocationTests (const juce::File& root)
     plugin->baseClassDeinitialise();
 }
 }
+// Rack presets: a rack saved whole loads onto another track with new identities, its macro mappings
+// following them, and plays exactly as the original did; its automation stays out of the preset;
+// damaged rack presets are refused; Hot-Swap puts one in a device's place or fills a rack of its kind.
+void presetTests (const juce::File& root)
+{
+    const int frames = 48000;
+    std::vector<float> left, right;
+    for (int n = 0; n < frames; ++n) { left.push_back ((float) sourceLeft (n)); right.push_back ((float) sourceRight (n)); }
+    const auto sourceFile = root.getChildFile ("preset-source.wav"); writeWav (sourceFile, left, right);
+    const auto out = root.getChildFile ("rack-preset.wav");
+    Session s (false);
+    ok (s.importAudio (sourceFile, 0), "import the generated source on the first track");
+    ok (s.importAudio (sourceFile, 1), "and on the second");
+    ok (s.setTrackMute (1, true), "mute the second track");
+    ok (s.addNativeEffect (0, Kind::audioEffectRack), "insert an Audio Effect Rack");
+    const auto rack = s.snapshot().tracks[0].plugins[0].id;
+    const auto a = addChain (s, rack, "Wide"), b = addChain (s, rack, "Quiet");
+    const auto eq = gainStage (s, b, -6);
+    editChain (s, rack, a, [] (Session::RackChainSettings& c) { c.pan = -.5f; c.volumeDb = -3; });
+    const auto outputDb = effectParameterIndex (Kind::equalizer, "outputDb");
+    ok (s.setRackMacroMapping (rack, { 2, eq, outputDb, -12, 0 }), "map macro 3 to the EQ's output, -12 to 0 dB");
+    auto macros = device (s, rack).effect; macros.values[2] = 32; ok (s.setNativeEffectSettings (rack, macros), "turn macro 3 to 32");
+    ok (s.setRackMacroName (rack, 2, "Level"), "name macro 3");
+    const auto original = render (s, out);
+    check (peak (original, 2000, frames - 2000) > .05, "the rack plays");
+    const auto file = root.getChildFile ("Presets").getChildFile ("Audio Effect Rack").getChildFile (juce::String ("Split") + Session::presetExtension);
+    ok (s.saveDevicePreset (rack, file, "Split"), "save the rack as a preset");
+    check (s.saveDevicePreset (rack, file, "Split").failed(), "an existing rack preset is not replaced unless asked");
+    Session::DevicePreset read;
+    ok (Session::readDevicePreset (file, read), "read it back");
+    check (read.rack && ! read.plugin && ! read.utility && read.effect.kind == Kind::audioEffectRack && read.name == "Split", "it is a rack preset of its kind");
+
+    // Loaded onto the muted track, which then plays alone.
+    juce::String loaded;
+    ok (s.loadDevicePreset (1, file, loaded), "load it onto the second track");
+    check (s.undoDescription() == "Load Split", "as one step (" + s.undoDescription() + ")");
+    s.undo(); check (s.snapshot().tracks[1].plugins.empty(), "one undo takes it away");
+    s.redo(); check (s.snapshot().tracks[1].plugins.size() == 1 && s.snapshot().tracks[1].plugins[0].id == loaded, "and redo brings it back");
+    ok (s.setTrackMute (1, false), "unmute the second track"); ok (s.setTrackMute (0, true), "mute the first");
+    const auto copy = device (s, loaded), source = device (s, rack);
+    check (copy.isRack && copy.effect.kind == Kind::audioEffectRack && copy.id != rack && copy.chains.size() == 2, "the second track holds a new rack with both chains");
+    check (copy.chains[0].settings == source.chains[0].settings && copy.chains[1].settings == source.chains[1].settings
+               && copy.chains[0].id != a && copy.chains[1].id != b && copy.chains[1].devices.size() == 1 && copy.chains[1].devices[0].id != eq
+               && copy.chains[1].devices[0].effect == source.chains[1].devices[0].effect,
+           "its chains keep their settings and devices, with identities of their own");
+    check (copy.mappings.size() == 1 && copy.mappings[0].targetId == copy.chains[1].devices[0].id && copy.mappings[0].macro == 2
+               && copy.mappings[0].parameter == outputDb && copy.mappings[0].minimum == -12 && copy.mappings[0].maximum == 0,
+           "its macro mapping follows the copied EQ, not the original");
+    check (copy.effect.values == source.effect.values && copy.macroNames[2] == "Level" && copy.visibleMacros == source.visibleMacros,
+           "its macros, their names and how many show are the preset's");
+    check (difference (render (s, out), original) == 0, "it plays exactly as the original did (0.0 difference)");
+    const auto level = racks::macroValue (device (s, rack), eq, outputDb);
+    auto turned = copy.effect; turned.values[2] = 127; ok (s.setNativeEffectSettings (loaded, turned), "turn the copy's macro 3 up");
+    const auto copiedLevel = racks::macroValue (device (s, loaded), copy.chains[1].devices[0].id, outputDb);
+    check (level && copiedLevel && std::abs (*copiedLevel) < 1e-4 && racks::macroValue (device (s, rack), eq, outputDb) == level,
+           "the copy's macro moves its own EQ, leaving the original's");
+    ok (s.setTrackMute (0, false), "unmute the first track"); ok (s.setTrackMute (1, true), "mute the second");
+
+    // Automation stays out of a preset, and a rack filled in place keeps its own.
+    Session::AutomationLane lane; lane.points = { { 0, 10 }, { 4, 100 } };
+    ok (s.setDeviceAutomation (rack, 0, lane), "automate the rack's first macro");
+    const auto automated = root.getChildFile (juce::String ("Automated") + Session::presetExtension);
+    ok (s.saveDevicePreset (rack, automated, "Automated"), "save the automated rack");
+    Session::DevicePreset withoutAutomation;
+    ok (Session::readDevicePreset (automated, withoutAutomation), "read it");
+    const auto curves = [] (auto&& self, const juce::ValueTree& tree) -> int
+    { int n = tree.hasType (te::IDs::AUTOMATIONCURVE) ? 1 : 0; for (const auto& child : tree) n += self (self, child); return n; };
+    check (curves (curves, withoutAutomation.rackState) == 0, "the preset holds no automation");
+    Session::HotSwapSource split; split.preset = file;
+    juce::String swapped;
+    ok (s.hotSwapDevice (s.snapshot().tracks[0].id, rack, split, swapped), "hot-swap Split onto the rack it came from");
+    check (swapped == rack && device (s, rack).chains.size() == 2 && device (s, rack).chains[0].id != a && ! device (s, rack).automation.empty(),
+           "a rack preset of the rack's own kind fills it in place, with new chains, keeping its own automation");
+    check (s.undoDescription().containsIgnoreCase ("hot-swap"), "as one Hot-swap step (" + s.undoDescription() + ")");
+    s.undo();
+    check (device (s, rack).chains[0].id == a && device (s, rack).chains[1].devices[0].id == eq, "one undo brings back its own chains");
+
+    // Hot-swapped for another audio effect, the rack takes that device's place.
+    ok (s.addNativeEffect (0, Kind::saturator), "add a Saturator after the rack");
+    const auto saturator = s.snapshot().tracks[0].plugins.back().id;
+    ok (s.hotSwapDevice (s.snapshot().tracks[0].id, saturator, split, swapped), "hot-swap Split onto the Saturator");
+    const auto devices = s.snapshot().tracks[0].plugins;
+    check (devices.size() == 2 && devices[0].id == rack && devices[1].id == swapped && devices[1].isRack && devices[1].chains.size() == 2,
+           "the preset's rack takes the Saturator's place");
+    s.undo();
+    check (s.snapshot().tracks[0].plugins.back().id == saturator, "one undo brings the Saturator back");
+
+    // A rack preset of an instrument needs a MIDI track; damaged rack presets are refused.
+    ok (s.addMidiTrack ("Keys"), "add a MIDI track");
+    const int keys = (int) s.snapshot().tracks.size() - 1;
+    ok (s.setTrackInstrument (s.snapshot().tracks[(size_t) keys].id, Kind::instrumentRack), "play it from an Instrument Rack");
+    const auto instrumentRack = s.snapshot().tracks[(size_t) keys].instrument.id;
+    addChain (s, instrumentRack, "Voice");
+    const auto keysFile = root.getChildFile (juce::String ("Keys") + Session::presetExtension);
+    ok (s.saveDevicePreset (instrumentRack, keysFile, "Keys"), "save the Instrument Rack");
+    check (s.loadDevicePreset (1, keysFile, loaded).failed(), "an Instrument Rack preset needs a MIDI track");
+    ok (s.addMidiTrack ("More"), "add another MIDI track");
+    const int more = (int) s.snapshot().tracks.size() - 1;
+    ok (s.loadDevicePreset (more, keysFile, loaded), "load it onto that track");
+    check (s.snapshot().tracks[(size_t) more].instrument.id == loaded && s.snapshot().tracks[(size_t) more].instrument.isRack
+               && s.snapshot().tracks[(size_t) more].instrument.chains.size() == 1, "it becomes the track's instrument");
+    const auto corrupt = [&] (const juce::String& name, const std::function<void (juce::XmlElement&)>& change)
+    {
+        auto xml = juce::XmlDocument::parse (file); check (xml != nullptr, "parse the rack preset");
+        change (*xml);
+        const auto broken = root.getChildFile (name + Session::presetExtension); check (xml->writeTo (broken), "write " + name);
+        Session::DevicePreset unused;
+        const auto devicesBefore = s.snapshot().tracks[1].plugins.size();
+        check (Session::readDevicePreset (broken, unused).failed() && s.loadDevicePreset (1, broken, loaded).failed() && s.snapshot().tracks[1].plugins.size() == devicesBefore,
+               name + " is refused, changing nothing");
+    };
+    const auto rackElement = [] (juce::XmlElement& x) { return x.getChildByName ("RACK")->getFirstChildElement(); };
+    const auto chain = [&] (juce::XmlElement& x, int n) { int k = 0; for (auto* c : rackElement (x)->getChildIterator()) if (c->hasTagName ("RACKCHAIN") && k++ == n) return c; return (juce::XmlElement*) nullptr; };
+    corrupt ("Kind mismatch", [] (juce::XmlElement& x) { x.setAttribute ("kind", (int) Kind::instrumentRack); });
+    corrupt ("No rack", [] (juce::XmlElement& x) { x.removeChildElement (x.getChildByName ("RACK"), true); });
+    corrupt ("Loud chain", [&] (juce::XmlElement& x) { chain (x, 0)->setAttribute ("volumeDb", 99.0); });
+    corrupt ("Repeated chain", [&] (juce::XmlElement& x) { chain (x, 1)->setAttribute ("id", chain (x, 0)->getStringAttribute ("id")); });
+    corrupt ("Instrument inside", [&] (juce::XmlElement& x) { chain (x, 1)->getFirstChildElement()->setAttribute ("effectKind", (int) Kind::polySynth); });
+}
 int runRackTests (const juce::File& artifacts)
 {
     try
@@ -727,6 +846,7 @@ int runRackTests (const juce::File& artifacts)
         instrumentRackTests (root);
         drumRackTests (root);
         macroTests (root);
+        presetTests (root);
         allocationTests (root);
         std::cout << "Racks passed: " << root.getFullPathName() << std::endl; return 0;
     }

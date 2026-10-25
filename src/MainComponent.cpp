@@ -11164,7 +11164,7 @@ private:
             // Grouping into racks, and presets, act on tracks' chains.
             menu.addItem (5, "Group", native && trackChain); if (rack) menu.addItem (6, "Ungroup", chains <= 1 && trackChain);
             const auto& info = (*devices)[(size_t) p];
-            menu.addItem (7, "Save Preset...", trackChain && owner.userLibrary != juce::File() && ((info.isNativeEffect && ! rack) || info.isUtility || (! info.isNativeEffect && ! info.missing)));
+            menu.addItem (7, "Save Preset...", trackChain && owner.userLibrary != juce::File() && (info.isNativeEffect || info.isUtility || ! info.missing));
             menu.addItem (4, "Delete");
             const auto chainId = owner.deviceChainId(), id = pluginId;
             juce::Component::SafePointer<Impl> safe (&owner);
@@ -18084,8 +18084,13 @@ private:
                 if (matches (device) || ! presets.empty()) rows.push_back ({ device, false, kind });
                 rows.insert (rows.end(), presets.begin(), presets.end());
             }
+            // The racks, with their presets.
             for (const auto kind : { Session::EffectKind::instrumentRack, Session::EffectKind::drumRack })
-                if (matches (effectName (kind))) rows.push_back ({ effectName (kind), false, (int) kind });
+            {
+                std::vector<DeviceRow> presets; addPresetRows (presets, effectName (kind), (int) kind, matches);
+                if (matches (effectName (kind)) || ! presets.empty()) rows.push_back ({ effectName (kind), false, (int) kind });
+                rows.insert (rows.end(), presets.begin(), presets.end());
+            }
         }
         else
         {
@@ -18113,8 +18118,13 @@ private:
                     if (matches ("Utility") || ! presets.empty()) groupRows.push_back ({ "Utility", false, -3 });
                     groupRows.insert (groupRows.end(), presets.begin(), presets.end());
                 }
-                if (group == "MIDI Effects" && matches (effectName (Session::EffectKind::midiEffectRack))) groupRows.push_back ({ effectName (Session::EffectKind::midiEffectRack), false, (int) Session::EffectKind::midiEffectRack });
-                if (group == "Racks" && matches (effectName (Session::EffectKind::audioEffectRack))) groupRows.push_back ({ effectName (Session::EffectKind::audioEffectRack), false, (int) Session::EffectKind::audioEffectRack });
+                for (const auto& [rackGroup, kind] : { std::pair { juce::String ("MIDI Effects"), Session::EffectKind::midiEffectRack }, std::pair { juce::String ("Racks"), Session::EffectKind::audioEffectRack } })
+                {
+                    if (group != rackGroup) continue;
+                    std::vector<DeviceRow> presets; addPresetRows (presets, effectName (kind), (int) kind, matches);
+                    if (matches (effectName (kind)) || ! presets.empty()) groupRows.push_back ({ effectName (kind), false, (int) kind });
+                    groupRows.insert (groupRows.end(), presets.begin(), presets.end());
+                }
                 if (groupRows.empty()) continue;
                 if (! midi) rows.push_back ({ group, true, -1 });
                 rows.insert (rows.end(), groupRows.begin(), groupRows.end());
@@ -27269,6 +27279,24 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
             browserList.selectRow (row - 1);
             check (collections.contains (saturatorKey, 0) && collections.contains (saturatorKey, 4) && browserListKey (juce::KeyPress ('0'))
                        && ! collections.contains (saturatorKey, 0) && ! collections.contains (saturatorKey, 4), "0 takes the selected item out of every collection");
+        }
+        {
+            // A rack's preset is listed under its rack, and loads it whole.
+            check (session.addNativeEffect (selectedTrack, Session::EffectKind::audioEffectRack).wasOk(), "add an Audio Effect Rack"); refresh();
+            const auto rackId = currentTrack()->plugins.back().id;
+            juce::String chainId;
+            check (session.addRackChain (rackId, "Body", chainId).wasOk(), "give it a chain"); refresh();
+            const auto rackPreset = presetFolder ("Audio Effect Rack").getChildFile (juce::String ("Bodied") + Session::presetExtension);
+            check (session.saveDevicePreset (rackId, rackPreset, "Bodied").wasOk(), "save it as a preset");
+            setBrowserCategory (BrowserCategory::audioEffects);
+            int rackRow = -1; for (int i = 0; i < (int) deviceItems.size(); ++i) if (deviceItems[(size_t) i].preset == rackPreset) rackRow = i;
+            check (rackRow > 0 && deviceItems[(size_t) rackRow - 1].label == "Audio Effect Rack" && deviceItems[(size_t) rackRow].label == "Bodied",
+                   "the browser lists the rack preset under the Audio Effect Rack");
+            const auto devicesBefore = currentTrack()->plugins.size();
+            activateBrowserRow (rackRow); refresh();
+            check (currentTrack()->plugins.size() == devicesBefore + 1 && currentTrack()->plugins.back().isRack && currentTrack()->plugins.back().chains.size() == 1
+                       && currentTrack()->plugins.back().chains[0].settings.name == "Body" && currentTrack()->plugins.back().id != rackId,
+                   "choosing it adds a new rack holding the preset's chain");
         }
         {
             // Plug-in presets in the user library are listed under their plug-in.

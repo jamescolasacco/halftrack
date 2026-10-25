@@ -2805,3 +2805,7 @@ UI area. As the reference's manual has it, Shift-click on track headers now sele
 ## Sliding MIDI and warped clips — 2026-10-25
 
 UI area. As the reference's manual describes, Shift+Option dragged in a MIDI or warped audio clip's body now slides its contents in beats, the start marker and loop moving against the drag while the clip stays put, by the grid unless Cmd is held too; before, only unwarped audio slid, and a MIDI clip selected time instead ([contract](research/arrangement-selection-contract.md#a-clips-bar-and-body-2026-10-25)). Checked in the UI suite.
+
+## Rack presets — 2026-10-25
+
+Engine and UI areas. Racks now save as presets from their device menu, as the reference's do: the preset keeps the rack whole, its chains, devices, nested racks, macro mappings and macros, without automation, checked on reading as a project's racks are. Loading one adds a rack of its kind with the preset's contents under new identities, its mappings following them, in one undo step, and the copy renders with 0.0 difference from the rack saved. Hot-Swap takes rack presets too, and the browser lists them under their racks ([presets contract](research/presets-contract.md#rack-presets-2026-10-25)). Checked by the racks and UI suites.

@@ -1798,18 +1798,21 @@ public:
     // transport runs, as the editor's Preview plays notes. stopNotePreviews ends every one started.
     juce::Result previewNote (const juce::String& trackId, int pitch, float velocity, bool on);
     void stopNotePreviews();
-    // Device presets: a native device's or Utility's settings, or a plug-in's identity and state, in
-    // a .halftrackpreset file. Racks and sample choices are not included. Saving refuses to replace
-    // a file unless asked to.
+    // Device presets: a native device's or Utility's settings, a plug-in's identity and state, or a
+    // rack whole, in a .halftrackpreset file. A plain device's sample choices are not included; a rack
+    // keeps its devices' samples by their paths. Saving refuses to replace a file unless asked to.
     static constexpr const char* presetExtension = ".halftrackpreset";
     struct DevicePreset
     {
         juce::String name;
-        bool utility = false, plugin = false;
-        EffectSettings effect;     // For native devices.
+        bool utility = false, plugin = false, rack = false;
+        EffectSettings effect;     // For native devices; a rack's kind.
         UtilitySettings settings;  // For the Utility.
         juce::PluginDescription description; // For plug-ins, with the state they save.
         juce::MemoryBlock state;
+        // For racks: the rack device's tree, with its chains, devices, macro mappings and settings but
+        // no automation, validated as a project's racks are.
+        juce::ValueTree rackState;
     };
     static juce::Result readDevicePreset (const juce::File&, DevicePreset&);
     juce::Result saveDevicePreset (const juce::String& pluginId, const juce::File&, const juce::String& name, bool overwrite = false);

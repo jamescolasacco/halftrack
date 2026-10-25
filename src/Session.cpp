@@ -4562,6 +4562,51 @@ struct Session::Impl
         instrumentArrived (track);
         changed(); return Result::ok();
     }
+    // Device automation is not part of a preset.
+    static void stripAutomation (juce::ValueTree& tree)
+    {
+        for (int i = tree.getNumChildren(); --i >= 0;)
+        {
+            if (tree.getChild (i).hasType (te::IDs::AUTOMATIONCURVE)) tree.removeChild (i, nullptr);
+            else { auto child = tree.getChild (i); stripAutomation (child); }
+        }
+    }
+    // Gives a rack a rack preset's chains, returns, macro mappings and settings, in place of its own,
+    // keeping its identity and its own controls' automation. The preset's chains and devices take new
+    // identities, and its mappings follow them, those to the rack itself included.
+    Result fillRack (const String& rackId, const juce::ValueTree& preset, const String& name)
+    {
+        te::Track* owner = nullptr;
+        auto* rack = nativeDevice (rackId, &owner);
+        if (auto frozen = unfrozen (owner); frozen.failed()) return frozen;
+        if (rack == nullptr || ! racks::isRack (rack->getKind()) || static_cast<int> (preset.getProperty ("effectKind", -1)) != static_cast<int> (rack->getKind()))
+            return Result::fail ("The preset is for another kind of rack.");
+        auto copy = preset.createCopy();
+        stripAutomation (copy);
+        te::EditItemID::IDMap identities;
+        identities[te::EditItemID::fromVar (preset[te::IDs::id])] = rack->itemID;
+        te::EditItemID::remapIDs (copy, nullptr, *edit, &identities);
+        transaction (name);
+        auto* undo = &edit->getUndoManager();
+        auto& state = rack->state;
+        const auto rackPart = [] (const juce::ValueTree& child)
+        { return child.hasType (racks::chainType) || child.hasType (racks::returnType) || child.hasType (racks::mappingType); };
+        for (int i = state.getNumChildren(); --i >= 0;) if (rackPart (state.getChild (i))) state.removeChild (i, undo);
+        // Its macros and chain selector, then its macros' names and how many show.
+        auto settings = defaultEffectSettings (rack->getKind());
+        const auto fields = effectParameters (rack->getKind());
+        for (size_t i = 0; i < fields.size(); ++i) settings.values[i] = static_cast<float> (static_cast<double> (copy.getProperty (fields[i].key, fields[i].initial)));
+        rack->writeSettings (settings);
+        juce::Array<juce::Identifier> named { racks::visibleMacrosProperty };
+        for (int m = 0; m < rackMacroCount; ++m) named.add (racks::macroNameProperty (m));
+        for (const auto& property : named)
+        {
+            if (copy.hasProperty (property)) state.setProperty (property, copy[property], undo);
+            else state.removeProperty (property, undo);
+        }
+        for (const auto& child : copy) if (rackPart (child)) state.appendChild (child.createCopy(), undo);
+        changed(); return Result::ok();
+    }
     void transaction (const String& name)
     {
         endAudition(); // Edits apply to the main lane, never to an audition.
@@ -7595,6 +7640,23 @@ Result Session::readDevicePreset (const File& file, DevicePreset& preset)
             }
         if (! validEffectSettings (result.effect)) return fail();
     }
+    else if (device == "rack")
+    {
+        // A rack whole: its device tree, checked as a project's racks are.
+        double kind = 0;
+        auto* rack = xml->getChildByName ("RACK");
+        if (! parseNumber (xml->getStringAttribute ("kind"), kind) || kind < 0 || kind >= deviceKindCount || kind != std::floor (kind)
+            || ! effectIsRack (static_cast<EffectKind> ((int) kind)) || rack == nullptr || rack->getFirstChildElement() == nullptr) return fail();
+        auto tree = juce::ValueTree::fromXml (*rack->getFirstChildElement());
+        if (! tree.hasType (te::IDs::PLUGIN) || tree[te::IDs::type].toString() != NativeEffectPlugin::xmlTypeName
+            || tree.getProperty ("effectKind").toString() != String ((int) kind)
+            || UtilityPlugin::validateState (tree).failed() || NativeEffectPlugin::validateState (tree).failed() || validateRackIdentities (tree).failed())
+            return fail();
+        if (auto r = NativeEffectPlugin::resolveSamples (tree, file.getParentDirectory()); r.failed()) return r;
+        result.rack = true;
+        result.effect = defaultEffectSettings (static_cast<EffectKind> ((int) kind));
+        result.rackState = tree;
+    }
     else if (device == "plugin")
     {
         auto* description = xml->getChildByName ("PLUGIN");
@@ -7615,9 +7677,16 @@ Result Session::saveDevicePreset (const String& pluginId, const File& file, cons
     juce::XmlElement document ("HALFTRACKPRESET");
     document.setAttribute ("version", 1); document.setAttribute ("name", label);
     auto* values = document.createNewChildElement ("SETTINGS");
-    if (auto* native = impl->nativeDevice (pluginId))
+    if (auto* native = impl->nativeDevice (pluginId); native != nullptr && effectIsRack (native->getKind()))
     {
-        if (effectIsRack (native->getKind())) return Result::fail ("Rack presets are not supported yet.");
+        // A rack is kept whole, without automation; its devices' samples keep their paths.
+        auto tree = native->state.createCopy();
+        Impl::stripAutomation (tree);
+        document.setAttribute ("device", "rack"); document.setAttribute ("kind", static_cast<int> (native->getKind()));
+        document.createNewChildElement ("RACK")->addChildElement (tree.createXml().release());
+    }
+    else if (native != nullptr)
+    {
         const auto settings = native->readSettings(); const auto fields = effectParameters (settings.kind);
         document.setAttribute ("device", "native"); document.setAttribute ("kind", static_cast<int> (settings.kind));
         for (size_t i = 0; i < fields.size(); ++i) values->setAttribute (fields[i].key, (double) settings.values[i]);
@@ -7694,7 +7763,8 @@ Result Session::loadDevicePreset (int trackIndex, const File& file, String& plug
         else for (const auto& p : after.plugins)
             if (std::none_of (before.plugins.begin(), before.plugins.end(), [&] (const auto& old) { return old.id == p.id; })) pluginId = p.id;
         if (pluginId.isEmpty()) result = Result::fail ("The preset's device could not be found.");
-        else result = preset.utility ? setUtilitySettings (pluginId, preset.settings) : setNativeEffectSettings (pluginId, preset.effect);
+        else result = preset.utility ? setUtilitySettings (pluginId, preset.settings)
+                    : preset.rack ? impl->fillRack (pluginId, preset.rackState, "Load " + preset.name) : setNativeEffectSettings (pluginId, preset.effect);
     }
     endEditGesture();
     // A device added for a preset whose settings then failed is taken back out.
@@ -7750,6 +7820,7 @@ Result Session::hotSwapDevice (const String& chainId, const String& pluginId, co
     {
         if (! fromPreset) return Result::ok();
         if (preset.utility) return setUtilitySettings (id, preset.settings);
+        if (preset.rack) return impl->fillRack (id, preset.rackState, "Hot-swap " + preset.name);
         if (! preset.plugin) return setNativeEffectSettings (id, preset.effect);
         auto* external = impl->externalPlugin (id);
         auto* instance = external != nullptr ? external->getAudioPluginInstance() : nullptr;
@@ -7758,7 +7829,7 @@ Result Session::hotSwapDevice (const String& chainId, const String& pluginId, co
         return Result::ok();
     };
     // The device's own kind takes the preset in place.
-    if (fromPreset && ((kind && old.isNativeEffect && old.effect.kind == *kind && ! old.isRack) || (utility && old.isUtility)))
+    if (fromPreset && ((kind && old.isNativeEffect && old.effect.kind == *kind && (! old.isRack || preset.rack)) || (utility && old.isUtility)))
     { result = applyPreset (old.id); resultId = old.id; }
     else if (isInstrument)
     {

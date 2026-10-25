@@ -472,7 +472,7 @@ See the [groove contract](research/grooves-contract.md).
 
 ## Device presets and default set
 
-`saveDevicePreset`, `readDevicePreset` and `loadDevicePreset` in `src/Session.cpp` keep presets to native settings by control key (or Utility fields), validated with the same checks as live edits; loading runs inside one edit gesture. `saveDefaultSet` and `newProjectFromDefaultSet` reuse the recovery writer and `loadProject`. `MainComponent::setUserLibrary` points the browser rows, Save Preset dialog and New at the library folder chosen in `Main.cpp`. See the [preset contract](research/presets-contract.md).
+`saveDevicePreset`, `readDevicePreset` and `loadDevicePreset` in `src/Session.cpp` keep presets to native settings by control key (or Utility fields), validated with the same checks as live edits; loading runs inside one edit gesture. A rack preset keeps the rack device's tree without automation, checked on reading by the project loader's rack checks (`NativeEffectPlugin::validateState`, `validateRackIdentities`, `resolveSamples`); `Impl::fillRack` gives an added or hot-swapped rack the preset's chains, mappings and settings under new identities, seeding Tracktion's ID remapping with the rack's own identity so mappings to the rack follow it. `saveDefaultSet` and `newProjectFromDefaultSet` reuse the recovery writer and `loadProject`. `MainComponent::setUserLibrary` points the browser rows, Save Preset dialog and New at the library folder chosen in `Main.cpp`. See the [preset contract](research/presets-contract.md).
 
 ## Tempo automation
 

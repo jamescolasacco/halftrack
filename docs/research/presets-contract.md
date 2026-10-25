@@ -4,9 +4,9 @@ Halftrack's own devices save presets into a user library that the browser lists,
 
 ## Interface
 
-- `saveDevicePreset(pluginId, file, name, overwrite)` writes a native device's or the Utility's settings, inside or outside a rack.
+- `saveDevicePreset(pluginId, file, name, overwrite)` writes a native device's or the Utility's settings, inside or outside a rack, a plug-in's identity and state, or a rack whole (see [Rack presets](#rack-presets-2026-10-25)).
   - The format is `HALFTRACKPRESET` version 1: the device type, the native kind and one attribute per control key.
-  - An existing file is replaced only with `overwrite`. Racks, sample choices and automation are not included.
+  - An existing file is replaced only with `overwrite`. A plain device's sample choices and automation are not included.
 - `readDevicePreset(file, preset)` validates a preset. It rejects other versions, unknown kinds, rack kinds, and non-numeric or out-of-range values. Controls missing from the file keep their defaults, so presets survive appended controls.
 - `loadDevicePreset(trackIndex, file, pluginId)` adds the preset's device in one undo step. An instrument preset replaces the instrument, and instrument and MIDI-effect presets need a MIDI track. If the settings fail after the device is added, the device is taken back out.
 - `saveDefaultSet(file)` writes the open project as a template, with media by absolute path, without changing the project.
@@ -36,8 +36,7 @@ The UI suite saves a preset through its dialog, finds it under its device in the
 
 ## Not implemented
 
-- Rack and plug-in presets.
-- Sample-carrying instrument presets.
+- Sample-carrying presets of a lone Sampler or Drum Sampler (a rack's devices keep their samples).
 - Hot-swapping presets.
 - Preset previews.
 - Track and clip templates.
@@ -68,3 +67,15 @@ The reference's manual: Q or a device's Hot-Swap Presets button links the device
 The UI suite also opens the Sampler's sample from its button, loads another sound into it with Return and ends with Escape, and does the same for a Drum Sampler pad, ending with the button.
 
 Not yet: Drum Rack pads' samples, devices inside racks, showing the sample buttons only on hover, and the reference's option to replace a device as soon as a preset is selected.
+
+## Rack presets (2026-10-25)
+
+The reference's manual, consulted 2026-10-25: a device's Save Preset button, in its title bar, saves its current settings as a preset in the User Library's Presets folder, under its device ([Working with Instruments and Effects](https://www.ableton.com/en/live-manual/12/working-with-instruments-and-effects/), section 23.2.5; the section does not name racks, which are devices there). Section 23.2.3 lists `.adg` among Live's device files, and whole chains can be saved as presets ([Instrument, Drum and Effect Racks](https://www.ableton.com/en/live-manual/12/instrument-drum-and-effect-racks/), section 25.4). What the reference's rack preset holds was not read. Halftrack's format is its own.
+
+- **Saving.** A rack's device menu now offers Save Preset..., as other devices' do, into `Presets/<rack name>` (Audio Effect Rack, Instrument Rack, Drum Rack or MIDI Effect Rack). The preset (`device="rack"`) holds the rack device's tree: its chains with their settings and devices, nested racks, a Drum Rack's returns, its macro mappings, macro values, names and how many show. Automation is left out. Devices' samples are kept by their paths.
+- **Reading.** A rack preset is checked as a project's racks are before anything changes: its kind, nesting, chain and device settings, the devices each chain accepts and in what order, unique identities, mappings and samples. A missing sample keeps its reference and plays nothing, as in a project.
+- **Loading.** Choosing it adds a rack of its kind (an Instrument or Drum Rack as the track's instrument, needing a MIDI track, as a MIDI Effect Rack does) and gives it the preset's contents, in one undo step. Its chains and devices take new identities, and the macro mappings follow them, those to the rack's chain selector included.
+- **Hot-Swap.** A rack preset hot-swapped onto a rack of its kind fills that rack in place, keeping the rack and the automation of its own macros; onto another device of its type it takes that device's place.
+- **The browser** lists each rack's presets under it, as other devices' presets.
+
+`tests/RackTests.cpp` (`presetTests`) saves an Audio Effect Rack of two chains, an EQ inside one, a named macro mapped to the EQ's output and turned to 32. It checks that the preset reads back as a rack preset, that replacing it needs asking, and that loading it onto another track is one undo step whose chains and devices have new identities and the same settings. The copy's mapping follows its own EQ, its macros and names are the preset's, and the copy renders with 0.0 difference from the original. Turning the copy's macro leaves the original's EQ. A preset saved from a rack with macro automation holds none. Hot-swapped onto the rack it came from, it fills it with new chains and keeps the rack's automation, one step; onto a Saturator, it takes the Saturator's place. An Instrument Rack preset needs a MIDI track and becomes the instrument. A kind that does not match, a missing rack, a chain at 99 dB, a repeated chain identity and an instrument in an audio effect chain are each refused without changing the project. The UI suite finds a rack preset under the Audio Effect Rack in the browser and loads it.
