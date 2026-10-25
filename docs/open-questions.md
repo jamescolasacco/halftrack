@@ -934,7 +934,7 @@ Macro variations and Rand ([racks contract](research/racks-contract.md#macro-var
 
 Split and Chop ([note drawing contract](research/note-drawing-contract.md#split-and-chop-2026-10-25)). Defaults where the manual is silent: a chop divides each note into equal parts, as many as the whole grid steps it lasts rounded to the nearest (at least one, at most 128); the parts change together for every chopped note; a drawn split line splits a note where it crosses the middle of the note's row. A chop drag takes 10 pixels a part.
 
-Probability groups ([note chance contract](research/note-chance-contract.md#probability-groups-2026-10-25)). Defaults where the manual is silent: a group takes the chance of its earliest note; a group needs two notes, and one left with a single note ends; Play One picks among its notes evenly; copied, duplicated and chopped notes stay in their group.
+Probability groups ([note chance contract](research/note-chance-contract.md#probability-groups-2026-10-25)). Defaults where the manual is silent: a group takes the chance of its earliest note; a group needs two notes, and one left with a single note ends; Play One picks among its notes evenly; chopped notes stay in their group, while pasted or duplicated notes of a group form a group of their own.
 
 Automation Arm. The reference keeps Automation Arm with its song preference data, on by default (static reading: `ASongPrefData::mpAutomationArm`, default 1), so it would be an application setting that starts on. Halftrack keeps it with the project, off by default ([automation capture contract](research/automation-capture-contract.md)); changing that would make every recording capture control moves by default, and waits for a reference measurement of when the setting is read.
 

@@ -2869,3 +2869,7 @@ UI area. Pointing at a grouped note now outlines its group's notes, and the Chan
 ## Group Track Delay — 2026-10-25
 
 Engine and UI areas. Groups now have a Track Delay, as the reference's manual says every track does: in milliseconds or samples, positive or negative, saved and validated, with a field on the group's mixer strip ([track delay contract](research/track-delay-contract.md#groups-2026-10-25)). Checked by the track delay and UI suites.
+
+## Pasted probability groups — 2026-10-25
+
+UI area. Pasted or duplicated notes from a probability group now form a group of their own instead of joining the original, so a Play One group picks only among its own notes; a lone pasted note leaves its group ([note chance contract](research/note-chance-contract.md#probability-groups-2026-10-25)). Checked in the UI suite.

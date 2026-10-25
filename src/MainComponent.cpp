@@ -10342,6 +10342,17 @@ private:
             const auto clipId = clip->id;
             auto notes = relativeNotes;
             for (auto& note : notes) note.startBeat += atBeat;
+            // Pasted notes from a probability group form a group of their own; a lone one is in none.
+            std::map<juce::String, int> members;
+            for (const auto& note : notes) if (note.chanceGroup.isNotEmpty()) ++members[note.chanceGroup];
+            std::map<juce::String, juce::String> fresh;
+            for (const auto& [group, count] : members) if (count > 1) fresh[group] = "group-" + juce::String::toHexString (juce::Random::getSystemRandom().nextInt64());
+            for (auto& note : notes)
+                if (note.chanceGroup.isNotEmpty())
+                {
+                    if (const auto found = fresh.find (note.chanceGroup); found != fresh.end()) note.chanceGroup = found->second;
+                    else { note.chanceGroup.clear(); note.playOne = false; }
+                }
             juce::StringArray insertedIds;
             // The facade validates the entire group before creating any undo
             // action. A rejected paste must preserve selection, cursor and redo.
@@ -26206,6 +26217,14 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
             if (lanes != nullptr) lanes->setSelectedId (97, juce::sendNotificationSync);
             check (pianoRoll.shownLaneMarkers() == (int) currentMidiClip()->notes.size() - 1, "the Chance lane shows the two grouped notes as one marker");
             if (lanes != nullptr) lanes->setSelectedId (laneBefore, juce::sendNotificationSync);
+            // Duplicated, the grouped notes form a group of their own.
+            const auto original = noteById (splitSource[0]).chanceGroup;
+            check (pianoRoll.selectedNoteCount() == 2 && pianoRoll.keyPressed (juce::KeyPress ('d', juce::ModifierKeys (juce::ModifierKeys::commandModifier), 0)), "duplicate the two grouped notes");
+            juce::StringArray copiedGroups;
+            for (const auto& note : currentMidiClip()->notes) if (note.chanceGroup.isNotEmpty() && note.chanceGroup != original) copiedGroups.add (note.chanceGroup);
+            check (copiedGroups.size() == 2 && copiedGroups[0] == copiedGroups[1], "the copies form a group of their own, apart from the originals'");
+            pianoRoll.keyPressed (undo);
+            groupClick (groupPoint (.5, 60)); groupClick (groupPoint (1.5, 64), juce::ModifierKeys::shiftModifier);
         }
         check (handleKey (juce::KeyPress ('G', juce::ModifierKeys (juce::ModifierKeys::commandModifier | juce::ModifierKeys::shiftModifier), 0))
                    && noteById (splitSource[0]).chanceGroup.isEmpty() && noteById (splitSource[1]).chanceGroup.isEmpty(), "and Cmd+Shift+G ungroups them");
