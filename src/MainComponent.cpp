@@ -1684,6 +1684,34 @@ private:
         { report (session.moveTakeLane (draggedTakeLane, target)); refresh(); resized(); }
     }
     void endTakeLaneDrag() { if (std::exchange (draggedTakeLane, juce::String()).isNotEmpty()) { session.endEditGesture(); refresh(); } }
+    // Sounds dropped onto a take lane go into it one after another from the drop, or with Cmd (Ctrl elsewhere) one to a
+    // lane from that one down, new lanes made past the last, as one undo step.
+    void importToTakeLane (juce::String laneId, const juce::StringArray& files, double time, bool acrossLanes)
+    {
+        int track = -1, index = -1;
+        if (takeLaneInfo (laneId, &track, &index) == nullptr) return;
+        const auto trackId = state.tracks[(size_t) track].id;
+        session.beginEditGesture (files.size() > 1 ? "Import audio to take lanes" : "Import audio to take lane");
+        double at = time;
+        bool first = true;
+        for (const auto& path : files)
+        {
+            if (! isAudio (juce::File (path))) continue;
+            if (acrossLanes && ! std::exchange (first, false))
+            {
+                ++index; at = time;
+                if (index >= (int) state.tracks[(size_t) track].takeLanes.size()) { juce::String added; report (session.insertTakeLane (trackId, added)); refresh(); }
+                if (index >= (int) state.tracks[(size_t) track].takeLanes.size()) break;
+                laneId = state.tracks[(size_t) track].takeLanes[(size_t) index].id;
+            }
+            const auto result = session.importAudioToTakeLane (laneId, juce::File (path), at);
+            report (result); refresh();
+            if (result.failed()) break;
+            if (const auto* lane = takeLaneInfo (laneId))
+                for (const auto& clip : lane->clips) if (std::abs (clip.start - at) < 1e-6) at = clip.start + clip.length;
+        }
+        session.endEditGesture(); refresh(); resized();
+    }
     void moveSelectedTakeLane (int step)
     {
         int index = -1;
@@ -19524,6 +19552,11 @@ private:
         const auto inside = viewport.getBounds().contains (x, y) && p.x < canvas.timelineWidth();
         const auto index = inside ? trackAtY (p.y) : -1;
         const auto time = inside ? juce::jmax (0.0, viewStart + p.x / pixelsPerSecond) : state.insertMarker;
+        // Onto a take lane, as the reference takes samples there (its manual, section 21.4).
+        if (inside)
+            for (const auto& lane : lanes)
+                if (lane.take >= 0 && p.y >= lane.y && p.y < lane.y + lane.height)
+                { importToTakeLane (state.tracks[(size_t) lane.index].takeLanes[(size_t) lane.take].id, files, snapSeconds (time), acrossTracks); return; }
         importFiles (files, index, snapSeconds (time), acrossTracks);
     }
 };
@@ -21813,6 +21846,22 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
             refresh();
             check (lane != nullptr && lanesOf()[0].height == (int) std::round (scaled / 1.12), "and Option-scrolling down over its lane a little shorter");
             check (session.setTakeLaneHeight (firstId, 0).wasOk(), "back to the usual height"); refresh(); resized(); takeSelection = {};
+            // A sound dropped onto a take lane goes into it, and with Cmd several go one to a lane (its manual, section 21.4).
+            for (const auto& l : lanes) if (l.index == t && l.take == 1) lane = &l;
+            check (lane != nullptr, "find Take 2's lane");
+            viewport.setViewPosition (0, juce::jmax (0, lane->y - 10));
+            const auto laneClips = lanesOf()[1].clips.size(), mainClips = state.tracks[(size_t) t].clips.size();
+            const auto dropAt = getLocalPoint (&canvas, juce::Point<int> ((int) ((4.0 - viewStart) * pixelsPerSecond), lane->y + lane->height / 2));
+            filesDropped ({ audioFixture.getFullPathName() }, dropAt.x, dropAt.y); refresh();
+            check (lanesOf()[1].clips.size() == laneClips + 1 && state.tracks[(size_t) t].clips.size() == mainClips && session.undoSteps()[0] == "Import audio to take lane",
+                   "a sound dropped onto Take 2 goes into it, the main lane unchanged, one undo step");
+            session.undo(); refresh();
+            const auto lanesBefore = lanesOf().size();
+            importToTakeLane (lanesOf()[1].id, { audioFixture.getFullPathName(), audioFixture.getFullPathName() }, 5.0, true); refresh();
+            check (lanesOf()[1].clips.size() == laneClips + 1 && lanesOf().size() == lanesBefore + 1 && lanesOf().back().clips.size() == 1
+                       && session.undoSteps()[0] == "Import audio to take lanes", "two sounds dropped with Cmd go one to a lane, a new lane made past the last, one undo step");
+            session.undo(); refresh(); resized();
+            check (lanesOf().size() == lanesBefore && lanesOf()[1].clips.size() == laneClips, "one undo takes both back, with the new lane");
         }
         check (handleKey (juce::KeyPress ('T', juce::ModifierKeys::shiftModifier | juce::ModifierKeys::altModifier, 0)) && state.tracks[(size_t) t].takeLanes.size() == 3,
                "Shift+Option+T inserts a take lane");

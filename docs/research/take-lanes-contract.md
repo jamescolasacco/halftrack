@@ -93,4 +93,16 @@ Halftrack:
 
 The take lanes suite moves Take 2 above Take 1 in one undo step, refuses an unknown lane, undoes the move, sets a lane 80 pixels high outside the undo history, refuses 10 pixels, reopens the project with the height and refuses one with a lane 5 pixels high. The UI suite moves Take 2 above Take 1 with Cmd+Up after a click on its header, drags Take 1's header below Take 2, each one undo step, and makes Take 1 30 pixels taller by its edge, a quarter taller with Option+= and a little shorter by Option-scrolling.
 
-Missing: moving a split between MIDI comp parts, dragging samples onto lanes, and MIDI comping through the UI.
+## Samples onto lanes (2026-10-25)
+
+The reference's manual (section 21.4, consulted 2026-10-25): samples and MIDI files can be dragged onto take lanes from the browser or the Finder, and with several samples Cmd (Ctrl elsewhere) inserts each into the next lane.
+
+Halftrack:
+
+- `importAudioToTakeLane (laneId, file, start)` puts an audio file into a take lane at a time: copied into the project's media as an import is, made as an imported clip (default fades, the Clip Color setting), and leaving the main lane as it is. It is one undo step, refused for a MIDI track's lanes, an unknown lane or a missing file.
+- A sound dropped onto a take lane, from the Finder or from the browser, goes into it at the drop, on the grid. Several play one after another from there; with Cmd held, each goes into the next lane down, new lanes made past the last. One undo step takes them all back.
+- MIDI files dropped onto take lanes are not taken yet.
+
+The take lanes suite puts a half-second sample into Take 1 at 3 s from the project's media, the main lane unchanged, refuses an unknown lane and a missing file, and undoes it. The UI suite drops a sound onto Take 2 in one undo step, and two sounds with Cmd, one going to Take 2 and one to a new lane, which one undo takes back with the lane.
+
+Missing: moving a split between MIDI comp parts, MIDI files dropped onto lanes, and MIDI comping through the UI.

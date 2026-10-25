@@ -9316,6 +9316,36 @@ Result Session::setTakeLaneHeight (const String& laneId, int pixels)
     else lane.setProperty (trackHeightProperty, pixels, nullptr);
     sendChangeMessage(); return Result::ok();
 }
+Result Session::importAudioToTakeLane (const String& laneId, const File& source, double start)
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    if (impl->anyRecording()) return Result::fail ("Stop recording before adding to take lanes.");
+    auto [track, lane] = impl->takeLane (laneId);
+    if (track == nullptr) return Result::fail ("Take lane not found.");
+    if (static_cast<bool> (track->state.getProperty (midiTrackProperty))) return Result::fail ("Put audio into an audio track's take lanes.");
+    if (! source.existsAsFile()) return Result::fail ("The audio file does not exist.");
+    te::AudioFile audio (impl->engine, source);
+    if (! audio.isValid() || audio.getLength() <= 0) return Result::fail ("This audio file could not be read.");
+    if (! std::isfinite (start) || start < 0) return Result::fail ("Clip start must be zero or greater.");
+    auto assets = impl->assets(); if (auto r = assets.createDirectory(); r.failed()) return r;
+    auto file = source.isAChildOf (assets) ? source : assets.getNonexistentChildFile (source.getFileNameWithoutExtension(), source.getFileExtension(), true);
+    if (file != source && ! source.copyFileTo (file)) return Result::fail ("Could not copy the imported audio.");
+    impl->transaction ("Import audio to take lane");
+    // Made as an import makes a clip, leaving the clips around it, then moved into the lane.
+    auto clip = track->insertWaveClip (source.getFileNameWithoutExtension(), file,
+        { { te::TimePosition::fromSeconds (start), te::TimePosition::fromSeconds (start + audio.getLength()) }, {} }, false);
+    if (! clip) return Result::fail ("Could not create the audio clip.");
+    clip->getSourceFileReference().setToFile (file, te::SourceFileReference::PathStyle::alwaysAbsolute, false);
+    clip->setAutoTempo (false); clip->setAutoPitch (false);
+    clip->setFadeIn (te::TimeDuration::fromSeconds (0)); clip->setFadeOut (te::TimeDuration::fromSeconds (0));
+    auto* undo = &impl->edit->getUndoManager();
+    giveDefaultFades (*clip, undo);
+    impl->colourNewClip (*clip);
+    const auto state = clip->state.createCopy();
+    clip->removeFromParent();
+    lane.appendChild (state, undo);
+    impl->changed(); return Result::ok();
+}
 Result Session::removeTakeLane (const String& laneId)
 {
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");

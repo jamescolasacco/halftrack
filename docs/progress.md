@@ -2917,3 +2917,7 @@ Engine and UI areas. As the reference's manual describes (section 21.2), a take 
 ## Convert to MIDI — 2026-10-25
 
 Engine, UI and root areas. As the reference's manual describes (chapter 13), Convert Harmony, Melody and Drums to New MIDI Track now follow Slice to New MIDI Track in the Create menu and an audio clip's menu: each makes a MIDI track after the clip's with the notes found, divided at the clip's transients, through Halftrack's synthesizer or a Drum Rack of its own generated kick, snare and hi-hat. The analysis is Halftrack's own (`src/AudioToMidi.cpp`) ([convert to MIDI contract](research/convert-to-midi-contract.md)). Checked in the new convert-midi suite and the UI suite. Cross-area: `Session` (engine), `MainComponent` (UI), `CMakeLists.txt` and `Main.cpp` (the suite).
+
+## Samples onto take lanes — 2026-10-25
+
+Engine and UI areas. As the reference's manual describes (section 21.4), sounds dropped onto a take lane from the Finder or the browser now go into it, several one after another, or with Cmd one to a lane, new lanes made as needed (`Session::importAudioToTakeLane`, one undo step) ([take lanes contract](research/take-lanes-contract.md#samples-onto-lanes-2026-10-25)). Checked in the take lanes and UI suites.

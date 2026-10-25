@@ -153,6 +153,28 @@ int runTakeLanesTests (const juce::File& artifacts)
         ok (s.setTakeLaneHeight (secondLane, 80), "make Take 2 80 pixels high");
         check (track().takeLanes[1].height == 80 && track().takeLanes[0].height == 0 && s.undoSteps() == history && s.setTakeLaneHeight (secondLane, 10).failed(),
                "it is, outside the undo history as a track's height is; less than a track's least is refused");
+        // A sample put into a take lane, as the reference takes samples dragged there (its manual, section 21.4).
+        {
+            const auto sample = root.getChildFile ("Lane Sample.wav");
+            {
+                juce::AudioBuffer<float> x (1, 24000);
+                for (int n = 0; n < x.getNumSamples(); ++n) x.setSample (0, n, 0.25f * (float) std::sin (2 * juce::MathConstants<double>::pi * 220.0 * n / 48000.0));
+                juce::WavAudioFormat wav; std::unique_ptr<juce::OutputStream> stream (sample.createOutputStream());
+                auto writer = wav.createWriterFor (stream, juce::AudioFormatWriterOptions().withSampleRate (48000).withNumChannels (1).withBitsPerSample (24));
+                check (writer != nullptr && writer->writeFromAudioSampleBuffer (x, 0, x.getNumSamples()), "write a half-second sample");
+            }
+            const auto laneClips = track().takeLanes[0].clips.size(), mainClips = track().clips.size();
+            ok (s.importAudioToTakeLane (firstLane, sample, 3), "put it into Take 1 at 3 s");
+            const auto lane = track().takeLanes[0];
+            const auto added = std::find_if (lane.clips.begin(), lane.clips.end(), [] (const auto& c) { return near (c.start, 3); });
+            check (lane.clips.size() == laneClips + 1 && added != lane.clips.end() && near (added->length, 0.5) && added->file.isAChildOf (s.projectAssets())
+                       && track().clips.size() == mainClips && s.undoSteps()[0] == "Import audio to take lane",
+                   "Take 1 holds it at 3 s, half a second long, from the project's media, the main lane unchanged, one undo step");
+            check (s.importAudioToTakeLane ("missing", sample, 0).failed() && s.importAudioToTakeLane (firstLane, root.getChildFile ("none.wav"), 0).failed(),
+                   "an unknown lane and a missing file are refused");
+            s.undo();
+            check (track().takeLanes[0].clips.size() == laneClips, "undo takes it out");
+        }
 
         // Reopening.
         ok (s.setTrackArmed (0, false), "disarm");

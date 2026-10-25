@@ -921,6 +921,9 @@ public:
     // A take lane's height in pixels (minimumTrackHeight to maximumTrackHeight; 0 for the usual one), kept with the
     // project as a track's is, outside the undo history.
     juce::Result setTakeLaneHeight (const juce::String& laneId, int pixels);
+    // Puts an audio file into a take lane at a time, as the reference takes samples dragged onto take lanes (its
+    // manual, section 21.4): copied into the project's media, as an import is, the main lane unchanged. One undo step.
+    juce::Result importAudioToTakeLane (const juce::String& laneId, const juce::File&, double startSeconds);
     juce::Result compTake (const juce::String& laneId, double startSeconds, double endSeconds);
     juce::Result cycleTake (const juce::String& trackId, double startSeconds, double endSeconds, bool next);
     // Auditions a take lane: it plays in place of its track's main lane, which the snapshot keeps
