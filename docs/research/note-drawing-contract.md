@@ -25,6 +25,7 @@ Draw Mode (Options > Draw Mode, B, or the pencil beside the control bar's KEYS s
 - Steps the pointer goes back over lose their notes. A drawn note replaces the notes it covers at its pitch.
 - A click on a note deletes it, and the drag goes on deleting the notes it crosses.
 - One drag is one undo step. The pointer is a pencil over the grid. Draw Mode is a setting of the window, not saved with the project.
+- The Display & Input preference Draw Mode with Pitch Lock (off, as the reference's) swaps the two drawings: on, a drag keeps the first note's pitch, and Alt draws melodically ([preferences contract](preferences-contract.md)).
 
 In the lanes, Draw Mode draws too:
 - In automation and clip envelopes, steps as wide as the grid, or freehand with Cmd held (Alt elsewhere) or snapping off ([automation contract](arrangement-automation-contract.md#draw-mode-2026-10-24)).

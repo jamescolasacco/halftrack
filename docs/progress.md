@@ -2841,3 +2841,7 @@ UI area. As the reference's key list has it, Cmd+Return in the note editor appli
 ## Chopping by dragging — 2026-10-25
 
 UI area. As the reference's key list and manual describe, a Cmd-drag up or down during a chop changes its parts, and holding E with Option a drag over a selected note chops the selected notes, each one undo step ([note drawing contract](research/note-drawing-contract.md#split-and-chop-2026-10-25)). Checked in the UI suite.
+
+## Draw Mode with Pitch Lock — 2026-10-25
+
+UI area. The Display & Input page has the reference's Draw Mode with Pitch Lock preference (off, as its song preference data has it): on, Draw Mode draws at one pitch and Alt melodically ([preferences contract](research/preferences-contract.md)). Checked by the preferences and UI suites.
