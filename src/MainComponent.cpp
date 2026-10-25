@@ -18455,10 +18455,15 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         check (bend().empty(), "double-clicking a point deletes it");
         {
             const auto alt = juce::ModifierKeys::altModifier, shift = juce::ModifierKeys::shiftModifier;
-            check (handleKey (juce::KeyPress (juce::KeyPress::tabKey, juce::ModifierKeys (JUCE_MAC ? alt : juce::ModifierKeys::commandModifier), 0)) && pianoRoll.shownTab() == EditorTab::expression
+           #if JUCE_MAC
+            const auto tabStep = alt;
+           #else
+            const auto tabStep = juce::ModifierKeys::commandModifier;
+           #endif
+            check (handleKey (juce::KeyPress (juce::KeyPress::tabKey, juce::ModifierKeys (tabStep), 0)) && pianoRoll.shownTab() == EditorTab::expression
                        && laneMenu->indexOfItemId (90) >= 0 && laneMenu->getSelectedId() == 90 && laneView->getBounds() == underNotes,
                    "Option+Tab steps to the MPE tab, its lanes the notes' expression under them");
-            check (handleKey (juce::KeyPress (juce::KeyPress::tabKey, juce::ModifierKeys (shift | (JUCE_MAC ? alt : juce::ModifierKeys::commandModifier)), 0))
+            check (handleKey (juce::KeyPress (juce::KeyPress::tabKey, juce::ModifierKeys (shift | tabStep), 0))
                        && pianoRoll.shownTab() == EditorTab::envelopes, "and with Shift back to Envelopes");
             check (handleKey (juce::KeyPress ('1', juce::ModifierKeys (alt | shift), 0)) && pianoRoll.shownTab() == EditorTab::content && laneMenu->getSelectedId() == 1
                        && laneView->getBounds() == underNotes && showPiano, "Option+Shift+1 shows the Notes tab again, the velocity lane under the notes");
