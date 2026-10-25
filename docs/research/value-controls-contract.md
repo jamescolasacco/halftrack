@@ -34,9 +34,10 @@ Halftrack's knobs, faders and number fields take the reference's value gestures:
   - **Delete or Backspace** returns it to its default. A track's mixer controls reset as double-clicking them does, with the controls linked to them (`Session::resetTrackControl`).
   - **Typing** a digit, a minus sign or a point opens a field over the control showing what is typed. Return, or a click elsewhere, sets the value, read as the control reads its own text box. Escape leaves it.
   - **On a number field**, Up and Down step the part clicked; with Shift, the last part, for a fine adjustment, except the time signature's, whose numbers do not run from coarse to fine. Typing starts editing its text with what is typed, which Return sets and Escape leaves.
+  - **On a position or length** (bars, beats and sixteenths), typing replaces the part clicked alone (2026-10-25). While editing, "." or "," selects the next part, whose digits the next typed ones replace, and after the last part adds a point, as the reference's key list has them go to the next field. Typed commas read as points.
   - Each change from the keys is one undo step, as a drag is.
   - Keys with Cmd, Ctrl or Option, and any other key, go on to the window.
-- **Missing.** The scenes' tempo and signature fields do not take the value keys. Neither do "." and "," move between a position's fields while typing. Halftrack draws no mark on the control clicked last.
+- **Missing.** The scenes' tempo and signature fields do not take the value keys. Halftrack draws no mark on the control clicked last.
 
 ## Evidence in Halftrack
 
@@ -53,7 +54,7 @@ The UI suite checks:
 - that dragging the tempo's whole beats up two steps adds 2 BPM in one undo step without editing its text, its hundredths add 0.05 BPM in five steps, and Shift steps a tenth as fast;
 - that after the click Down steps the whole beats, Shift+Up the hundredths, and typing a digit edits the field, whose confirmed text sets the tempo;
 - that dragging the loop start's beats moves the loop two beats later keeping its length, and the length's bars add a bar;
-- that dragging the song position's bars up two steps moves the insert marker to bar 3, Up a bar further, and a typed 2.2.1 moves it there;
+- that dragging the song position's bars up two steps moves the insert marker to bar 3, Up a bar further, and a typed 2.2.1 moves it there; then that typing 3 on its beats replaces them alone, a comma moves on to the sixteenths, which a 4 replaces, and confirming moves the insert marker to 2.3.4;
 - that dragging the signature's numerator and denominator up makes 5/4 and then 5/8, and Shift+Up steps the denominator clicked;
 - that dragging the clip's Length field's beats up three steps lengthens its loop three beats in one undo step;
 - that dragging an audio clip's tempo's whole beats up two steps adds 2 BPM in one undo step;

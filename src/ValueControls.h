@@ -141,6 +141,46 @@ public:
         if (std::exchange (dragging, false)) { if (onDragEnd != nullptr) onDragEnd(); return; }
         juce::Label::mouseUp (e);
     }
+    // The runs of digits in a text, as the parts are drawn.
+    static std::vector<juce::Range<int>> digitRuns (const juce::String& text)
+    {
+        std::vector<juce::Range<int>> runs;
+        for (int i = 0; i < text.length();)
+        {
+            if (! juce::CharacterFunctions::isDigit (text[i])) { ++i; continue; }
+            int end = i; while (end < text.length() && juce::CharacterFunctions::isDigit (text[end])) ++end;
+            runs.push_back ({ i, end }); i = end;
+        }
+        return runs;
+    }
+    // Its text editor moves through the parts as the reference's fields do (its key list, section 42.6): "." or ","
+    // selects the next part, so the digits typed replace it, or adds a point after the last.
+    struct PartEditor final : juce::TextEditor
+    {
+        using juce::TextEditor::TextEditor;
+        bool keyPressed (const juce::KeyPress& key) override
+        {
+            const auto typed = key.getTextCharacter();
+            if ((typed != '.' && typed != ',') || key.getModifiers().isCommandDown() || key.getModifiers().isCtrlDown()) return juce::TextEditor::keyPressed (key);
+            const auto caret = getHighlightedRegion().getEnd();
+            for (const auto& run : digitRuns (getText()))
+                if (run.getStart() > caret || (run.getStart() == caret && ! getHighlightedRegion().isEmpty() && run != getHighlightedRegion()))
+                { setHighlightedRegion (run); return true; }
+            insertTextAtCaret ("."); return true;
+        }
+    };
+    juce::TextEditor* createEditorComponent() override
+    {
+        // As juce::Label's, with the part keys.
+        auto* editor = new PartEditor (getName());
+        editor->applyFontToAllText (getLookAndFeel().getLabelFont (*this));
+        copyAllExplicitColoursTo (*editor);
+        const auto copy = [&] (int from, int to) { if (isColourSpecified (from) || getLookAndFeel().isColourSpecified (from)) editor->setColour (to, findColour (from)); };
+        copy (textWhenEditingColourId, juce::TextEditor::textColourId);
+        copy (backgroundWhenEditingColourId, juce::TextEditor::backgroundColourId);
+        copy (outlineWhenEditingColourId, juce::TextEditor::focusedOutlineColourId);
+        return editor;
+    }
 
 private:
     float travel = 0, lastY = 0;

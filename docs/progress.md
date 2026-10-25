@@ -2901,3 +2901,7 @@ Engine and UI areas. The Main's titles in the Session view and the mixer now sho
 ## Device undo steps — 2026-10-25
 
 Engine area. Adding a native effect or a Utility made the device before starting its undo step, so the engine's setting up of the device was recorded in the step before it, or, right after an undo, in an unnamed step of its own, and one undo then left the device in place. Each now starts its step first, as adding a plug-in already did. Checked in the UI suite (each device added is one undo step, named for it, even after an undo).
+
+## Typing into a position's parts — 2026-10-25
+
+UI area. As the reference's key list has it (section 42.6), typing on a position or length field now replaces the part clicked (bars, beats or sixteenths), and "." or "," moves to the next part; commas read as points in typed positions ([value controls contract](research/value-controls-contract.md#halftrack)). Checked in the UI suite.

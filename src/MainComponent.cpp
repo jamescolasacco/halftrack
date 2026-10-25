@@ -169,7 +169,7 @@ juce::String barsBeats (double beats, const Session::TimeSignature& meter, bool 
 }
 std::optional<double> readBarsBeats (const juce::String& text, const Session::TimeSignature& meter, bool position)
 {
-    const auto parts = juce::StringArray::fromTokens (text.trim(), ".", "");
+    const auto parts = juce::StringArray::fromTokens (text.trim(), ".,", "");
     if (parts.isEmpty() || parts.size() > 3) return std::nullopt;
     double values[3] = { position ? 1.0 : 0.0, position ? 1.0 : 0.0, position ? 1.0 : 0.0 };
     for (int i = 0; i < parts.size(); ++i)
@@ -2377,7 +2377,9 @@ private:
         return false;
     }
     // A number field's value keys: Up and Down step the part clicked last (the last part with Shift, for
-    // a fine adjustment), and typing starts editing its text with what is typed.
+    // a fine adjustment), and typing starts editing its text with what is typed: on a position or length's
+    // bars, beats or sixteenths, the part clicked alone, as the reference's fields take typing (its key list,
+    // section 42.6), "." or "," then moving to the next part.
     static bool fieldKey (ValueField& field, const juce::KeyPress& key)
     {
         if (field.isBeingEdited() || ! field.isEditable()) return false;
@@ -2393,7 +2395,13 @@ private:
         const auto typed = key.getTextCharacter();
         if (! (juce::CharacterFunctions::isDigit (typed) || typed == '-' || typed == '.')) return false;
         field.showEditor();
-        if (auto* editor = field.getCurrentTextEditor()) { editor->setText (juce::String::charToString (typed), false); editor->moveCaretToEnd(); }
+        if (auto* editor = field.getCurrentTextEditor())
+        {
+            const auto runs = ValueField::digitRuns (editor->getText());
+            if (runs.size() >= 3 && juce::CharacterFunctions::isDigit (typed) && juce::isPositiveAndBelow (field.part, (int) runs.size()))
+            { editor->setHighlightedRegion (runs[(size_t) field.part]); editor->insertTextAtCaret (juce::String::charToString (typed)); }
+            else { editor->setText (juce::String::charToString (typed), false); editor->moveCaretToEnd(); }
+        }
         return true;
     }
     // A value set from the keys as one gesture, so it is one undo step as a drag is.
@@ -14957,7 +14965,7 @@ private:
     }
     std::optional<double> parsePosition (const juce::String& text) const
     {
-        const auto number = juce::StringArray::fromTokens (text.trim(), ".", "")[0].trim();
+        const auto number = juce::StringArray::fromTokens (text.trim(), ".,", "")[0].trim();
         if (number.isEmpty() || ! number.containsOnly ("0123456789") || number.getIntValue() < 1) return std::nullopt;
         const int bar = number.getIntValue() - 1;
         const auto start = Session::barStart (state.timeSignatures, bar);
@@ -14968,7 +14976,7 @@ private:
     }
     static std::optional<double> parseMusicalTime (const juce::String& text, bool position, Session::TimeSignature meter = {})
     {
-        auto fields = juce::StringArray::fromTokens (text.trim(), ".", "");
+        auto fields = juce::StringArray::fromTokens (text.trim(), ".,", "");
         fields.trim(); fields.removeEmptyStrings();
         if (fields.isEmpty() || fields.size() > 3) return std::nullopt;
         std::array<int, 3> value { position ? 1 : 0, position ? 1 : 0, position ? 1 : 0 };
@@ -26210,6 +26218,14 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         if (auto* typing = positionLabel.getCurrentTextEditor()) typing->setText ("2.2.1", false);
         positionLabel.hideEditor (false); refresh();
         check (std::abs (beatsAt (state.position) - 5) < 1e-6 && positionLabel.getText() == "2. 2. 1", "and confirming moves the insert marker to 2.2.1");
+        // Typing goes into the part clicked, and "." or "," moves to the next, as the reference's key list has it (section 42.6).
+        positionLabel.part = 1;
+        check (press (juce::KeyPress ('3', juce::ModifierKeys(), '3')) && positionLabel.getCurrentTextEditor() != nullptr && positionLabel.getCurrentTextEditor()->getText() == "2. 3. 1",
+               "typing on the beats replaces them alone");
+        if (auto* typing = positionLabel.getCurrentTextEditor()) { typing->keyPressed (juce::KeyPress (',', juce::ModifierKeys(), ',')); typing->keyPressed (juce::KeyPress ('4', juce::ModifierKeys(), '4')); }
+        check (positionLabel.getCurrentTextEditor() != nullptr && positionLabel.getCurrentTextEditor()->getText() == "2. 3. 4", "and a comma moves on to the sixteenths, which the next digit replaces");
+        positionLabel.hideEditor (false); refresh();
+        check (std::abs (beatsAt (state.position) - 6.75) < 1e-6 && positionLabel.getText() == "2. 3. 4", "confirming moves the insert marker to 2.3.4");
         session.setInsertMarker (0); refresh();
         dragField (meterLabel, 0, px, false);
         check (state.timeSignature == Session::TimeSignature { 5, 4 }, "dragging the signature's numerator up a step makes it 5/4");
