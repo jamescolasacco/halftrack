@@ -46,7 +46,25 @@ The reference's manual: devices can be dragged "into tracks or drop areas in the
 - **Anything with a collection key** dropped on a collection in the sidebar joins it.
 - Dragging a sound over the Arrangement highlights it, as a desktop file does.
 
-Not yet: Session's drop area for new tracks, dragging grooves onto clips, and dragging several items at once.
+Not yet: dragging grooves onto clips, and dragging several browser items at once.
+
+### Drop areas and several sounds (2026-10-24)
+
+The reference's manual:
+- Section 6.1: instruments and devices dragged into the Mixer Drop Area underneath the Arrangement's tracks add new tracks. Instruments and MIDI effects make a MIDI track; audio effects make an audio track.
+- Section 7.4: several clips dragged into the Set go "in one track; vertically in the Session View or horizontally in the Arrangement View". Holding Cmd (Mac) or Ctrl (Windows) before dropping lays them out in several tracks instead, for audio or MIDI files.
+
+Both pages were consulted 2026-10-24. A user forum report names the Session's empty area right of its tracks "Drop Files and Devices Here", the area where dropped tracks are made ([Ableton forum](https://forum.ableton.com/viewtopic.php?p=855961)).
+
+- **Drop areas.** The Session has a drop area right of the Main column, which follows the last column, over the clip slots. The Arrangement has one under its headers, below the last track. Each is labelled Drop Files and Devices Here. In the Session, a device dropped on any part of a track's column (title, slots, stop button or mixer strip) goes onto that track; in the drop area, it gets a new track as below the Arrangement's tracks. Sounds dropped in the Session's drop area go into a new audio track from the scene under the pointer. A device dropped on a strip of the Arrangement's mixer goes onto its track, and past the strips it gets a new track.
+- **Several sounds** go in name order. In the Arrangement they go end to end on the track under the pointer, from the time there; in the Session they go down the track from the slot, adding scenes as needed. With Cmd/Ctrl held as they drop, they go one to a track instead: in the Arrangement into the next empty audio tracks, each at the drop's time; in the Session along the audio tracks from the slot's, new audio tracks made after the last used when they run out. Create > Import File... with several files lays them out at the insert marker the same way, without the modifier. Each drop is one undo step.
+- **Not yet:** MIDI files dropped on a track. Halftrack imports them only from Create > Import File..., into new MIDI tracks.
+
+The UI suite checks:
+- that two sounds dropped on an Arrangement track go end to end in name order, and one undo takes them back;
+- that with Cmd/Ctrl they go one to a track at the same time, in the Arrangement and along a Session scene;
+- that two sounds dropped in the Session's drop area make a new audio track, down it;
+- that a device dropped there gets a new track, and one dropped on a column's title joins that track.
 
 ## History (2026-10-24)
 

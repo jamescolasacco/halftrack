@@ -838,6 +838,7 @@ Browser Places ([contract](research/browser-places-contract.md)). Defaults where
 - **The Current Project.** It lists the project's media folder (`<name> Assets`), as Halftrack keeps no project folder of its own beside the project file.
 - **A folder added.** It joins Places last and opens; one already there opens. A folder removed while showing returns the browser to Samples. Places are kept with the preferences and survive a preferences reset, as the reference keeps them apart from its settings.
 - **Show in Browser.** A file opens in the place holding it, the Current Project first, then the user folders, then the User Library; elsewhere, in Samples. Where the reference shows a file outside every place was not read.
+- **Drop areas** ([contract](research/browser-places-contract.md#drop-areas-and-several-sounds-2026-10-24)). Halftrack's Main column follows the last column, so the Session's drop area is right of it rather than between the tracks and the returns. With Cmd/Ctrl, several sounds go into the next empty audio tracks in the Arrangement, or along the audio tracks of a Session scene, skipping MIDI tracks and returns. New tracks are made when those run out. Where the reference puts each sound then was not read. Sounds dropped outside the Arrangement's lanes, its mixer included, go at the insert marker into the first empty audio track, or a new one, as before.
 
 Open Recent Project ([menu contract](research/main-menu-contract.md)). Defaults where the reference was not read:
 

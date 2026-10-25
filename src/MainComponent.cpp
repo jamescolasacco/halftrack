@@ -3846,6 +3846,12 @@ private:
             }
             g.restoreState();
             g.setColour (line); g.drawVerticalLine (tw, 0.0f, (float) getHeight());
+            // The drop area under the tracks' headers, which makes a track of what is dropped there.
+            if (const auto drop = juce::Rectangle<int> (tw, owner.lanesHeight, getWidth() - tw, getHeight() - owner.lanesHeight); drop.getHeight() >= 30)
+            {
+                g.setColour (muted.withAlpha (0.8f)); g.setFont (font (11.5f));
+                g.drawFittedText ("Drop Files and Devices Here", drop.withHeight (juce::jmin (drop.getHeight(), 60)).reduced (8, 0), juce::Justification::centred, 2);
+            }
         }
         void mouseDown (const juce::MouseEvent& e) override
         {
@@ -5254,6 +5260,12 @@ private:
                 g.setColour (track.launcherActive ? orange : muted); g.fillRect (stop.getCentreX() - 4, stop.getCentreY() - 4, 8, 8);
             }
             g.restoreState();
+            // The drop area right of the tracks, which makes a track of what is dropped there.
+            if (const auto area = dropArea(); area.getWidth() >= 90)
+            {
+                g.setColour (muted.withAlpha (0.8f)); g.setFont (font (11.5f));
+                g.drawFittedText ("Drop Files and Devices Here", area.withHeight (juce::jmin (area.getHeight(), 120)).reduced (8, 0), juce::Justification::centred, 2);
+            }
             // Master column: scene launchers, with Stop All Clips under them.
             const int sceneX = masterX();
             const auto master = juce::Rectangle<int> (sceneX, 0, sceneWidth, headerHeight).reduced (1, 0).withTrimmedBottom (1);
@@ -5352,6 +5364,21 @@ private:
             g.setColour (slotColour.darker (0.15f)); g.fillRect (stop);
             g.setColour (active ? orange : muted); g.fillRect (stop.getCentreX() - 4, stop.getCentreY() - 4, 8, 8);
         }
+        // The drop area right of the Main column, which follows the last column, over the clip slots,
+        // as the reference's Session has one right of its tracks.
+        juce::Rectangle<int> dropArea() const
+        {
+            const int left = masterX() + sceneWidth;
+            return { left, gridTop, juce::jmax (0, getWidth() - scrollSize - left), gridArea().getHeight() };
+        }
+        // The scene row of the drop area under the point, at most one past the last scene; -1 off it.
+        int dropAreaScene (juce::Point<int> point) const
+        {
+            if (! dropArea().contains (point)) return -1;
+            return juce::jlimit (0, (int) owner.state.scenes.size(), (int) ((point.y - gridTop) / (double) rowHeight + offsetScene));
+        }
+        // The track whose column is under x, at any height: its title, slots, stop button or strip.
+        int trackColumnAt (int x) const { const int c = columnAt (x); return c >= 0 ? columns[(size_t) c].track : -1; }
         // Geometry used by pointer handlers and their tests.
         juce::Point<float> groupFoldPoint (int group) const { return { (float) columnX (groupColumnOf (group)) + 8.0f, headerHeight / 2.0f }; }
         juce::Point<float> groupLaunchPoint (int group, int scene) const { return { (float) columnX (groupColumnOf (group)) + 10.0f, (float) sceneY (scene) + rowHeight / 2.0f }; }
@@ -5881,6 +5908,8 @@ private:
         }
         // The Main strip follows the last strip, or keeps the right edge once the strips scroll.
         int mainX() const { return juce::jlimit (0, stripsWidth(), (int) columns.size() * columnWidth - (int) offsetX); }
+        bool onMain (int x) const { return x >= mainX() && x < mainX() + mainWidth; }
+        int trackOfColumn (int column) const { return column >= 0 && column < (int) columns.size() ? columns[(size_t) column].track : -1; }
         juce::Point<float> titlePoint (int column) const { return { (float) columnX (column) + columnWidth / 2.0f, titleHeight / 2.0f }; }
         juce::Point<float> groupFoldPoint (int group) const { return { (float) columnX (groupColumnOf (group)) + 8.0f, titleHeight / 2.0f }; }
         void resized() override
@@ -11722,38 +11751,62 @@ private:
                 if (indices.first >= 0 && indices.second >= 0) safe->importLauncherFiles ({ fc.getResult().getFullPathName() }, indices.first, indices.second);
             });
     }
-    void importLauncherFiles (const juce::StringArray& files, int track, int firstScene)
+    // Sounds dropped into the Session, in name order. As the reference lays several out (its manual,
+    // 7.4), they go down the track from the slot, or with acrossTracks (Cmd/Ctrl held as they drop)
+    // one to a track along the audio tracks from it, new audio tracks made after the others when
+    // they run out. Without a track (track < 0, the drop area right of the tracks) they go into a
+    // new audio track, or new tracks.
+    void importLauncherFiles (const juce::StringArray& files, int track, int firstScene, bool acrossTracks = false)
     {
-        if (track < 0 || track >= (int) state.tracks.size() || firstScene < 0) return;
-        if (state.tracks[(size_t) track].isMidi || state.tracks[(size_t) track].isReturn) { report (juce::Result::fail ("Drop audio into an audio track's Session slot.")); return; }
+        if (track >= (int) state.tracks.size() || firstScene < 0) return;
+        if (track >= 0 && (state.tracks[(size_t) track].isMidi || state.tracks[(size_t) track].isReturn)) { report (juce::Result::fail ("Drop audio into an audio track's Session slot.")); return; }
         std::vector<juce::File> audioFiles;
         for (const auto& file : files) if (isAudio (juce::File (file))) audioFiles.emplace_back (file);
         std::sort (audioFiles.begin(), audioFiles.end(), [] (const auto& a, const auto& b) { return a.getFileName().compareNatural (b.getFileName()) < 0; });
         if (audioFiles.empty()) return;
-        for (int i = 0; i < (int) audioFiles.size(); ++i)
+        // Each sound's track, by ID (empty for a new one), and scene.
+        std::vector<std::pair<juce::String, int>> places;
+        if (! acrossTracks)
+            for (int i = 0; i < (int) audioFiles.size(); ++i) places.push_back ({ track >= 0 ? state.tracks[(size_t) track].id : juce::String(), firstScene + i });
+        else
         {
-            const int scene = firstScene + i;
-            if (scene < (int) state.tracks[(size_t) track].slots.size() && state.tracks[(size_t) track].slots[(size_t) scene].hasClip)
-            { report (juce::Result::fail ("A destination slot already contains a clip. Clear it before importing a replacement.")); return; }
+            for (int t = juce::jmax (0, track); track >= 0 && t < (int) state.tracks.size() && places.size() < audioFiles.size(); ++t)
+                if (const auto& candidate = state.tracks[(size_t) t]; ! candidate.isMidi && ! candidate.isReturn && launcher.columnOf (t) >= 0) places.push_back ({ candidate.id, firstScene });
+            while (places.size() < audioFiles.size()) places.push_back ({ juce::String(), firstScene });
         }
+        for (const auto& [id, scene] : places)
+            if (const int t = trackIndex (id); t >= 0 && scene < (int) state.tracks[(size_t) t].slots.size() && state.tracks[(size_t) t].slots[(size_t) scene].hasClip)
+            { report (juce::Result::fail ("A destination slot already contains a clip. Clear it before importing a replacement.")); return; }
         session.beginEditGesture ("Import Session clips");
-        bool imported = false;
-        for (int i = 0; i < (int) audioFiles.size(); ++i)
+        int firstTrack = -1;
+        juce::String newTrack, lastTrack = track >= 0 ? state.tracks[(size_t) track].id : juce::String();
+        for (size_t i = 0; i < audioFiles.size(); ++i)
         {
-            const int scene = firstScene + i;
+            auto [id, scene] = places[i];
             while (scene >= (int) state.scenes.size())
             {
                 const auto result = session.addScene(); report (result); refresh();
                 if (result.failed()) { session.endEditGesture(); return; }
             }
-            const auto result = session.importAudioToSlot (audioFiles[(size_t) i], track, scene); report (result); refresh();
+            // A new track goes after the last one used; down one track, the sounds share it.
+            if (id.isEmpty() && ! acrossTracks && newTrack.isNotEmpty()) id = newTrack;
+            if (id.isEmpty())
+            {
+                const auto before = trackIds();
+                const auto result = session.addAudioTrack ({}, lastTrack); report (result); refresh();
+                if (result.failed()) break;
+                id = newTrack = state.tracks[(size_t) createdTrack (before)].id;
+            }
+            const int t = trackIndex (id);
+            const auto result = session.importAudioToSlot (audioFiles[i], t, scene); report (result); refresh();
             if (result.failed()) break;
-            imported = true;
+            if (firstTrack < 0) firstTrack = trackIndex (id);
+            lastTrack = id;
         }
         session.endEditGesture();
-        if (imported)
+        if (firstTrack >= 0)
         {
-            showSession = true; showPiano = false; selectLauncherSlot (track, firstScene);
+            showSession = true; showPiano = false; selectLauncherSlot (firstTrack, firstScene);
             browserFolder = audioFiles.front().getParentDirectory(); browserCategory = BrowserCategory::samples; updateBrowser(); resized(); launcher.scrollSelectionIntoView();
         }
     }
@@ -14806,7 +14859,10 @@ private:
                 if (! files.isEmpty()) safe->importFiles (files, safe->selectedTrack, safe->state.insertMarker);
             });
     }
-    void importFiles (const juce::StringArray& files, int track, double at)
+    // Sounds dropped or imported into the Arrangement, in name order. As the reference lays several
+    // out (its manual, 7.4), they go end to end on one track, or with acrossTracks (Cmd/Ctrl held
+    // as they drop) one to a track from the track under the pointer, each at the same time.
+    void importFiles (const juce::StringArray& files, int track, double at, bool acrossTracks = false)
     {
         if (track >= 0 && track < (int) state.tracks.size() && state.tracks[(size_t) track].isReturn)
         { report (juce::Result::fail ("Return tracks receive audio from sends. Import clips into an audio track.")); return; }
@@ -14832,20 +14888,35 @@ private:
         const bool validSelection = track >= 0 && track < (int) before.tracks.size() && ! before.tracks[(size_t) track].isMidi;
         int nextTrack = validSelection ? track : 0;
         int imported = 0, firstImportedTrack = -1;
+        double nextStart = at; // Where the next sound starts on the first one's track.
         session.beginEditGesture ("Import audio");
         for (const auto& file : audioFiles)
         {
             before = session.snapshot();
             int target = -1;
             if (imported == 0 && validSelection) target = track;
+            else if (imported > 0 && ! acrossTracks) target = firstImportedTrack;
             else
                 for (int i = nextTrack; i < (int) before.tracks.size(); ++i)
                     if (! before.tracks[(size_t) i].isMidi && ! before.tracks[(size_t) i].isReturn && before.tracks[(size_t) i].clips.empty()) { target = i; break; }
             const bool reusedEmptyTrack = target >= 0 && before.tracks[(size_t) target].clips.empty();
-            const auto result = session.importAudio (file, target, at);
+            std::set<juce::String> existing;
+            if (target >= 0) for (const auto& clip : before.tracks[(size_t) target].clips) existing.insert (clip.id);
+            const auto start = acrossTracks ? at : nextStart;
+            const auto result = session.importAudio (file, target, start);
             report (result);
             if (result.failed()) continue;
-            if (target < 0) target = (int) session.snapshot().tracks.size() - 1;
+            if (target < 0)
+            {
+                // The track the import made, before the returns.
+                const auto after = session.snapshot();
+                for (int i = 0; i < (int) after.tracks.size() && target < 0; ++i)
+                    if (std::none_of (before.tracks.begin(), before.tracks.end(), [&] (const auto& t) { return t.id == after.tracks[(size_t) i].id; })) target = i;
+                if (target < 0) continue;
+            }
+            const auto placed = session.snapshot(); // Kept, as the loop below reads into it.
+            for (const auto& clip : placed.tracks[(size_t) target].clips)
+                if (! existing.count (clip.id) && std::abs (clip.start - start) < 1e-6) nextStart = juce::jmax (nextStart, clip.start + clip.length);
             if (reusedEmptyTrack) report (session.renameTrack (target, file.getFileNameWithoutExtension()));
             if (firstImportedTrack < 0)
             {
@@ -16923,9 +16994,22 @@ private:
         }
         if (showSession)
         {
-            const auto cell = launcher.cellAt (launcher.getLocalPoint (this, at));
-            if (cell.first < 0) return;
-            selectedChain.clear(); selectTrack (cell.first); refresh();
+            // Onto the track whose column it is over, at any height, or into the drop area for a new track.
+            const auto local = launcher.getLocalPoint (this, at);
+            selectedChain.clear();
+            if (const int track = launcher.trackColumnAt (local.x); track >= 0 && local.y >= 0) { selectTrack (track); refresh(); }
+            else if (launcher.dropArea().withBottom (launcher.getHeight()).contains (local)) selectedTrack = -1; // useDeviceRow makes one.
+            else return;
+        }
+        else if (arrangementMixer.isVisible() && arrangementMixer.getBounds().contains (at))
+        {
+            // Onto a strip of the Arrangement's mixer, the track's; past them, a new one.
+            const int x = arrangementMixer.getLocalPoint (this, at).x, column = arrangementMixer.columnAt (x);
+            const int track = arrangementMixer.trackOfColumn (column);
+            selectedChain.clear();
+            if (track >= 0) { selectTrack (track); refresh(); }
+            else if (column >= 0 || arrangementMixer.onMain (x)) return; // A group's strip, or the Main's.
+            else selectedTrack = -1;
         }
         else
         {
@@ -17068,17 +17152,21 @@ private:
             report (juce::Result::fail ("Audio cannot be dropped into the MIDI editor. Choose an empty audio slot in Session."));
             return;
         }
+        // Cmd/Ctrl held as several sounds drop lays them out one to a track, as the reference's does.
+        const bool acrossTracks = juce::ModifierKeys::getCurrentModifiersRealtime().isCommandDown();
         if (showSession)
         {
-            const auto cell = launcher.cellAt (launcher.getLocalPoint (this, juce::Point<int> (x, y)));
-            if (cell.first >= 0 && cell.second >= 0) importLauncherFiles (files, cell.first, cell.second);
+            const auto local = launcher.getLocalPoint (this, juce::Point<int> (x, y));
+            const auto cell = launcher.cellAt (local);
+            if (cell.first >= 0 && cell.second >= 0) importLauncherFiles (files, cell.first, cell.second, acrossTracks);
+            else if (const int scene = launcher.dropAreaScene (local); scene >= 0) importLauncherFiles (files, -1, scene, acrossTracks);
             return;
         }
         const auto p = canvas.getLocalPoint (this, juce::Point<int> (x, y));
         const auto inside = viewport.getBounds().contains (x, y) && p.x < canvas.timelineWidth();
         const auto index = inside ? trackAtY (p.y) : -1;
         const auto time = inside ? juce::jmax (0.0, viewStart + p.x / pixelsPerSecond) : state.insertMarker;
-        importFiles (files, index, snapSeconds (time));
+        importFiles (files, index, snapSeconds (time), acrossTracks);
     }
 };
 
@@ -21033,6 +21121,69 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         check (collections.contains (key, 3), "dropped on a collection, an item joins it");
         report (collections.toggle (key, 3));
         check (session.newProject().wasOk(), "leave the drags"); refresh();
+    }
+    {
+        // Several sounds dropped at once, laid out as the reference's manual (7.4) says: end to end on one
+        // track in the Arrangement and down one track in the Session, or with Cmd/Ctrl one to a track; and
+        // the Session's drop area right of the tracks, which makes a track of what lands there.
+        check (session.newProject().wasOk(), "a fresh project for dropping several sounds"); refresh();
+        const auto folder = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("halftrack-drops-" + juce::Uuid().toString());
+        check (folder.createDirectory().wasOk() && audioFixture.copyFileTo (folder.getChildFile ("Drop 1.wav")) && audioFixture.copyFileTo (folder.getChildFile ("Drop 2.wav")), "two sounds to drop");
+        const juce::StringArray sounds { folder.getChildFile ("Drop 2.wav").getFullPathName(), folder.getChildFile ("Drop 1.wav").getFullPathName() };
+        const auto clipNamed = [this] (const juce::String& name, int& track, double& start)
+        {
+            for (int t = 0; t < (int) state.tracks.size(); ++t) for (const auto& clip : state.tracks[(size_t) t].clips) if (clip.name == name) { track = t; start = clip.start; return true; }
+            return false;
+        };
+        showArrangementView(); closeClipView(); refresh(); resized();
+        int audio = 0; while (audio < (int) state.tracks.size() && (state.tracks[(size_t) audio].isMidi || state.tracks[(size_t) audio].isReturn)) ++audio;
+        const auto tracks = state.tracks.size();
+        check (audio + 1 < (int) tracks && ! state.tracks[(size_t) audio + 1].isMidi && state.tracks[(size_t) audio].clips.empty(), "two empty audio tracks");
+        const auto lane = getLocalPoint (&canvas, juce::Point<int> (1, laneY (audio) + laneHeight (audio) / 2));
+        filesDropped (sounds, lane.x, lane.y); refresh();
+        {
+            const auto& clips = state.tracks[(size_t) audio].clips;
+            juce::String laid; for (const auto& clip : clips) laid << clip.name << " at " << clip.start << " for " << clip.length << "; ";
+            check (state.tracks.size() == tracks && clips.size() == 2 && clips[0].name == "Drop 1" && clips[1].name == "Drop 2"
+                       && std::abs (clips[1].start - (clips[0].start + clips[0].length)) < 1e-6,
+                   "in the Arrangement, two sounds dropped on a track go end to end on it, in name order (" + laid + juce::String ((int) state.tracks.size()) + " tracks)");
+        }
+        session.undo(); refresh();
+        check (state.tracks[(size_t) audio].clips.empty(), "one undo step takes them back");
+        importFiles (sounds, audio, 0, true); refresh();
+        {
+            int first = -1, second = -1; double firstStart = -1, secondStart = -1;
+            check (clipNamed ("Drop 1", first, firstStart) && clipNamed ("Drop 2", second, secondStart) && first == audio && second != audio
+                       && std::abs (firstStart) < 1e-9 && std::abs (secondStart) < 1e-9 && state.tracks.size() == tracks,
+                   "with Cmd/Ctrl they go one to a track, each at the drop's time, into the next empty audio track");
+        }
+        session.undo(); refresh();
+        showSessionView(); refresh();
+        importLauncherFiles (sounds, audio, 0, true); refresh();
+        check (state.tracks[(size_t) audio].slots[0].hasClip && state.tracks[(size_t) audio].slots[0].clip.name == "Drop 1"
+                   && state.tracks[(size_t) audio + 1].slots[0].hasClip && state.tracks[(size_t) audio + 1].slots[0].clip.name == "Drop 2",
+               "in the Session, with Cmd/Ctrl they go one to a track along the scene");
+        session.undo(); refresh();
+        check (! state.tracks[(size_t) audio].slots[0].hasClip && ! state.tracks[(size_t) audio + 1].slots[0].hasClip, "and one undo step takes them back");
+        const auto area = launcher.dropArea();
+        check (area.getWidth() > 0 && area.getX() == launcher.masterX() + LauncherGrid::sceneWidth, "the Session has a drop area right of its tracks and the Main column");
+        const auto inArea = getLocalPoint (&launcher, juce::Point<int> (area.getCentreX(), LauncherGrid::gridTop + LauncherGrid::rowHeight / 2));
+        const auto before = trackIds();
+        filesDropped (sounds, inArea.x, inArea.y); refresh();
+        {
+            const int made = state.tracks.size() == tracks + 1 ? createdTrack (before) : -1;
+            check (made >= 0 && ! state.tracks[(size_t) made].isMidi && state.tracks[(size_t) made].slots.size() >= 2 && state.tracks[(size_t) made].slots[0].clip.name == "Drop 1"
+                       && state.tracks[(size_t) made].slots[1].clip.name == "Drop 2", "two sounds dropped there make a new audio track, down it in name order");
+        }
+        session.undo(); refresh();
+        check (state.tracks.size() == tracks, "and one undo step takes the track back");
+        itemDropped (SourceDetails (juce::String (browserDragPrefix) + "device:" + juce::String ((int) Session::EffectKind::saturator), &browserList, inArea));
+        check (state.tracks.size() == tracks + 1 && state.tracks[(size_t) createdTrack (before)].plugins.size() == 1, "a device dropped there gets a new track of its own");
+        const auto title = getLocalPoint (&launcher, juce::Point<int> (launcher.columnX (launcher.columnOf (audio)) + 30, LauncherGrid::headerHeight / 2));
+        itemDropped (SourceDetails (juce::String (browserDragPrefix) + "device:" + juce::String ((int) Session::EffectKind::saturator), &browserList, title));
+        check (state.tracks[(size_t) audio].plugins.size() == 1 && selectedTrack == audio, "dropped on a column's title, a device joins that track");
+        folder.deleteRecursively();
+        check (session.newProject().wasOk(), "leave the drops"); refresh();
     }
     {
         // Hot-Swap, as the reference's: Q or a device's button links it to the browser, which shows it
