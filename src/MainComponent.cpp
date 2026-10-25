@@ -14832,6 +14832,26 @@ private:
                      : area == EditArea::scenes ? row.scenes : 0;
         return 0;
     }
+    // The selected tracks' or group's activators: all switched off if any is on, otherwise all on, as one
+    // undo step.
+    void toggleHeaderActivators()
+    {
+        const auto ids = headerSelection();
+        bool anyOn = false;
+        for (const auto& id : ids)
+        {
+            if (const auto* group = groupInfo (id)) anyOn = anyOn || ! group->mute;
+            else if (const auto t = trackIndex (id); t >= 0) anyOn = anyOn || ! state.tracks[(size_t) t].mute;
+        }
+        session.beginEditGesture ("Activate tracks");
+        for (const auto& id : ids)
+        {
+            if (groupInfo (id) != nullptr) report (session.setGroupMute (id, anyOn));
+            else if (const auto t = trackIndex (id); t >= 0) report (session.setTrackMute (t, anyOn));
+        }
+        session.endEditGesture();
+        refresh();
+    }
     // The header that a header command names: the selected group, or the selected track.
     juce::String headerTarget() const
     {
@@ -14861,6 +14881,17 @@ private:
         if (const auto* clip = area == EditArea::arrangement ? loneClip() : nullptr; clip != nullptr
             && (command == menuCut || command == menuCopy || command == menuDuplicate || command == 22))
             return { command, {}, ! state.recording };
+        // A selected header's activator, which 0 switches, as the reference's Deactivate Selected Track key
+        // does (its manual, section 42.19); the headers' menu has no entry for it.
+        if (area == EditArea::headers && command == menuActivate)
+        {
+            const auto ids = headerSelection();
+            bool anyOn = false;
+            for (const auto& id : ids)
+                anyOn = anyOn || (groupInfo (id) != nullptr ? ! groupInfo (id)->mute : trackIndex (id) >= 0 && ! state.tracks[(size_t) trackIndex (id)].mute);
+            return { menuActivate, juce::String (anyOn ? "Deactivate " : "Activate ") + (groupInfo (headerTarget()) != nullptr ? "Group" : ids.size() > 1 ? "Tracks" : "Track"),
+                     ! ids.isEmpty() && ! state.recording };
+        }
         const auto id = areaItemId (area, command);
         if (id == 0) return {};
         for (juce::PopupMenu::MenuItemIterator items (menu, true); items.next();)
@@ -14921,6 +14952,7 @@ private:
         const auto menu = areaMenu (area);
         const auto found = areaItem (area, menu, command);
         if (! found.enabled) return;
+        if (area == EditArea::headers && command == menuActivate) { toggleHeaderActivators(); return; }
         if (area == EditArea::text)
         {
             auto* editor = focusedText();
@@ -22969,6 +23001,16 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
             check (state.tracks[(size_t) firstTrack].slots[0].playing || state.tracks[(size_t) firstTrack].slots[0].queued, "Return with the scene column clicked launches the scene");
             session.stopAllLauncherClips(); session.stop(); pumpSyntheticTestDevice (session, 8); refresh();
             check (handleKey (juce::KeyPress (juce::KeyPress::escapeKey)) && headerFocus && editArea() == EditArea::headers, "Escape jumps to the selected track's title bar, where Edit's commands then act");
+            {
+                // There 0 switches the selected track's activator, as the reference's Deactivate Selected Track key.
+                const auto on = ! state.tracks[(size_t) selectedTrack].mute;
+                const auto steps = session.undoSteps().size();
+                const auto label = areaItem (EditArea::headers, areaMenu (EditArea::headers), menuActivate).text;
+                check (on && label == "Deactivate Track" && handleKey (juce::KeyPress ('0', {}, '0')) && state.tracks[(size_t) selectedTrack].mute && session.undoSteps().size() == steps + 1,
+                       "on the selected track's title bar, Edit's Deactivate Track (0) switches its activator off, one undo step, as the reference's key does");
+                check (areaItem (EditArea::headers, areaMenu (EditArea::headers), menuActivate).text == "Activate Track" && handleKey (juce::KeyPress ('0', {}, '0'))
+                           && ! state.tracks[(size_t) selectedTrack].mute, "and Activate Track (0) on again");
+            }
             headerFocus = false; clickedArea = Area::session;
             while (session.undoSteps().size() > historyBefore && session.canUndo()) session.undo();
             showArrangementView(); refresh();

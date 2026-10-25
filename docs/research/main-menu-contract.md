@@ -25,7 +25,7 @@ Nothing was launched, no preferences or Sets were read, and nothing was decrypte
 The reference finds an Edit command's handler from the focused view. Halftrack keeps the area last clicked, or last focused from Navigate (`editArea`): text being typed first, then the clip view's notes, the device view, the headers, a scene, the Session's slots, or the Arrangement. In each, the command does what that area's own menu or keys do:
 - **Arrangement:** the clip menu's command over the time selection or the selected clips. A lone clip selected without a time selection is cut, copied, duplicated or deleted as a clip, as its keys do.
 - **Slots:** the slot menu's command. Split becomes Add or Remove Stop Button, as the reference's Cmd+E does in the Session.
-- **Headers:** the header menu's command for the selected tracks or group.
+- **Headers:** the header menu's command for the selected tracks or group, and Deactivate or Activate Track (0), which switches their activators, all off if any is on, as the reference's Deactivate Selected Track key does (manual section 42.19; 2026-10-25). One undo step.
 - **A scene:** Duplicate, Delete, Rename and Edit Info Text from the scene menu.
 - **Notes:** Cut, Copy, Paste, Duplicate, Delete, Split, Deactivate, Select All and Quantize on the notes, Loop Selection on the note editor's selected timespan, as the clip view's keys do, and Invert Selection, which only the clip view has, as in the reference.
 - **Devices:** Delete, and Group and Ungroup making and breaking racks.
