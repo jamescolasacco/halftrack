@@ -2220,6 +2220,12 @@ private:
         valueControl = control;
     }
     // Whether a component shows in the window: it and everything it sits in, up to this, are visible.
+    // The audio device's sample rate, or 48 kHz while none runs.
+    double runningSampleRate() const
+    {
+        auto* device = session.audioDeviceManager().getCurrentAudioDevice();
+        return device != nullptr && device->getCurrentSampleRate() > 0 ? device->getCurrentSampleRate() : 48000.0;
+    }
     bool shownHere (const juce::Component* c) const
     {
         for (; c != nullptr && c != this; c = c->getParentComponent()) if (! c->isVisible()) return false;
@@ -2815,13 +2821,19 @@ private:
             delay.setSliderStyle (juce::Slider::LinearBar); delay.setRange (-Session::maximumTrackDelayMs, Session::maximumTrackDelayMs, .1);
             delay.setDoubleClickReturnValue (true, 0); delay.setWantsKeyboardFocus (false);
             delay.setColour (juce::Slider::trackColourId, themes::colour (0xff4a4a4a)); delay.setColour (juce::Slider::textBoxTextColourId, ink);
-            delay.textFromValueFunction = [] (double v) { return juce::String (v, 1) + " ms"; };
+            delay.textFromValueFunction = [this] (double v) { return delayInSamples ? juce::String (juce::roundToInt (v)) + " smp" : juce::String (v, 1) + " ms"; };
             delay.valueFromTextFunction = [] (const juce::String& text) { return text.retainCharacters ("-.0123456789").getDoubleValue(); };
-            delay.setTooltip ("Track delay: positive values play this track later, negative values earlier. Double-click for 0 ms.");
+            delay.setTooltip ("Track delay: positive values play this track later, negative values earlier. Double-click for 0.");
             delay.onDragStart = [this] { owner.session.beginEditGesture ("Track delay"); };
             delay.onDragEnd = [this] { owner.session.endEditGesture(); };
-            delay.onValueChange = [this] { owner.report (owner.session.setTrackDelay (trackId, delay.getValue())); };
+            delay.onValueChange = [this]
+            { owner.report (delayInSamples ? owner.session.setTrackDelaySamples (trackId, std::round (delay.getValue())) : owner.session.setTrackDelay (trackId, delay.getValue())); };
             delay.updateText();
+            // The unit toggle to the right of the slider, milliseconds or samples, as the reference's (its manual, section 18.7).
+            addChildComponent (delayUnit);
+            delayUnit.setName ("Track delay unit"); delayUnit.setWantsKeyboardFocus (false); delayUnit.setMouseClickGrabsKeyboardFocus (false);
+            delayUnit.setTooltip ("Track Delay's unit: milliseconds, or samples, which stay the same number of samples at any sample rate");
+            delayUnit.onClick = [this] { owner.report (owner.session.setTrackDelayInSamples (trackId, ! delayInSamples)); owner.refresh(); };
             if (columnLayout)
             {
                 // Audio To: Master, Sends Only (only the sends are heard) or another audio track.
@@ -2981,8 +2993,17 @@ private:
             monitor.setMode (track.monitor);
             if (columnLayout) { syncSends (track); syncOutput (track); }
             if (! columnLayout) syncAutomation (track);
-            if (! delay.isMouseButtonDown()) delay.setValue (track.delayMs, juce::dontSendNotification);
+            if (track.delayInSamples != delayInSamples || delayRangeRate != owner.runningSampleRate())
+            {
+                // Samples run a second each way at the running rate; milliseconds a second each way.
+                delayInSamples = track.delayInSamples; delayRangeRate = owner.runningSampleRate();
+                if (delayInSamples) delay.setRange (-delayRangeRate, delayRangeRate, 1); else delay.setRange (-Session::maximumTrackDelayMs, Session::maximumTrackDelayMs, .1);
+                delayUnit.setButtonText (delayInSamples ? "smp" : "ms");
+            }
+            if (! delay.isMouseButtonDown()) delay.setValue (delayInSamples ? track.delaySamples : track.delayMs, juce::dontSendNotification);
+            delay.updateText();
             delay.setEnabled (! track.frozen && ! owner.session.isExporting() && owner.session.delayCompensation()); // Unavailable without Delay Compensation, as the reference's.
+            delayUnit.setEnabled (delay.isEnabled()); delayUnit.setVisible (delay.isVisible());
             if (columnLayout)
             {
                 // Crossfader sides: A and B are exclusive toggles; neither leaves the track unassigned.
@@ -3012,7 +3033,7 @@ private:
                 for (auto* c : std::initializer_list<juce::Component*> { &gain, &mute, &solo }) c->setVisible (shown.mixer);
                 showPans (shown.mixer);
                 arm.setVisible (shown.mixer && ! returnTrack);
-                delay.setVisible (shown.trackDelay); sideA->setVisible (shown.crossfader); sideB->setVisible (shown.crossfader);
+                delay.setVisible (shown.trackDelay); delayUnit.setVisible (shown.trackDelay); sideA->setVisible (shown.crossfader); sideB->setVisible (shown.crossfader);
                 if (shown != laidOut) { laidOut = shown; resized(); }
             }
             repaint();
@@ -3030,7 +3051,7 @@ private:
                 input.setVisible (controls.inOut && ! returnTrack); monitor.setVisible (controls.inOut && ! returnTrack);
                 inputDetail.setVisible (controls.inOut && ! returnTrack && inputDetailShown); sendMode.setVisible (controls.inOut && returnTrack);
                 gain.setVisible (controls.volume); showPans (controls.volume);
-                delay.setVisible (controls.trackOptions);
+                delay.setVisible (controls.trackOptions); delayUnit.setVisible (controls.trackOptions);
             }
             if (! automating) return;
             automationLane.setEnabled (choosers.sync (track));
@@ -3184,7 +3205,7 @@ private:
                     sideA->setBounds (5, bottom - 24, half, 20); sideB->setBounds (7 + half, bottom - 24, half, 20);
                 }
                 if (shown.crossfader) bottom -= 24;
-                delay.setBounds (5, bottom - 22, getWidth() - 10, 19);
+                delay.setBounds (5, bottom - 22, getWidth() - 38, 19); delayUnit.setBounds (getWidth() - 31, bottom - 22, 26, 19);
                 if (shown.trackDelay) bottom -= 22;
                 pan.setBounds ((getWidth() - 46) / 2, top + 2, 46, 50);
                 // The split pans stack Left over Right, labelled when the strip is wide enough.
@@ -3203,7 +3224,7 @@ private:
             monitor.setBounds (40 + half, 27, w - 44 - half, 18);
             sendMode.setBounds (76, 27, w - 80, 18);
             gain.setBounds (32, 49, half + 4, 20); pan.setBounds (40 + half, 49, w - 44 - half, 20);
-            delay.setBounds (32, 71, half + 4, 18); // Track Options' Track Delay, on a tall enough header.
+            delay.setBounds (32, 71, half - 24, 18); delayUnit.setBounds (10 + half, 71, 26, 18); // Track Options' Track Delay, on a tall enough header.
             // The split pans share the pan's place, Left beside Right.
             const int pans = w - 44 - half;
             leftSplit.setBounds (40 + half, 49, pans / 2 - 1, 20); rightSplit.setBounds (41 + half + pans / 2, 49, pans - pans / 2 - 1, 20);
@@ -3284,6 +3305,9 @@ private:
         LinkIndicator link;
         juce::TextButton mute { "M" }, solo { "S" }, arm { "R" };
         ValueSlider gain, pan, delay, leftSplit, rightSplit;
+        juce::TextButton delayUnit { "ms" };
+        bool delayInSamples = false;
+        double delayRangeRate = 0;
         juce::Label leftLabel { {}, "L" }, rightLabel { {}, "R" };
         bool splitPan = false;
         // The pan, or in Split Stereo mode the split pans, as the section showing them is shown.
@@ -25986,6 +26010,24 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         trackDelay->setValue (-12.5, juce::sendNotificationSync); refresh();
         bool delayed = false; for (const auto& track : state.tracks) delayed = delayed || std::abs (track.delayMs + 12.5) < 1e-9;
         check (delayed, "the delay field edits the real track delay");
+        {
+            // The unit toggle beside it switches the delay to samples, keeping it, and back.
+            int delayedTrack = -1;
+            for (int t = 0; t < (int) state.tracks.size(); ++t) if (std::abs (state.tracks[(size_t) t].delayMs + 12.5) < 1e-9) delayedTrack = t;
+            auto* unit = dynamic_cast<juce::Button*> (trackDelay->getParentComponent() != nullptr ? findNamed (*trackDelay->getParentComponent(), "Track delay unit") : nullptr);
+            check (delayedTrack >= 0 && unit != nullptr && unit->isVisible() && unit->getButtonText() == "ms" && unit->getX() > trackDelay->getRight() - 2,
+                   "a unit toggle to the right of Track Delay shows milliseconds, as the reference's");
+            unit->onClick(); refresh();
+            const auto expected = std::round (-12.5 * runningSampleRate() / 1000);
+            check (state.tracks[(size_t) delayedTrack].delayInSamples && state.tracks[(size_t) delayedTrack].delaySamples == expected && unit->getButtonText() == "smp"
+                       && trackDelay->getTextFromValue (trackDelay->getValue()) == juce::String ((int) expected) + " smp",
+                   "the toggle switches the delay to samples, keeping it, and the field shows samples");
+            trackDelay->setValue (240, juce::sendNotificationSync); refresh();
+            check (state.tracks[(size_t) delayedTrack].delaySamples == 240, "the field then sets samples");
+            unit->onClick(); refresh();
+            check (! state.tracks[(size_t) delayedTrack].delayInSamples && unit->getButtonText() == "ms" && std::abs (state.tracks[(size_t) delayedTrack].delayMs - 240 * 1000.0 / runningSampleRate()) < 1e-9,
+                   "and back to milliseconds, keeping it");
+        }
         menuItemSelected (menuDelayCompensation, 0);
         check (! session.delayCompensation() && ! trackDelay->isEnabled(), "Options > Delay Compensation switches it off, and Track Delay is unavailable meanwhile");
         menuItemSelected (menuDelayCompensation, 0);

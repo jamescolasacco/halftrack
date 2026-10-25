@@ -427,7 +427,7 @@ Tracks carry an undoable `halftrackCrossfade` side (0 none, 1 A, 2 B) and the ed
 
 ## Track Delay
 
-`TrackDelayPlugin` (in `src/Session.cpp`) sits after a track's devices and before its sends and mixer once a delay is set. Positive delays run through a ring buffer allocated in `initialise`; negative delays are reported as latency, and the engine's delay compensation moves the track earlier. Device insertion keeps new devices ahead of it. See the [track delay contract](research/track-delay-contract.md).
+`TrackDelayPlugin` (in `src/Session.cpp`) sits after a track's devices and before its sends and mixer once a delay is set. Positive delays run through a ring buffer allocated in `initialise`; negative delays are reported as latency, and the engine's delay compensation moves the track earlier. It keeps the delay in milliseconds or, with `halftrackDelayInSamples`, in whole samples (`halftrackDelaySamples`), reading the unit and value through atomics on the audio thread. Device insertion keeps new devices ahead of it. See the [track delay contract](research/track-delay-contract.md).
 
 ## MIDI controller lanes
 

@@ -2781,3 +2781,7 @@ UI area. A comparison of the reference manual's shortcut chapter with Halftrack'
 ## Crossfader curves — 2026-10-25
 
 Engine and UI areas. The crossfader now follows the reference's seven curves, Dipped, Intermediate, Constant Power, Slow Fade, Slow Cut, Fast Cut and Transition, sampled into tables and read as a static reading of its code gives them, with Constant Power as its default Set's. Transition scales the side's fader position before the volume law. The crossfader's right-click menu chooses the curve, one undo step, kept with the project and validated on load ([contract](research/crossfader-contract.md)). Before, Halftrack used a dipless law near the reference's Slow Fade; projects saved then now take Constant Power. Checked by the crossfade and UI suites.
+
+## Track Delay in samples — 2026-10-25
+
+Engine and UI areas. As the reference's manual describes, a toggle to the right of each Track Delay keeps the delay in milliseconds or samples. Switching keeps the delay heard at the running rate; a delay in samples plays that many samples at any rate, from -192000 to +192000. It is saved, undoable and validated on load ([contract](research/track-delay-contract.md)). Checked by the track delay and UI suites.

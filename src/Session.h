@@ -535,6 +535,9 @@ public:
         bool folded = false; // Folded in the Arrangement to its header strip.
         CrossfadeAssign crossfade = CrossfadeAssign::none;
         double delayMs = 0; // Track Delay: positive plays later, negative earlier.
+        // Its unit: kept in samples, it stays that many samples at any rate; delayMs then follows the rate.
+        bool delayInSamples = false;
+        double delaySamples = 0;
         SendMode sendMode = SendMode::post;
         std::vector<SendInfo> sends;
         SynthSettings synth;
@@ -1410,6 +1413,13 @@ public:
     // -1000 ms to +1000 ms; negative delays use the engine's delay compensation.
     static constexpr double maximumTrackDelayMs = 1000;
     juce::Result setTrackDelay (const juce::String& trackId, double milliseconds);
+    // Track Delay in samples, as the reference's unit toggle sets it (its manual, section 18.7): a whole
+    // number of samples from -192000 to +192000, played as at most a second at the running rate.
+    // Setting one switches the track's unit to samples; switching the unit keeps the delay heard at the
+    // running rate. Each is one undo step.
+    static constexpr double maximumTrackDelaySamples = 192000;
+    juce::Result setTrackDelaySamples (const juce::String& trackId, double samples);
+    juce::Result setTrackDelayInSamples (const juce::String& trackId, bool samples);
     juce::Result setCrossfader (float position);
     static constexpr int crossfadeCurveCount = 7;
     static juce::String crossfadeCurveName (CrossfadeCurve);

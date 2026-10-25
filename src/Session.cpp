@@ -1003,6 +1003,7 @@ private:
 // A negative delay reports that much latency instead, so the engine's delay compensation
 // holds every other path back and the track plays early.
 const juce::Identifier trackDelayProperty { "halftrackDelayMs" };
+const juce::Identifier trackDelaySamplesProperty { "halftrackDelaySamples" }, trackDelayInSamplesProperty { "halftrackDelayInSamples" };
 class TrackDelayPlugin final : public te::Plugin
 {
 public:
@@ -1011,7 +1012,11 @@ public:
     explicit TrackDelayPlugin (te::PluginCreationInfo info) : Plugin (info)
     {
         milliseconds.referTo (state, trackDelayProperty, getUndoManager(), 0.0);
+        samples.referTo (state, trackDelaySamplesProperty, getUndoManager(), 0.0);
+        inSamples.referTo (state, trackDelayInSamplesProperty, getUndoManager(), false);
         delayMs.store (milliseconds.get(), std::memory_order_relaxed);
+        delaySamples.store (samples.get(), std::memory_order_relaxed);
+        sampleBased.store (inSamples.get(), std::memory_order_relaxed);
         compensated.store (edit.state.getProperty (delayCompensationProperty, true), std::memory_order_relaxed);
     }
     // Without Delay Compensation the delay does nothing, as the reference's Track Delay is unavailable then.
@@ -1021,10 +1026,12 @@ public:
     juce::String getSelectableDescription() override { return getName(); }
     bool takesAudioInput() override { return true; }
     bool takesMidiInput() override { return true; }
-    bool producesAudioWhenNoAudioInput() override { return milliseconds.get() > 0; }
+    bool producesAudioWhenNoAudioInput() override { return delayedSeconds() > 0; }
     int getNumOutputChannelsGivenInputs (int inputs) override { return juce::jmax (1, juce::jmin (2, inputs)); }
     BusLayout getBusses() const override { return BusLayout::singleStereoInOut(); }
-    double getLatencySeconds() override { return compensated.load (std::memory_order_relaxed) ? juce::jmax (0.0, -milliseconds.get()) / 1000.0 : 0.0; }
+    double getLatencySeconds() override { return compensated.load (std::memory_order_relaxed) ? juce::jmax (0.0, -delayedSeconds()) : 0.0; }
+    // The delay heard, in seconds at the running rate, from whichever unit it is kept in.
+    double delayedSeconds() const { return inSamples.get() ? samples.get() / rate : milliseconds.get() / 1000.0; }
     void initialise (const te::PluginInitialisationInfo& info) override
     {
         rate = info.sampleRate;
@@ -1038,7 +1045,8 @@ public:
         auto* buffer = context.destBuffer;
         const int capacity = ring.getNumSamples();
         if (buffer == nullptr || capacity == 0 || ! compensated.load (std::memory_order_relaxed)) return;
-        const int delay = juce::jlimit (0, capacity - 1, (int) std::lround (juce::jmax (0.0, delayMs.load (std::memory_order_relaxed)) * rate / 1000.0));
+        const double wanted = sampleBased.load (std::memory_order_relaxed) ? delaySamples.load (std::memory_order_relaxed) : delayMs.load (std::memory_order_relaxed) * rate / 1000.0;
+        const int delay = juce::jlimit (0, capacity - 1, (int) std::lround (juce::jmax (0.0, wanted)));
         const int channels = juce::jmin (2, buffer->getNumChannels());
         for (int c = 0; c < channels; ++c)
         {
@@ -1055,20 +1063,25 @@ public:
         }
         position = (position + context.bufferNumSamples) % capacity;
     }
-    juce::CachedValue<double> milliseconds;
+    juce::CachedValue<double> milliseconds, samples;
+    juce::CachedValue<bool> inSamples;
 private:
     void valueTreePropertyChanged (juce::ValueTree& tree, const juce::Identifier& id) override
     {
-        if (tree == state && id == trackDelayProperty)
+        if (tree == state && (id == trackDelayProperty || id == trackDelaySamplesProperty || id == trackDelayInSamplesProperty))
         {
-            milliseconds.forceUpdateOfCachedValue();
-            const auto previous = delayMs.exchange (milliseconds.get(), std::memory_order_relaxed);
+            const auto previous = juce::jmin (0.0, delayedSeconds());
+            milliseconds.forceUpdateOfCachedValue(); samples.forceUpdateOfCachedValue(); inSamples.forceUpdateOfCachedValue();
+            delayMs.store (milliseconds.get(), std::memory_order_relaxed);
+            delaySamples.store (samples.get(), std::memory_order_relaxed);
+            sampleBased.store (inSamples.get(), std::memory_order_relaxed);
             // Reported latency is read when the graph is built.
-            if (juce::jmin (0.0, previous) != juce::jmin (0.0, milliseconds.get())) edit.restartPlayback();
+            if (previous != juce::jmin (0.0, delayedSeconds())) edit.restartPlayback();
         }
         Plugin::valueTreePropertyChanged (tree, id);
     }
-    std::atomic<double> delayMs { 0 };
+    std::atomic<double> delayMs { 0 }, delaySamples { 0 };
+    std::atomic<bool> sampleBased { false };
     juce::AudioBuffer<float> ring;
     double rate = 44100;
     int position = 0;
@@ -1590,7 +1603,9 @@ Result validateTrackDelays (const juce::ValueTree& state)
         for (const auto& sibling : state.getParent())
             if (sibling.hasType (te::IDs::PLUGIN) && sibling[te::IDs::type].toString() == TrackDelayPlugin::xmlTypeName) ++count;
         if (! state.getParent().hasType (te::IDs::TRACK) || count != 1
-            || ! finiteProperty (state.getProperty (trackDelayProperty, 0), -Session::maximumTrackDelayMs, Session::maximumTrackDelayMs))
+            || ! finiteProperty (state.getProperty (trackDelayProperty, 0), -Session::maximumTrackDelayMs, Session::maximumTrackDelayMs)
+            || ! finiteProperty (state.getProperty (trackDelaySamplesProperty, 0), -Session::maximumTrackDelaySamples, Session::maximumTrackDelaySamples)
+            || (state.hasProperty (trackDelayInSamplesProperty) && state[trackDelayInSamplesProperty].toString() != "0" && state[trackDelayInSamplesProperty].toString() != "1"))
             return Result::fail ("The project contains an invalid track delay.");
     }
     for (const auto& child : state) if (auto result = validateTrackDelays (child); result.failed()) return result;
@@ -4062,6 +4077,8 @@ struct Session::Impl
         edit->markAsChanged();
         owner.sendChangeMessage();
     }
+    // The running sample rate, or 48 kHz while no device runs.
+    double sampleRate() const { const auto rate = engine.getDeviceManager().getSampleRate(); return rate > 0 ? rate : 48000.0; }
     // Each track mixer's crossfade gain from its side, the project crossfader and its curve.
     Session::CrossfadeCurve crossfadeCurve() const
     {
@@ -7203,7 +7220,11 @@ Session::Snapshot Session::snapshot() const
         info.hasInstrument = info.isMidi && Impl::instrument (*t) != nullptr;
         info.frozen = t->isFrozen (te::Track::individualFreeze);
         info.crossfade = static_cast<CrossfadeAssign> (juce::jlimit (0, 2, static_cast<int> (t->state.getProperty (crossfadeProperty, 0))));
-        if (auto* delay = t->pluginList.findFirstPluginOfType<TrackDelayPlugin>()) info.delayMs = delay->milliseconds.get();
+        if (auto* delay = t->pluginList.findFirstPluginOfType<TrackDelayPlugin>())
+        {
+            info.delayInSamples = delay->inSamples.get(); info.delaySamples = delay->samples.get();
+            info.delayMs = info.delayInSamples ? info.delaySamples * 1000.0 / impl->sampleRate() : delay->milliseconds.get();
+        }
         for (auto* slot : t->getClipSlotList().getClipSlots())
         {
             SlotInfo slotInfo;
@@ -13718,6 +13739,19 @@ Result Session::setTrackCrossfade (const String& trackId, CrossfadeAssign side)
     track->state.setProperty (crossfadeProperty, static_cast<int> (side), &impl->edit->getUndoManager());
     impl->refreshCrossfade(); impl->changed(); return Result::ok();
 }
+// A track's Track Delay, made where it belongs if it has none: after the devices and before the sends
+// and the mixer, so sends hear it too.
+TrackDelayPlugin* trackDelayOf (te::AudioTrack& track)
+{
+    if (auto* delay = track.pluginList.findFirstPluginOfType<TrackDelayPlugin>()) return delay;
+    auto plugin = track.edit.getPluginCache().createNewPlugin (TrackDelayPlugin::xmlTypeName, {});
+    if (plugin == nullptr) return nullptr;
+    int index = track.pluginList.size();
+    for (int i = 0; i < track.pluginList.size(); ++i)
+        if (dynamic_cast<te::VolumeAndPanPlugin*> (track.pluginList[i]) || dynamic_cast<te::AuxSendPlugin*> (track.pluginList[i])) { index = i; break; }
+    track.pluginList.insertPlugin (plugin, index, nullptr);
+    return dynamic_cast<TrackDelayPlugin*> (plugin.get());
+}
 Result Session::setTrackDelay (const String& trackId, double milliseconds)
 {
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
@@ -13727,20 +13761,49 @@ Result Session::setTrackDelay (const String& trackId, double milliseconds)
     if (auto frozen = impl->unfrozen (track); frozen.failed()) return frozen;
     if (! std::isfinite (milliseconds) || std::abs (milliseconds) > maximumTrackDelayMs) return Result::fail ("Track delay runs from -1000 to +1000 ms.");
     auto* delay = track->pluginList.findFirstPluginOfType<TrackDelayPlugin>();
+    // A track kept in samples takes the milliseconds as samples at the running rate.
+    if (delay != nullptr && delay->inSamples.get()) return setTrackDelaySamples (trackId, std::round (milliseconds * impl->sampleRate() / 1000.0));
     if ((delay ? delay->milliseconds.get() : 0.0) == milliseconds) return Result::ok();
     impl->transaction ("Track delay");
-    if (delay == nullptr)
-    {
-        // The delay follows the devices and precedes sends and the mixer, so sends hear it too.
-        auto plugin = impl->edit->getPluginCache().createNewPlugin (TrackDelayPlugin::xmlTypeName, {});
-        if (plugin == nullptr) return Result::fail ("Could not create the track delay.");
-        int index = track->pluginList.size();
-        for (int i = 0; i < track->pluginList.size(); ++i)
-            if (dynamic_cast<te::VolumeAndPanPlugin*> (track->pluginList[i]) || dynamic_cast<te::AuxSendPlugin*> (track->pluginList[i])) { index = i; break; }
-        track->pluginList.insertPlugin (plugin, index, nullptr);
-        delay = dynamic_cast<TrackDelayPlugin*> (plugin.get());
-    }
+    delay = trackDelayOf (*track);
+    if (delay == nullptr) return Result::fail ("Could not create the track delay.");
     delay->milliseconds = milliseconds;
+    impl->changed(); return Result::ok();
+}
+Result Session::setTrackDelaySamples (const String& trackId, double samples)
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    if (impl->edit->getTransport().isRecording()) return Result::fail ("Stop recording before changing track delay.");
+    auto* track = impl->track (trackId);
+    if (! track) return Result::fail ("Track not found.");
+    if (auto frozen = impl->unfrozen (track); frozen.failed()) return frozen;
+    if (! std::isfinite (samples) || std::abs (samples) > maximumTrackDelaySamples || samples != std::round (samples))
+        return Result::fail ("Track delay runs from -192000 to +192000 whole samples.");
+    auto* delay = track->pluginList.findFirstPluginOfType<TrackDelayPlugin>();
+    if (delay != nullptr && delay->inSamples.get() && delay->samples.get() == samples) return Result::ok();
+    impl->transaction ("Track delay");
+    delay = trackDelayOf (*track);
+    if (delay == nullptr) return Result::fail ("Could not create the track delay.");
+    delay->samples = samples; delay->inSamples = true;
+    impl->changed(); return Result::ok();
+}
+Result Session::setTrackDelayInSamples (const String& trackId, bool inSamples)
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    if (impl->edit->getTransport().isRecording()) return Result::fail ("Stop recording before changing track delay.");
+    auto* track = impl->track (trackId);
+    if (! track) return Result::fail ("Track not found.");
+    if (auto frozen = impl->unfrozen (track); frozen.failed()) return frozen;
+    auto* delay = track->pluginList.findFirstPluginOfType<TrackDelayPlugin>();
+    if ((delay != nullptr && delay->inSamples.get()) == inSamples) return Result::ok();
+    impl->transaction ("Track delay unit");
+    delay = trackDelayOf (*track);
+    if (delay == nullptr) return Result::fail ("Could not create the track delay.");
+    // The delay heard stays: converted at the running rate, within each unit's range.
+    const auto rate = impl->sampleRate();
+    if (inSamples) delay->samples = juce::jlimit (-maximumTrackDelaySamples, maximumTrackDelaySamples, std::round (delay->milliseconds.get() * rate / 1000.0));
+    else delay->milliseconds = juce::jlimit (-maximumTrackDelayMs, maximumTrackDelayMs, delay->samples.get() * 1000.0 / rate);
+    delay->inSamples = inSamples;
     impl->changed(); return Result::ok();
 }
 Result Session::setCrossfader (float position)

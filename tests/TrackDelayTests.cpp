@@ -77,6 +77,31 @@ int runTrackDelayTests (const juce::File& artifacts)
         x = render (s, file);
         check (x.first == first && x.second == second, "zero delay passes the track unchanged");
 
+        // Kept in samples, as the reference's unit toggle keeps it.
+        ok (s.setTrackDelay (id, 10), "delay track 1 by 10 ms again");
+        ok (s.setTrackDelayInSamples (id, true), "switch its unit to samples");
+        auto info = s.snapshot().tracks[0];
+        // The conversion uses the running rate (whole hundreds of hertz), and renders play the samples as kept.
+        const double running = info.delaySamples * 100.0;
+        check (info.delayInSamples && running >= 22000 && std::abs (info.delayMs - 10) < 1e-9 && render (s, file).first == first + (int) info.delaySamples,
+               "switching to samples keeps the delay heard at the running rate, which then plays as that many samples");
+        ok (s.setTrackDelaySamples (id, 123), "delay it 123 samples");
+        check (render (s, file).first == first + 123 && std::abs (delay (s) - 123 * 1000.0 / running) < 1e-9, "a delay in samples plays exactly that many samples later");
+        ok (s.setTrackDelaySamples (id, -123), "pre-delay it 123 samples");
+        check (render (s, file).first == first - 123, "and a negative one that many early");
+        check (s.setTrackDelaySamples (id, .5).failed() && s.setTrackDelaySamples (id, 192001).failed() && s.setTrackDelaySamples ("missing", 0).failed(),
+               "fractions of a sample, delays past 192000 samples and unknown tracks are refused");
+        s.undo(); check (s.snapshot().tracks[0].delaySamples == 123, "undo restores the 123 samples");
+        s.redo();
+        ok (s.setTrackDelay (id, 5), "set 5 ms while kept in samples");
+        check (s.snapshot().tracks[0].delayInSamples && s.snapshot().tracks[0].delaySamples == std::round (5 * running / 1000), "which keeps the unit, in samples");
+        ok (s.setTrackDelaySamples (id, -123), "pre-delay it 123 samples again");
+        ok (s.setTrackDelayInSamples (id, false), "switch back to milliseconds");
+        info = s.snapshot().tracks[0];
+        check (! info.delayInSamples && std::abs (info.delayMs + 123 * 1000.0 / running) < 1e-9 && render (s, file).first == first - (int) std::lround (123 * 48000 / running),
+               "switching back keeps the delay, now in milliseconds, played at the render's rate");
+        ok (s.setTrackDelay (id, 0), "clear the delay");
+
         // A pre-fader send follows the delay: with the fader down only the return plays track 1.
         ok (s.addReturnTrack ("Return"), "add a return");
         const auto returnId = s.snapshot().tracks.back().id;
@@ -102,6 +127,16 @@ int runTrackDelayTests (const juce::File& artifacts)
         const auto broken = project.getSiblingFile ("Broken.halftrack"); check (xml->writeTo (broken), "write an out-of-range delay");
         const auto loaded = s.loadProject (broken);
         check (loaded.failed() && loaded.getErrorMessage().contains ("track delay") && delay (s) == -25, "an out-of-range delay rejects the load and keeps the open project");
+        ok (s.setTrackDelaySamples (s.snapshot().tracks[0].id, 600), "keep track 1's delay in samples");
+        ok (s.saveProject (project), "save it"); ok (s.loadProject (project), "reopen it");
+        check (s.snapshot().tracks[0].delayInSamples && s.snapshot().tracks[0].delaySamples == 600 && render (s, file).first == first + 600,
+               "a delay kept in samples reopens in samples and renders the same");
+        auto inSamples = juce::XmlDocument::parse (project); check (inSamples != nullptr, "parse it");
+        std::function<void (juce::XmlElement&)> corruptSamples = [&] (juce::XmlElement& e)
+        { if (e.hasAttribute ("halftrackDelaySamples")) e.setAttribute ("halftrackDelaySamples", 300000.0); for (auto* c : e.getChildIterator()) corruptSamples (*c); };
+        corruptSamples (*inSamples);
+        check (inSamples->writeTo (broken), "write an out-of-range delay in samples");
+        check (s.loadProject (broken).failed() && s.snapshot().tracks[0].delaySamples == 600, "an out-of-range delay in samples rejects the load and keeps the open project");
         ok (s.setTrackFrozen (id, true), "freeze track 1");
         check (s.setTrackDelay (id, 0).failed(), "a frozen track's delay is locked");
         std::cout << "Track delay passed: " << root.getFullPathName() << std::endl; return 0;
