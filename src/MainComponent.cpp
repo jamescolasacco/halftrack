@@ -4426,6 +4426,11 @@ private:
         void mouseDown (const juce::MouseEvent& e) override
         {
             if (e.x >= timelineWidth()) return;
+            // Cmd+Option drags the view along, as the reference's Scroll Display does (its key list, sections 42.9 and 42.16);
+            // with Shift as well it slides a clip's contents off the grid instead (its manual, section 6.7).
+            panFrom.reset();
+            if (e.mods.isCommandDown() && e.mods.isAltDown() && ! e.mods.isShiftDown() && ! e.mods.isPopupMenu())
+            { panFrom = std::tuple { e.getEventRelativeTo (&owner).position, owner.viewStart, owner.viewport.getViewPositionY() }; return; }
             // A held press without a move then gets no drag events from the auto-repeat.
             lastDrag = std::make_tuple (e.x, e.y, owner.viewStart, owner.viewport.getViewPositionY(), e.mods.getRawFlags());
             if (! e.mods.isPopupMenu()) beginDragScroll();
@@ -4617,6 +4622,16 @@ private:
         }
         void mouseDrag (const juce::MouseEvent& e) override
         {
+            if (panFrom)
+            {
+                // Measured in the window, so the canvas moving under the pointer does not feed back.
+                const auto [from, start, top] = *panFrom;
+                const auto now = e.getEventRelativeTo (&owner).position;
+                owner.viewStart = juce::jmax (0.0, start - (now.x - from.x) / owner.pixelsPerSecond);
+                owner.viewport.setViewPosition (owner.viewport.getViewPositionX(), juce::jmax (0, top - juce::roundToInt (now.y - from.y)));
+                owner.updateScroll(); owner.canvas.repaint(); owner.ruler.repaint();
+                return;
+            }
             if (owner.envelopeKey.isEmpty() && (selectingTake || selecting || draggedClip >= 0) && ! e.mods.isPopupMenu() && e.mouseWasDraggedSinceMouseDown())
                 scrollForDrag (e.getPosition(), true);
             // While the pointer rests, the auto-repeat sends the same event again; only a move or a scroll changes anything.
@@ -4789,6 +4804,7 @@ private:
         }
         void mouseUp (const juce::MouseEvent& e) override
         {
+            if (std::exchange (panFrom, std::nullopt)) return;
             // A click without a drag on a clip of a group selects it alone, or with Cmd/Ctrl leaves it out.
             if (! e.mouseWasDraggedSinceMouseDown() && dragClipId.isNotEmpty())
             {
@@ -5027,6 +5043,7 @@ private:
         std::optional<std::tuple<int, int, double, int, int>> lastDrag;
         std::map<juce::String, std::unique_ptr<juce::AudioThumbnail>> thumbnails;
         int draggedClip = -1, selectionAnchorTrack = -1, selectionAnchorLast = -1; // The anchor's last track when it is a group's.
+        std::optional<std::tuple<juce::Point<float>, double, int>> panFrom; // A Cmd+Option drag: where it began, and the view then.
         double dragStartX = 0;
         double originalStart = 0, originalFade = 0, selectionAnchorTime = 0;
         bool selecting = false;
@@ -8800,6 +8817,10 @@ private:
         {
             const auto* clip = owner.currentMidiClip();
             if (clip == nullptr) return;
+            // Cmd+Option drags the view along, as in the Arrangement (the reference's key list, section 42.9).
+            panView.reset();
+            if (e.mods.isCommandDown() && e.mods.isAltDown() && ! e.mods.isShiftDown() && ! e.mods.isPopupMenu() && gridBounds().contains (e.getPosition()))
+            { endGesture(); panView = std::tuple { e.position, viewBeat, topRow() }; return; }
             if (e.x < keysWidth)
             {
                 // A key sounds its pitch while held (with Preview on); Shift-clicking one adds its
@@ -8947,6 +8968,14 @@ private:
                 return;
             }
             if (splitLine) { splitLine->second = e.position; repaint(); return; }
+            if (panView)
+            {
+                const auto [from, beat, row] = *panView;
+                viewBeat = juce::jmax (0.0, beat - (e.position.x - from.x) / pixelsPerBeat);
+                topPitch = pitchAtRow (row - juce::roundToInt ((e.position.y - from.y) / (float) rowHeight));
+                updateScroll(); repaint();
+                return;
+            }
             if (chopDrag && chop)
             {
                 const int steps = (int) std::round ((chopDrag->first - e.position.y) / 10.0f); // A part for every 10 pixels.
@@ -9059,6 +9088,7 @@ private:
         {
             silence(); keyPitch = -1;
             if (auto line = std::exchange (splitLine, std::nullopt)) { line->second = e.position; splitAlong (*line, e.mods.isCommandDown()); repaint(); return; }
+            if (std::exchange (panView, std::nullopt)) return;
             if (std::exchange (chopDrag, std::nullopt)) { if (std::exchange (chopFromMouse, false)) endGesture(); repaint(); return; }
             endGesture(); drawing = false; erasing = false; drawn.clear(); originalNotes.clear(); braceDrag = 0;
             updateRows(); updateScroll(); repaint();
@@ -9918,6 +9948,7 @@ private:
         float drawVelocity = 0.8f;
         bool gesture = false, resizeNote = false, drawing = false, marquee = false, erasing = false, pitchLocked = false, velocityDrag = false, copyDrag = false, copied = false;
         juce::Point<float> keyZoomFrom; int keyZoomHeight = defaultRowHeight; bool keyZooming = false; // A drag across the keys.
+        std::optional<std::tuple<juce::Point<float>, double, int>> panView; // A Cmd+Option drag: where it began, the first beat and top row then.
         // Chop, as the reference's (its manual, section 10.5.8.2): Cmd+E divides each selected note into equal
         // parts, as many as grid steps it lasts; with Cmd still held, Up and Down change every note's parts by
         // one (Shift doubling or halving them). It is one undo step, which letting Cmd go or any other edit ends.
@@ -21978,6 +22009,21 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
                 canvas.mouseDown (press (from, from, false)); canvas.mouseDrag (press (below, from, true)); canvas.mouseUp (press (below, from, true)); refresh();
                 check (timeSelection.trackIds == juce::StringArray { firstId, secondId, state.tracks[2].id }, "dragging on down onto the track below takes it in too");
             }
+            {
+                // Cmd+Option drags the view along, as the reference's Scroll Display does (its key list, sections 42.9 and 42.16).
+                const auto startView = viewStart = 5; updateScroll();
+                const auto panPress = [&] (juce::Point<float> p, juce::Point<float> down, bool dragged)
+                {
+                    return juce::MouseEvent (juce::Desktop::getInstance().getMainMouseSource(), p,
+                                             juce::ModifierKeys (juce::ModifierKeys::leftButtonModifier | juce::ModifierKeys::commandModifier | juce::ModifierKeys::altModifier),
+                                             1.0f, 0, 0, 0, 0, &canvas, &canvas, now, down, now, 1, dragged);
+                };
+                const juce::Point<float> grab (300, (float) laneY (0) + 10), left (200, (float) laneY (0) + 10);
+                const auto selectionBefore = timeSelection.active();
+                canvas.mouseDown (panPress (grab, grab, false)); canvas.mouseDrag (panPress (left, grab, true)); canvas.mouseUp (panPress (left, grab, true));
+                check (std::abs (viewStart - (startView + 100 / pixelsPerSecond)) < 1e-6 && timeSelection.active() == selectionBefore,
+                       "a Cmd+Option drag left moves the view later by the distance dragged, selecting nothing");
+            }
             timeSelection = {}; viewStart = viewBefore; updateScroll(); refresh();
         }
         const auto createItem = [this] (int id)
@@ -26245,6 +26291,18 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         pianoRoll.mouseWheelMove (groupEvent (over, over, false, juce::ModifierKeys::altModifier), juce::MouseWheelDetails { 0.0f, 1.0f, false, false, false });
         check (pianoRoll.keyTrackHeight() == shorter + 1, "and Option-scrolling up makes them a pixel taller");
         pianoRoll.setKeyTracks (top, height);
+        {
+            // Cmd+Option drags the note editor's view too, zoomed in (Z) so the clip runs past it.
+            check (pianoRoll.keyPressed (juce::KeyPress ('z')), "Z zooms in on the selected notes");
+            const auto beatBefore = pianoRoll.visibleStartBeat(); const auto pitchBefore = pianoRoll.topShownPitch();
+            const juce::Point<float> grab ((float) pianoRoll.getWidth() / 2, groupPoint (3, 64).y);
+            const auto moved = grab + juce::Point<float> ((float) (-2 * pianoRoll.beatWidth()), (float) (2 * pianoRoll.keyTrackHeight()));
+            const int panMods = juce::ModifierKeys::commandModifier | juce::ModifierKeys::altModifier;
+            pianoRoll.mouseDown (groupEvent (grab, grab, false, panMods)); pianoRoll.mouseDrag (groupEvent (moved, grab, true, panMods)); pianoRoll.mouseUp (groupEvent (moved, grab, true, panMods));
+            check (std::abs (pianoRoll.visibleStartBeat() - (beatBefore + 2)) < 1e-6 && pianoRoll.topShownPitch() == pitchBefore + 2 && currentMidiClip()->notes.size() == 4,
+                   "a Cmd+Option drag two beats left and two key tracks down moves the view two beats later and two keys higher, changing no note");
+            pianoRoll.keyPressed (juce::KeyPress ('x')); pianoRoll.setKeyTracks (top, height); pianoRoll.fit();
+        }
     }
     {
         juce::TextEditor editor;juce::DocumentWindow focusWindow("Halftrack split shortcut test",panel,juce::DocumentWindow::closeButton);

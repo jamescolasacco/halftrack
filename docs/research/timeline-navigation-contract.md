@@ -11,6 +11,10 @@ The Arrangement and piano roll follow the playhead and zoom to selections, after
   - + and − zoom the Arrangement or the open piano roll, and Cmd/Ctrl+scroll zooms the Arrangement.
   - Z zooms the Arrangement to the time selection (or the selected clip), with 5% margins.
   - X returns to the view from before the last Z.
+- **Panning** (2026-10-25). The reference's manual pans the Arrangement display by dragging with Cmd+Option held (Ctrl+Alt elsewhere; [Arrangement View](https://www.ableton.com/en/live-manual/12/arrangement-view/), section 6.2), and its key list gives the drag as Pan Left/Right of Selection and Scroll Display Left/Right of Selection (sections 42.9 and 42.16, consulted 2026-10-25).
+  - In Halftrack's Arrangement lanes a Cmd+Option drag moves the view with the pointer, in time and down the tracks, and selects and changes nothing. In the note editor's grid it moves the view in beats and keys, as far as the editor scrolls.
+  - With Shift as well, the drag slides a clip's contents off the grid instead ([selection contract](arrangement-selection-contract.md)), as the reference's manual has it (section 6.7).
+  - The reference's pointer for the drag, and the drag in the Session view, were not read.
 - **The overview** (2026-10-24). The reference's built-in default Set (inside its app bundle, read statically) shows the Arrangement's overview (`ArrangerShowOverView` 1) and not the Session's (`SessionShowOverView` 0). Halftrack's Arrangement shows one above the ruler, 20 pixels high:
   - It spans the clips, the loop and the time shown, each ordinary track a row of its clips in their colours, deactivated clips grey, with an outline round the time the Arrangement shows.
   - A press outside the outline centres the view on that time. A drag across moves the view with the outline, and dragging down or up zooms in or out about the pressed time, 1% a pixel. The reference's directions and rates were not read: Halftrack takes down as zooming in, as the reference's beat ruler does by its manual.
@@ -38,6 +42,7 @@ The UI suite checks:
 - the time ruler's labels in each format, its steps, its place under the tracks and Options > Time Ruler Format switching it (the track order suite keeps the format with the project);
 - the overview shown at first, hidden by Option+Cmd+O and shown from View, a press outside its outline centring the view, a drag across moving it and a drag down zooming in about the pressed time (the track order suite keeps the choice with the project);
 - Z fitting a two-second selection and X restoring the exact previous view;
+- a Cmd+Option drag in the Arrangement moving the view later by the distance dragged without selecting, and one in the zoomed note editor moving the view two beats later and two keys higher without changing a note;
 - the piano roll paging to its playhead at beat 24 of a 64-beat clip;
 - a clip dragged past the timeline's right edge scrolling the time on and landing under the pointer, and one undo putting it back;
 - a time selection dragged past the edge scrolling on and running to the time under the pointer;

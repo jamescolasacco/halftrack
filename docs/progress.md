@@ -2873,3 +2873,7 @@ Engine and UI areas. Groups now have a Track Delay, as the reference's manual sa
 ## Pasted probability groups — 2026-10-25
 
 UI area. Pasted or duplicated notes from a probability group now form a group of their own instead of joining the original, so a Play One group picks only among its own notes; a lone pasted note leaves its group ([note chance contract](research/note-chance-contract.md#probability-groups-2026-10-25)). Checked in the UI suite.
+
+## Panning with Cmd+Option — 2026-10-25
+
+UI area. A Cmd+Option drag (Ctrl+Alt elsewhere) now pans the Arrangement's lanes and the note editor's grid, as the reference's manual describes (section 6.2; key list sections 42.9 and 42.16); with Shift as well the drag still slides clip contents ([timeline navigation contract](research/timeline-navigation-contract.md)). Checked in the UI suite.
