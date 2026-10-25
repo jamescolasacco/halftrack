@@ -4438,11 +4438,11 @@ private:
                             // A click in the clip's waveform or notes, away from its fade handles and edges, selects
                             // it and places the insert marker, and a drag there selects time within it, as the
                             // reference's does (its manual, sections 6.7 and 6.9); Shift extends the selection.
-                            // Shift+Option drags select time from the bar, and slide the audio from below it.
+                            // Shift+Option drags select time from the bar, and slide the contents from below it.
                             const auto& clip = clips[(size_t) c];
                             const bool previous = track == previousTrack && c == previousClip;
                             const bool bar = inClipBar (clip, track, e.position), shiftOption = e.mods.isShiftDown() && e.mods.isAltDown();
-                            const bool slide = shiftOption && clip.canEditAudioRange && ! bar;
+                            const bool slide = shiftOption && (clip.canEditAudioRange || clip.canLoop) && ! bar;
                             if ((bar && shiftOption) || (! bar && ! slide && (! previous || (hitFade (clip, track, e.position) == 0 && hitTrim (clip, track, e.position) == 0))))
                             {
                                 const auto at = owner.snapTime (owner.viewStart + e.x / owner.pixelsPerSecond, e.mods);
@@ -4476,7 +4476,7 @@ private:
                             dragClipId = clips[(size_t) c].id;
                             originalRange = clips[(size_t) c];
                             originalFade = fadeDrag == 2 ? originalRange.audio.fadeOutSeconds : originalRange.audio.fadeInSeconds;
-                            if (e.mods.isShiftDown() && e.mods.isAltDown() && originalRange.canEditAudioRange)
+                            if (e.mods.isShiftDown() && e.mods.isAltDown() && (originalRange.canEditAudioRange || originalRange.canLoop))
                             { rangeDrag = 3; fadeDrag = 0; }
                             else if (fadeDrag == 0 && track == previousTrack && c == previousClip)
                                 rangeDrag = hitTrim (originalRange, track, e.position);
@@ -4612,7 +4612,36 @@ private:
                         if (result.wasOk()) owner.selectArrangementClip (dragClipId);
                         return;
                     }
-                    else if (clip.id == dragClipId && clip.canLoop && rangeDrag != 3)
+                    else if (clip.id == dragClipId && clip.canLoop && rangeDrag == 3)
+                    {
+                        // Shift+Option slides a MIDI or warped clip's contents within it, as the reference's
+                        // does (its manual, section 6.7): its start marker, with its loop, moves against the
+                        // drag, by the grid unless Cmd is held too. Unlooped, the clip's contents cannot start
+                        // before their own start or, for audio, run past its source.
+                        const auto& from = originalRange;
+                        // The drag's distance in beats from the clip's start, measured to its right either way, so
+                        // a clip at the song's start slides too.
+                        const auto origin = owner.secondsAt (from.startBeat), distance = (e.x - dragStartX) / owner.pixelsPerSecond;
+                        auto reach = origin + std::abs (distance);
+                        if (owner.snaps (e.mods)) reach = owner.toGrid (reach);
+                        auto delta = (owner.beatsAt (reach) - from.startBeat) * (distance < 0 ? -1 : 1);
+                        if (! clipGesture) { owner.session.beginEditGesture ("Slide clip contents"); clipGesture = true; }
+                        juce::Result result = juce::Result::ok();
+                        if (from.loop.on)
+                        {
+                            auto loop = from.loop;
+                            loop.start = juce::jlimit (0.0, juce::jmax (0.0, sourceBeats (from) - loop.length), from.loop.start - delta);
+                            delta = from.loop.start - loop.start;
+                            result = owner.session.setClipLoop (dragClipId, loop, from.contentStartBeat - delta);
+                        }
+                        else
+                            result = owner.session.setClipBeats (dragClipId, from.startBeat, from.lengthBeats,
+                                                                 juce::jlimit (0.0, juce::jmax (0.0, sourceBeats (from) - from.lengthBeats), from.contentStartBeat - delta));
+                        owner.report (result); owner.refresh();
+                        if (result.wasOk()) owner.selectArrangementClip (dragClipId);
+                        return;
+                    }
+                    else if (clip.id == dragClipId && clip.canLoop)
                     {
                         // MIDI and warped clips trim in beats. A looped clip's start wraps round its
                         // loop; an unlooped one cannot start before its content or, for audio, run
@@ -24087,6 +24116,30 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
             check (state.tracks[0].clips[0].warp.mode == Session::WarpMode::stretch && state.tracks[0].clips[0].warp.flux == 0 && warpMode->getSelectedId() == 5,
                    "seven undo steps return to Complex");
         }
+        if (const auto warped = state.tracks[0].clips[0]; warped.canLoop && ! warped.loop.on && ! warped.isMidi)
+        {
+            // Shift+Option below a warped clip's bar slides its audio within it, in beats, as a MIDI clip's
+            // contents slide; unlooped, they cannot run past the source's end.
+            check (session.setClipBeats (warped.id, warped.startBeat, warped.lengthBeats / 2, 0).wasOk(), "the warped clip trimmed to half"); refresh();
+            const auto viewBefore = viewStart, zoomBefore = pixelsPerSecond;
+            viewStart = secondsAt (warped.startBeat); pixelsPerSecond = 400.0 / (secondsAt (warped.startBeat + warped.lengthBeats / 2) - viewStart); updateScroll(); refresh();
+            const auto bounds = canvas.clipBounds (state.tracks[0].clips[0], 0);
+            const auto bodyX = [&] (double beatsIn) { return (float) ((secondsAt (warped.startBeat + beatsIn) - viewStart) * pixelsPerSecond); };
+            const auto from = juce::Point<float> (bodyX (warped.lengthBeats * 3 / 8), bounds.getBottom() - 8.0f), to = juce::Point<float> (bodyX (warped.lengthBeats / 8), from.y);
+            const auto slideEvent = [&] (juce::Point<float> p, bool dragged)
+            {
+                return juce::MouseEvent (juce::Desktop::getInstance().getMainMouseSource(), p,
+                                         juce::ModifierKeys (juce::ModifierKeys::leftButtonModifier | juce::ModifierKeys::shiftModifier | juce::ModifierKeys::altModifier | bypassModifier),
+                                         1.0f, 0, 0, 0, 0, &canvas, &canvas, now, from, now, 1, dragged);
+            };
+            canvas.mouseDown (slideEvent (from, false)); canvas.mouseDrag (slideEvent ((from + to) / 2, true)); canvas.mouseDrag (slideEvent (to, true)); canvas.mouseUp (slideEvent (to, true)); refresh();
+            const auto& slid = state.tracks[0].clips[0];
+            check (std::abs (slid.contentStartBeat - warped.lengthBeats / 4) < 1e-3 && std::abs (slid.startBeat - warped.startBeat) < 1e-6
+                       && std::abs (slid.lengthBeats - warped.lengthBeats / 2) < 1e-6 && session.undoSteps()[0] == "Slide clip contents",
+                   "Shift+Option dragged left in a warped clip's waveform slides its audio along, the clip staying where it is");
+            session.undo(); session.undo(); viewStart = viewBefore; pixelsPerSecond = zoomBefore; updateScroll(); refresh();
+            check (std::abs (state.tracks[0].clips[0].lengthBeats - warped.lengthBeats) < 1e-6 && state.tracks[0].clips[0].contentStartBeat < 1e-9, "two undo steps restore the clip");
+        }
         {
             // Warp markers: double-clicking the warped waveform adds one where it is, dragging moves
             // its beat on a sixteenth grid, and double-clicking it removes it.
@@ -24762,6 +24815,29 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
                 check (std::abs (beatOf (c) - start) < 1e-6 && timeSelection.active() && timeSelection.end > timeSelection.start,
                        "Shift+Option dragged along a clip's bar selects time within it, as the reference's key list has it, leaving the clip where it is");
                 timeSelection = {}; refresh();
+                {
+                    // Below the bar, Shift+Option slides a MIDI clip's contents: its start marker, with its loop,
+                    // moves against the drag, the clip staying where it is (section 6.7). Cmd bypasses the grid.
+                    const auto clipOf = [&] { const auto [ct, cc] = arrangementClipIndex (c); return state.tracks[(size_t) ct].clips[(size_t) cc]; };
+                    const auto before = clipOf();
+                    const auto slideFrom = bodyAt (c, 1.5), slideTo = bodyAt (c, .5);
+                    const int slide = shiftOption | bypassModifier;
+                    canvas.mouseDown (event (slideFrom, slideFrom, slide, false)); canvas.mouseDrag (event ((slideFrom + slideTo) / 2, slideFrom, slide, true));
+                    canvas.mouseDrag (event (slideTo, slideFrom, slide, true)); canvas.mouseUp (event (slideTo, slideFrom, slide, true)); refresh();
+                    const auto after = clipOf();
+                    check (std::abs (after.startBeat - before.startBeat) < 1e-6 && std::abs (after.lengthBeats - before.lengthBeats) < 1e-6
+                               && std::abs (after.contentStartBeat - (before.contentStartBeat + 1)) < 1e-6 && after.loop.on == before.loop.on
+                               && (! before.loop.on || std::abs (after.loop.start - (before.loop.start + 1)) < 1e-6) && after.notes.size() == before.notes.size()
+                               && session.undoSteps()[0] == "Slide clip contents" && ! timeSelection.active(),
+                           "Shift+Option dragged a beat left in a MIDI clip's notes slides its contents a beat, leaving the clip where it is");
+                    canvas.mouseDown (event (slideTo, slideTo, slide, false)); canvas.mouseDrag (event (slideTo + juce::Point<float> (400, 0), slideTo, slide, true));
+                    canvas.mouseUp (event (slideTo + juce::Point<float> (400, 0), slideTo, slide, true)); refresh();
+                    check (clipOf().contentStartBeat >= 0 && (! before.loop.on || clipOf().loop.start >= 0) && std::abs (clipOf().startBeat - before.startBeat) < 1e-6,
+                           "a slide past the contents' start stops there");
+                    session.undo(); session.undo(); refresh();
+                    check (std::abs (clipOf().contentStartBeat - before.contentStartBeat) < 1e-6 && (! before.loop.on || std::abs (clipOf().loop.start - before.loop.start) < 1e-6),
+                           "each slide is one undo step");
+                }
             }
             int steps = 0;
             while (state.tracks.size() > tracksBefore && steps < 20) { session.undo(); refresh(); ++steps; }

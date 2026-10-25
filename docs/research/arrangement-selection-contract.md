@@ -130,15 +130,16 @@ Evidence. Live 12 manual, [Arrangement View](https://www.ableton.com/en/live-man
 Halftrack:
 
 - **The clip bar,** the 20-pixel strip with a clip's name along its top, is what selects, multi-selects, moves and copy-drags clips, as before. A clip whose lane is too short to show anything under its bar is all bar.
-- **The body,** its waveform or notes below the bar, selects the clip on a click and puts the insert marker at the snapped click, dropping any group of clips. A drag there selects time within the clip, across tracks as any time selection does, and leaves the clip where it is. Fade handles and, on a selected clip, its edges still take their drags, and Shift+Option still slides an audio clip's contents from the body.
+- **The body,** its waveform or notes below the bar, selects the clip on a click and puts the insert marker at the snapped click, dropping any group of clips. A drag there selects time within the clip, across tracks as any time selection does, and leaves the clip where it is. Fade handles and, on a selected clip, its edges still take their drags, and Shift+Option slides the clip's contents from the body (below).
 - **Shift-click** in a body extends the selection there: a time selection from its farther end, or the clip selected before from its farther edge, its start when both are as far. So a Shift-click inside the selected clip selects part of it as time.
 - **Shift+Option** dragged along a clip's bar selects time within it.
+- **Sliding contents.** Shift+Option dragged in a clip's body slides its contents while the clip stays where it is. Unwarped audio slides its source offset, as before. MIDI and warped audio clips now slide too, in beats: the start marker moves against the drag, the loop with it on a looped clip, by the editing grid unless Cmd (Alt elsewhere) is held too, as the manual's sliding bypass. Unlooped, the contents cannot start before their own start or, for audio, run past the source's end; a loop cannot start before the contents' start. One undo step per drag. Whether the reference's slide moves a looped clip's loop or only its start marker was not read; Halftrack moves both (see [open questions](../open-questions.md)).
 
-The UI suite checks that a click in a clip's notes selects it and puts the insert marker there, that a drag there selects time and leaves the clip in place, that a Shift-click inside the selected clip selects from its start to the click, that Shift+Option along the bar selects time, and that bar drags still move clips, groups and copies (the moving tests grab bars).
+The UI suite checks that a click in a clip's notes selects it and puts the insert marker there, that a drag there selects time and leaves the clip in place, that a Shift-click inside the selected clip selects from its start to the click, that Shift+Option along the bar selects time, that Shift+Option slides a MIDI clip's contents a beat and stops at their start, and a warped clip's audio, each one undo step, and that bar drags still move clips, groups and copies (the moving tests grab bars).
 
 ## Not implemented
 
-- Sliding a MIDI clip's notes with Shift+Option from its body; dragging the clip bar with Shift to stretch a warped clip (section 42.16).
+- Dragging the clip bar with Shift to stretch a warped clip (section 42.16).
 - Selecting time on the ruler or across group lanes.
 - Pasting automation onto controls the destination lacks: such shapes are skipped.
 - Crop.

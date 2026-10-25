@@ -2801,3 +2801,7 @@ UI area. As the reference's manual describes, Shift-click selects adjacent scene
 ## Several tracks — 2026-10-25
 
 UI area. As the reference's manual has it, Shift-click on track headers now selects the adjacent tracks from the selected one, and Cmd-click (Ctrl elsewhere) adds or leaves out one; before, Shift added or removed one track. After a click on a header, Cmd+Up and Cmd+Down in the Arrangement, and Cmd+Left and Cmd+Right in the Session, move the selected tracks or group a place within their group, keeping the gaps between them, as one undo step ([groups contract](research/groups-contract.md#selecting-and-moving-several-tracks-2026-10-25)). Checked in the UI suite.
+
+## Sliding MIDI and warped clips — 2026-10-25
+
+UI area. As the reference's manual describes, Shift+Option dragged in a MIDI or warped audio clip's body now slides its contents in beats, the start marker and loop moving against the drag while the clip stays put, by the grid unless Cmd is held too; before, only unwarped audio slid, and a MIDI clip selected time instead ([contract](research/arrangement-selection-contract.md#a-clips-bar-and-body-2026-10-25)). Checked in the UI suite.
