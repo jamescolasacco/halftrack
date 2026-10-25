@@ -4508,6 +4508,7 @@ struct Session::Impl
             const int startPlayback = number ("startPlaybackWithRecord", 1, 2), locked = number ("lockEnvelopes", 0, 2), tapStart = number ("startPlaybackWithTapTempo", 1, 2);
             const int fullHeight = number ("fullHeightBrowser", 0, 2);
             read.fullHeightBrowser = fullHeight == 1;
+            read.drawWithPitchLock = number ("drawWithPitchLock", 0, 2) == 1;
             read.selectOnLaunch = number ("selectOnLaunch", 1, 2) == 1; read.selectNextSceneOnLaunch = number ("selectNextSceneOnLaunch", 1, 2) == 1;
             read.startPlaybackWithRecord = startPlayback == 1;
             read.startPlaybackWithTapTempo = tapStart == 1;
@@ -4546,6 +4547,7 @@ struct Session::Impl
         xml.setAttribute ("lockEnvelopes", next.lockEnvelopes ? 1 : 0);
         xml.setAttribute ("startPlaybackWithTapTempo", next.startPlaybackWithTapTempo ? 1 : 0);
         xml.setAttribute ("fullHeightBrowser", next.fullHeightBrowser ? 1 : 0);
+        xml.setAttribute ("drawWithPitchLock", next.drawWithPitchLock ? 1 : 0);
         xml.setAttribute ("selectOnLaunch", next.selectOnLaunch ? 1 : 0); xml.setAttribute ("selectNextSceneOnLaunch", next.selectNextSceneOnLaunch ? 1 : 0);
         xml.setAttribute ("preferencesTab", next.preferencesTab);
         for (const auto& folder : next.userFolders) xml.createNewChildElement ("USERFOLDER")->setAttribute ("path", folder);

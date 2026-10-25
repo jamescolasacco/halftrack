@@ -56,7 +56,6 @@ The UI suite chops a four-beat note into grid-long parts that stay selected, lea
 ## Not yet
 
 - Draw Mode in take lanes.
-- The Display & Input setting "Draw Mode with Pitch Lock", which makes pitch-locked drawing the default.
 - The key list's Show MIDI Note Filters, and Shift with Left and Right moving the clip region.
 
 See [open questions](../open-questions.md) for the defaults taken where the manual is silent.

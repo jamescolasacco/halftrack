@@ -108,6 +108,9 @@ int runPreferencesTests (const juce::File& artifacts)
         auto [locked, lockedProblem] = reopen ("<HALFTRACKPREFERENCES version=\"1\" lockEnvelopes=\"1\"/>");
         expected = {}; expected.lockEnvelopes = true;
         check (locked == expected && lockedProblem.isEmpty() && ! Session::Preferences {}.lockEnvelopes, "Lock Envelopes, off by default, is read back");
+        auto [pitchLocked, pitchLockedProblem] = reopen ("<HALFTRACKPREFERENCES version=\"1\" drawWithPitchLock=\"1\"/>");
+        expected = {}; expected.drawWithPitchLock = true;
+        check (pitchLocked == expected && pitchLockedProblem.isEmpty() && ! Session::Preferences {}.drawWithPitchLock, "Draw Mode with Pitch Lock, off by default, is read back");
         auto [waiting, waitingProblem] = reopen ("<HALFTRACKPREFERENCES version=\"1\" startPlaybackWithRecord=\"0\"/>");
         expected = {}; expected.startPlaybackWithRecord = false;
         check (waiting == expected && waitingProblem.isEmpty(), "Start Playback with Record off is read back");

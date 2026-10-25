@@ -1361,6 +1361,9 @@ public:
         // View > Full Height Browser, after the reference's (off): off, the detail view spans the
         // window under the browser; on, the browser runs down beside it.
         bool fullHeightBrowser = false;
+        // Draw Mode with Pitch Lock, after the reference's (its song preference data, off): Draw Mode draws notes
+        // at one pitch, and Option draws them melodically, the other way round from its default.
+        bool drawWithPitchLock = false;
         bool operator== (const Preferences&) const = default;
     };
     // The audio device's latency as it reports it, with Driver Error Compensation. Recordings are placed

@@ -10048,7 +10048,7 @@ private:
                 if (step < 0 || step * grid >= contentEndBeat (*clip)) return;
                 owner.session.beginEditGesture ("Draw MIDI notes"); gesture = true;
                 drawing = true; dragClipId = clip->id; drawn.clear();
-                pitchLocked = e.mods.isAltDown(); drawFirstStep = drawLastStep = step; drawPitch = pitch;
+                pitchLocked = e.mods.isAltDown() != owner.session.preferences().drawWithPitchLock; drawFirstStep = drawLastStep = step; drawPitch = pitch;
             }
             else if (! drawing || clip->id != dragClipId) return;
             const auto clipId = clip->id;
@@ -17510,41 +17510,47 @@ private:
     static constexpr int infoCornerWidth = 200;
     static constexpr int infoHeight = 110;
     // Preferences, after the reference's Record, Warp & Launch settings.
-    // Preferences' Display & Input page: the display zoom and Follow Behavior.
+    // Preferences' Display & Input page: the display zoom, Follow Behavior, and in Mouse and Pen Input,
+    // Draw Mode with Pitch Lock.
     class DisplayPage final : public juce::Component
     {
     public:
         explicit DisplayPage (Impl& o) : owner (o)
         {
-            for (auto* c : std::initializer_list<juce::Component*> { &heading, &zoomLabel, &zoom, &followLabel, &follow }) addAndMakeVisible (c);
-            styleHeading (heading, "Display");
+            for (auto* c : std::initializer_list<juce::Component*> { &heading, &zoomLabel, &zoom, &followLabel, &follow, &mouseHeading, &pitchLock }) addAndMakeVisible (c);
+            styleHeading (heading, "Display"); styleHeading (mouseHeading, "Mouse and Pen Input");
             zoomLabel.setText ("Zoom Display", juce::dontSendNotification); followLabel.setText ("Follow Behavior", juce::dontSendNotification);
-            zoom.setName ("Display zoom"); follow.setName ("Follow behavior");
+            zoom.setName ("Display zoom"); follow.setName ("Follow behavior"); pitchLock.setName ("Draw Mode with Pitch Lock");
             for (int percent = 50; percent <= 200; percent += 25) zoom.addItem (juce::String (percent) + "%", percent);
             follow.addItem ("Page", 1); follow.addItem ("Scroll", 2);
             zoom.onChange = follow.onChange = [this] { apply(); };
+            pitchLock.onClick = [this] { apply(); };
             sync();
         }
         void sync()
         {
             const auto p = owner.session.preferences();
             zoom.setSelectedId (p.zoomPercent, juce::dontSendNotification); follow.setSelectedId (p.scrollFollow ? 2 : 1, juce::dontSendNotification);
+            pitchLock.setToggleState (p.drawWithPitchLock, juce::dontSendNotification);
         }
         void apply()
         {
             auto p = owner.session.preferences();
             p.zoomPercent = zoom.getSelectedId() > 0 ? zoom.getSelectedId() : 100; p.scrollFollow = follow.getSelectedId() == 2;
+            p.drawWithPitchLock = pitchLock.getToggleState();
             owner.report (owner.session.setPreferences (p)); owner.applyInterfaceLook(); sync();
         }
         void resized() override
         {
             auto area = getLocalBounds().reduced (16, 8);
             preferenceHeading (area, heading); preferenceRow (area, zoomLabel, zoom, 110); preferenceRow (area, followLabel, follow, 110);
+            area.removeFromTop (8); preferenceHeading (area, mouseHeading); pitchLock.setBounds (area.removeFromTop (22));
         }
     private:
         Impl& owner;
-        juce::Label heading, zoomLabel, followLabel;
+        juce::Label heading, zoomLabel, followLabel, mouseHeading;
         juce::ComboBox zoom, follow;
+        juce::ToggleButton pitchLock { "Draw Mode with Pitch Lock" };
     };
     // Preferences' Theme & Colors page: the interface's theme, Halftrack's own.
     class ThemePage final : public juce::Component
@@ -19457,6 +19463,19 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         check (drawnNotes() == Drawn { { 4.0, 70, .25 }, { 4.25, 70, .25 }, { 4.5, 70, .25 }, { 4.75, 70, .25 }, { 5.0, 70, .25 } },
                "with Alt held, every drawn note keeps the first note's pitch");
         pianoRoll.keyPressed (undo);
+        {
+            // Draw Mode with Pitch Lock, a Display & Input preference after the reference's (off): on, drawing keeps one
+            // pitch and Alt draws melodically.
+            auto prefs = session.preferences(); prefs.drawWithPitchLock = true; check (session.setPreferences (prefs).wasOk(), "turn Draw Mode with Pitch Lock on");
+            drawDrag ({ point (4.05, 70), point (4.55, 73), point (5.05, 66) });
+            check (drawnNotes() == Drawn { { 4.0, 70, .25 }, { 4.25, 70, .25 }, { 4.5, 70, .25 }, { 4.75, 70, .25 }, { 5.0, 70, .25 } },
+                   "with Draw Mode with Pitch Lock on, a drawing keeps the first note's pitch");
+            pianoRoll.keyPressed (undo);
+            drawDrag ({ point (4.05, 70), point (4.55, 70), point (5.05, 72) }, juce::ModifierKeys::altModifier);
+            check (drawnNotes() == Drawn { { 4.0, 70, .25 }, { 4.25, 70, .25 }, { 4.5, 70, .25 }, { 4.75, 71, .25 }, { 5.0, 72, .25 } }, "and with Alt it follows the pointer's pitch");
+            pianoRoll.keyPressed (undo);
+            prefs.drawWithPitchLock = false; check (session.setPreferences (prefs).wasOk(), "turn it off again");
+        }
         drawDrag ({ point (0.55, 64), point (1.55, 64) });
         check (drawnNotes() == Drawn { { 0.5, 64, .25 }, { 0.75, 64, .25 }, { 1.0, 64, .25 }, { 1.25, 64, .25 }, { 1.5, 64, .25 } } && notes().size() == 5,
                "notes drawn over another at their pitch replace it");
