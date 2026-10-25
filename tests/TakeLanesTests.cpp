@@ -143,6 +143,16 @@ int runTakeLanesTests (const juce::File& artifacts)
         check (track().takeLanes.size() == 2, "only it goes");
         s.undo(); check (track().takeLanes.size() == 3, "one undo brings it back");
         s.undo(); check (track().takeLanes.size() == 2, "and another undoes the insert");
+        // Reordering and resizing, as the reference's (its manual, section 21.2).
+        const auto firstLane = track().takeLanes[0].id, secondLane = track().takeLanes[1].id;
+        ok (s.moveTakeLane (secondLane, 0), "move Take 2 above Take 1");
+        check (track().takeLanes[0].id == secondLane && track().takeLanes[1].id == firstLane && s.undoSteps()[0] == "Move take lane", "it goes first, one undo step");
+        check (s.moveTakeLane ("missing", 0).failed(), "an unknown lane is refused");
+        s.undo(); check (track().takeLanes[0].id == firstLane && track().takeLanes[1].id == secondLane, "undo puts it back");
+        const auto history = s.undoSteps();
+        ok (s.setTakeLaneHeight (secondLane, 80), "make Take 2 80 pixels high");
+        check (track().takeLanes[1].height == 80 && track().takeLanes[0].height == 0 && s.undoSteps() == history && s.setTakeLaneHeight (secondLane, 10).failed(),
+               "it is, outside the undo history as a track's height is; less than a track's least is refused");
 
         // Reopening.
         ok (s.setTrackArmed (0, false), "disarm");
@@ -154,6 +164,15 @@ int runTakeLanesTests (const juce::File& artifacts)
         const auto after = s.snapshot().tracks[0];
         check (after.takeLanes.size() == 2 && after.takeLanes[0].clips.size() == 2 && after.takeLanes[1].clips[0].file == before.takeLanes[1].clips[0].file
                && after.takeLanes[1].clips[0].file.existsAsFile() && s.missingMedia().isEmpty(), "the lanes reopen with their audio");
+        check (after.takeLanes[1].height == 80, "and Take 2 its height");
+        {
+            auto text = project.loadFileAsString();
+            const auto at = text.indexOf ("halftrackHeight=\"80\"");
+            const auto broken = project.getSiblingFile ("Lane Height.halftrack");
+            check (at > 0 && broken.replaceWithText (text.replaceSection (at, 20, "halftrackHeight=\"5\"")), "write a project with a lane 5 pixels high");
+            const auto generation = s.snapshot().projectGeneration;
+            check (s.loadProject (broken).failed() && s.snapshot().projectGeneration == generation, "it is refused, the open project kept");
+        }
         // Loop recording, as the reference's: each pass round a loop becomes a take lane of its own,
         // and the last pass recorded ends up on top in the main lane. A one-second loop, shorter than
         // the engine's own minimum, records 3.5 passes of audio into one file, cut into passes.

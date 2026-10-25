@@ -82,4 +82,15 @@ Halftrack:
 
 The UI suite checks Take 1's highlight over the comped range and Take 2's either side of it, a moved part losing its highlight, a highlight's edge dragged later moving the split in one undo step and undo returning it, and a Draw Mode drag comping a range in one step.
 
-Missing: moving a split between MIDI comp parts, reordering and resizing lanes, dragging samples onto lanes, and MIDI comping through the UI.
+## Reordering and resizing (2026-10-25)
+
+The reference's manual ([Comping](https://www.ableton.com/en/live-manual/12/comping/), section 21.2, consulted 2026-10-25): take lanes reorder within their track by dragging and dropping them, or with Cmd (Ctrl elsewhere) and the arrow keys, and resize vertically with Option +/-, the mouse wheel or a handle on a lane's edge.
+
+Halftrack:
+
+- **Moving.** `moveTakeLane (laneId, index)` moves a lane among its track's lanes, with the lanes at its place on linked tracks as duplicating and deleting move them, one undo step named "Move take lane". A lane's header dragged up or down moves it there as the pointer passes the other lanes' middles, the whole drag one undo step. A click on a header selects its lane, and Cmd+Up or Down then moves it a place (a time selection's cycling keeps those keys while there is one).
+- **Heights.** `setTakeLaneHeight (laneId, pixels)` sets a lane's height, from a track's least to its most (20 to 600 pixels), or 0 for the usual 46. Like a track's height it is kept with the project and is not an undo step. A header's lower edge drags it; with the lane selected, Option +/- scale it by a quarter, and Option-scrolling over the lane by 12% a step. A project with a lane height out of range is refused.
+
+The take lanes suite moves Take 2 above Take 1 in one undo step, refuses an unknown lane, undoes the move, sets a lane 80 pixels high outside the undo history, refuses 10 pixels, reopens the project with the height and refuses one with a lane 5 pixels high. The UI suite moves Take 2 above Take 1 with Cmd+Up after a click on its header, drags Take 1's header below Take 2, each one undo step, and makes Take 1 30 pixels taller by its edge, a quarter taller with Option+= and a little shorter by Option-scrolling.
+
+Missing: moving a split between MIDI comp parts, dragging samples onto lanes, and MIDI comping through the UI.

@@ -1721,6 +1721,18 @@ Result validateTrackLinks (const juce::ValueTree& state)
 }
 // Automatic colours: a colour sequence index the generator can draw, picker slots within a sequence, and an
 // opaque Main colour.
+// A take lane's height, when it has one, is a whole number of pixels a track may have.
+Result validateTakeLaneHeights (const juce::ValueTree& node)
+{
+    if (node.hasType (takeLaneType) && node.hasProperty (trackHeightProperty))
+    {
+        const auto text = node[trackHeightProperty].toString().trim();
+        if (text.isEmpty() || String (text.getIntValue()) != text || text.getIntValue() < Session::minimumTrackHeight || text.getIntValue() > Session::maximumTrackHeight)
+            return Result::fail ("This project's take lane heights are out of range.");
+    }
+    for (const auto& child : node) if (auto result = validateTakeLaneHeights (child); result.failed()) return result;
+    return Result::ok();
+}
 Result validateColours (const juce::ValueTree& state)
 {
     const auto whole = [&] (const juce::Identifier& key, juce::int64 low, juce::int64 high)
@@ -7453,6 +7465,7 @@ Session::Snapshot Session::snapshot() const
         for (auto lane : t->state.getChildWithName (takeLanesType))
         {
             TakeLaneInfo laneInfo { lane[te::IDs::id].toString(), lane[te::IDs::name].toString(), {} };
+            laneInfo.height = static_cast<int> (lane.getProperty (trackHeightProperty, 0));
             for (auto clip : lane) laneInfo.clips.push_back (describeLaneClip (clip, e));
             info.takeLanes.push_back (std::move (laneInfo));
         }
@@ -7678,6 +7691,7 @@ Result Session::loadProject (const File& file)
     if (auto result = validateFollowActions (state); result.failed()) return result;
     if (auto result = validateLocators (state); result.failed()) return result;
     if (auto result = validateColours (state); result.failed()) return result;
+    if (auto result = validateTakeLaneHeights (state); result.failed()) return result;
     if (auto result = validateTrackDelays (state); result.failed()) return result;
     if (auto result = validateTrackLinks (state); result.failed()) return result;
     if (auto result = validateHostedInstruments (state); result.failed()) return result;
@@ -9190,6 +9204,33 @@ Result Session::duplicateTakeLane (const String& laneId, String& copyId)
         if (l == lane) copyId = copy[te::IDs::id].toString();
     }
     impl->changed(); return Result::ok();
+}
+Result Session::moveTakeLane (const String& laneId, int index)
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    auto [track, lane] = impl->takeLane (laneId);
+    if (track == nullptr) return Result::fail ("Take lane not found.");
+    auto lanes = lane.getParent();
+    const int from = lanes.indexOf (lane);
+    index = juce::jlimit (0, lanes.getNumChildren() - 1, index);
+    if (index == from) return Result::ok();
+    std::vector<juce::ValueTree> linked;
+    for (auto* other : impl->linkedTracks (*track)) if (auto l = impl->laneAt (*other, from); l.isValid()) linked.push_back (l);
+    impl->transaction ("Move take lane");
+    auto* undo = &impl->edit->getUndoManager();
+    lanes.moveChild (from, index, undo);
+    for (auto& l : linked) { auto parent = l.getParent(); parent.moveChild (parent.indexOf (l), juce::jmin (index, parent.getNumChildren() - 1), undo); }
+    impl->changed(); return Result::ok();
+}
+Result Session::setTakeLaneHeight (const String& laneId, int pixels)
+{
+    if (pixels != 0 && (pixels < minimumTrackHeight || pixels > maximumTrackHeight)) return Result::fail ("A take lane is " + String (minimumTrackHeight) + " to " + String (maximumTrackHeight) + " pixels high.");
+    auto [track, lane] = impl->takeLane (laneId);
+    if (track == nullptr) return Result::fail ("Take lane not found.");
+    if ((int) lane.getProperty (trackHeightProperty, 0) == pixels) return Result::ok();
+    if (pixels == 0) lane.removeProperty (trackHeightProperty, nullptr);
+    else lane.setProperty (trackHeightProperty, pixels, nullptr);
+    sendChangeMessage(); return Result::ok();
 }
 Result Session::removeTakeLane (const String& laneId)
 {

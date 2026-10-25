@@ -519,7 +519,7 @@ public:
     };
     // A take lane: recorded or added takes kept below a track's main lane, as in the reference's
     // comping. Take lane clips do not play; comping copies a range of a lane into the main lane.
-    struct TakeLaneInfo { juce::String id, name; std::vector<ClipInfo> clips; };
+    struct TakeLaneInfo { juce::String id, name; std::vector<ClipInfo> clips; int height = 0; }; // A height of 0 is the usual one.
     // A track's or group's output ("Audio To"): Master, Sends Only, or another audio track, whose devices
     // and mixer then play it as if it were that track's input.
     // A MIDI track without an instrument plays its MIDI to a MIDI port instead ("MIDI To"), on one channel.
@@ -915,6 +915,12 @@ public:
     // its takes is in the main lane (0x103827a2c).
     juce::StringArray unusedTakeLanes (const juce::StringArray& trackIds) const;
     juce::Result renameTakeLane (const juce::String& laneId, const juce::String& name);
+    // Moves a take lane to another place among its track's lanes, with the lanes at its place on linked tracks, as
+    // the reference reorders lanes by dragging or with Cmd and the arrow keys. One undo step.
+    juce::Result moveTakeLane (const juce::String& laneId, int newIndex);
+    // A take lane's height in pixels (minimumTrackHeight to maximumTrackHeight; 0 for the usual one), kept with the
+    // project as a track's is, outside the undo history.
+    juce::Result setTakeLaneHeight (const juce::String& laneId, int pixels);
     juce::Result compTake (const juce::String& laneId, double startSeconds, double endSeconds);
     juce::Result cycleTake (const juce::String& trackId, double startSeconds, double endSeconds, bool next);
     // Auditions a take lane: it plays in place of its track's main lane, which the snapshot keeps

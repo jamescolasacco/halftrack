@@ -2909,3 +2909,7 @@ UI area. As the reference's key list has it (section 42.6), typing on a position
 ## Scene View — 2026-10-25
 
 UI area. As the reference's manual describes (section 7.2.2), selecting scenes or clicking the Main's title in the Session shows a Scene View in the detail view: a title bar with the scene's number, name and colour (or the count of several), whose menu renames and colours them, and Tempo and Signature fields that set every selected scene's, each one undo step ([scene tempo contract](research/scene-tempo-contract.md#scene-view-2026-10-25)). Renaming several selected scenes now renames them all. Scene follow actions remain missing. Checked in the UI suite.
+
+## Reordering and resizing take lanes — 2026-10-25
+
+Engine and UI areas. As the reference's manual describes (section 21.2), a take lane's header now drags it to another place among its track's lanes, Cmd+Up/Down moves the selected lane (`Session::moveTakeLane`, one undo step), and a lane's lower edge, Option +/- and Option-scrolling set its height, kept with the project outside the undo history (`Session::setTakeLaneHeight`) ([take lanes contract](research/take-lanes-contract.md#reordering-and-resizing-2026-10-25)). Checked in the take lanes and UI suites.

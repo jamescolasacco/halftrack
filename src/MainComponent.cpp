@@ -1340,6 +1340,8 @@ public:
                     }
                 refresh(); return true;
             }
+            if ((code == juce::KeyPress::upKey || code == juce::KeyPress::downKey) && ! shift && ! key.getModifiers().isAltDown() && ! showSession && ! showPiano && takeSelection.laneId.isNotEmpty())
+            { moveSelectedTakeLane (code == juce::KeyPress::upKey ? -1 : 1); return true; }
             if (! shift && ! showSession && ! showPiano && selectedClipIds.size() > 1 && (code == 'D' || code == 'C' || code == 'X')) { clipGroupCommand ((char) code); return true; }
             if (! shift && ! key.getModifiers().isAltDown() && ! showSession && ! showPiano && (code == 'E' || code == 'D' || code == 'C' || code == 'X' || code == 'V'))
             {
@@ -1432,7 +1434,11 @@ public:
             if (arrangementArrow (code)) return true;
         }
         if (key.getModifiers().isAltDown() && ! cmd && ! showSession && (code == '=' || code == '+' || code == '-'))
-        { scaleSelectedTrackHeights (code == '-' ? 1 / 1.25 : 1.25); return true; }
+        {
+            if (takeSelection.laneId.isNotEmpty()) scaleTakeLaneHeight (takeSelection.laneId, code == '-' ? 1 / 1.25 : 1.25);
+            else scaleSelectedTrackHeights (code == '-' ? 1 / 1.25 : 1.25);
+            return true;
+        }
         // H, W, U, T, R and X also take Shift, as the reference's alternates do.
         if (! cmd && ! key.getModifiers().isAltDown() && ! showSession && ! showPiano && (code == 'H' || code == 'h')) { optimizeHeight(); return true; }
         if (! cmd && ! key.getModifiers().isAltDown() && ! showSession && ! showPiano && (code == 'R' || code == 'r') && clickedArea == Area::arrangement)
@@ -1643,6 +1649,56 @@ private:
     static constexpr int takeLaneHeight = 46;
     std::set<juce::String> takeLanesShown;
     struct TakeSelection { juce::String laneId; double start = 0, end = 0; bool active() const { return laneId.isNotEmpty() && end > start; } } takeSelection;
+    // Take lanes reorder and resize as the reference's do (its manual, section 21.2): a lane's header dragged up or
+    // down moves it among its track's lanes, Cmd with Up or Down moves the selected lane, and its header's lower edge,
+    // Option +/- or Option-scrolling over it change its height.
+    void selectTakeLane (const juce::String& laneId) { takeSelection = { laneId, 0, 0 }; timeSelection = {}; canvas.repaint(); }
+    const Session::TakeLaneInfo* takeLaneInfo (const juce::String& laneId, int* track = nullptr, int* index = nullptr) const
+    {
+        for (size_t t = 0; t < state.tracks.size(); ++t)
+            for (size_t k = 0; k < state.tracks[t].takeLanes.size(); ++k)
+                if (state.tracks[t].takeLanes[k].id == laneId)
+                {
+                    if (track != nullptr) *track = (int) t;
+                    if (index != nullptr) *index = (int) k;
+                    return &state.tracks[t].takeLanes[k];
+                }
+        return nullptr;
+    }
+    // The place among its track's lanes a lane dragged to a canvas y would take: one after each other lane above y's middle.
+    int takeLaneIndexAt (const juce::String& laneId, int y) const
+    {
+        int track = -1, place = 0;
+        if (takeLaneInfo (laneId, &track) == nullptr) return -1;
+        for (const auto& lane : lanes)
+            if (lane.take >= 0 && lane.index == track && state.tracks[(size_t) track].takeLanes[(size_t) lane.take].id != laneId && y > lane.y + lane.height / 2) ++place;
+        return place;
+    }
+    juce::String draggedTakeLane; // While a header drags its lane: the lane, which the header shown at its place may change under the drag.
+    void dragTakeLane (const juce::String& laneId, int y)
+    {
+        if (draggedTakeLane.isEmpty()) { draggedTakeLane = laneId; session.beginEditGesture ("Move take lane"); }
+        int index = -1;
+        const int target = takeLaneIndexAt (draggedTakeLane, y);
+        if (takeLaneInfo (draggedTakeLane, nullptr, &index) != nullptr && target >= 0 && target != index)
+        { report (session.moveTakeLane (draggedTakeLane, target)); refresh(); resized(); }
+    }
+    void endTakeLaneDrag() { if (std::exchange (draggedTakeLane, juce::String()).isNotEmpty()) { session.endEditGesture(); refresh(); } }
+    void moveSelectedTakeLane (int step)
+    {
+        int index = -1;
+        if (takeLaneInfo (takeSelection.laneId, nullptr, &index) == nullptr || index + step < 0) return;
+        report (session.moveTakeLane (takeSelection.laneId, index + step)); refresh(); resized();
+    }
+    void setTakeLaneHeightFromUI (const juce::String& laneId, int pixels)
+    {
+        pixels = juce::jlimit (Session::minimumTrackHeight, Session::maximumTrackHeight, pixels);
+        report (session.setTakeLaneHeight (laneId, pixels == takeLaneHeight ? 0 : pixels)); refresh(); resized(); canvas.repaint();
+    }
+    void scaleTakeLaneHeight (const juce::String& laneId, double factor)
+    {
+        if (const auto* lane = takeLaneInfo (laneId)) setTakeLaneHeightFromUI (laneId, (int) std::round ((lane->height > 0 ? lane->height : takeLaneHeight) * factor));
+    }
     void toggleTakeLanes()
     {
         if (const auto* track = currentTrack(); track != nullptr && ! track->isReturn)
@@ -2103,7 +2159,11 @@ private:
                              : track.folded ? foldedTrackHeight : track.height > 0 ? track.height : trackHeight;
             lanes.push_back ({ false, t, y, height }); y += height;
             if (height > 0 && ! track.folded && takeLanesShown.count (track.id))
-                for (int k = 0; k < (int) track.takeLanes.size(); ++k) { lanes.push_back ({ false, t, y, takeLaneHeight, -1, k }); y += takeLaneHeight; }
+                for (int k = 0; k < (int) track.takeLanes.size(); ++k)
+                {
+                    const int laneHeight = track.takeLanes[(size_t) k].height > 0 ? track.takeLanes[(size_t) k].height : takeLaneHeight;
+                    lanes.push_back ({ false, t, y, laneHeight, -1, k }); y += laneHeight;
+                }
             if (automationMode && height > 0 && ! track.folded)
                 if (const auto found = automationLanes.find (track.id); found != automationLanes.end())
                     for (int k = 0; k < found->second.size(); ++k) { lanes.push_back ({ false, t, y, automationLaneHeight, k }); y += automationLaneHeight; }
@@ -3853,6 +3913,7 @@ private:
             name.setName ("Take lane name"); name.setEditable (false, true, false); name.setFont (font (10.5f));
             name.setColour (juce::Label::textColourId, ink); name.setTooltip ("Double-click to rename this take lane");
             name.onTextChange = [this] { owner.report (owner.session.renameTakeLane (laneId, name.getText())); owner.refresh(); };
+            name.addMouseListener (this, false); // Its name drags the lane too.
             remove.setName ("Delete take lane"); remove.setWantsKeyboardFocus (false); remove.setTooltip ("Delete this take lane and its takes");
             remove.onClick = [this] { owner.report (owner.session.removeTakeLane (laneId)); owner.refresh(); };
         }
@@ -3865,10 +3926,24 @@ private:
         }
         void paint (juce::Graphics& g) override
         {
-            g.fillAll (themes::colour (0xff2e2e2e)); g.setColour (colour.withAlpha (.6f)); g.fillRect (0, 0, 4, getHeight());
+            g.fillAll (themes::colour (owner.takeSelection.laneId == laneId ? 0xff3a3a3a : 0xff2e2e2e)); g.setColour (colour.withAlpha (.6f)); g.fillRect (0, 0, 4, getHeight());
             g.setColour (line); g.drawRect (getLocalBounds());
         }
         void resized() override { name.setBounds (10, 4, getWidth() - 78, 18); audition.setBounds (getWidth() - 62, 4, 22, 18); remove.setBounds (getWidth() - 34, 4, 24, 18); }
+        // A click selects the lane; the lower edge drags its height, and the rest of the header drags the lane to another place.
+        bool onEdge (juce::Point<int> at) const { return at.y >= getHeight() - 4; }
+        void mouseMove (const juce::MouseEvent& e) override { setMouseCursor (onEdge (e.getEventRelativeTo (this).getPosition()) ? juce::MouseCursor::UpDownResizeCursor : juce::MouseCursor::NormalCursor); }
+        void mouseDown (const juce::MouseEvent& e) override
+        {
+            owner.selectTakeLane (laneId); repaint();
+            heightAtDown = onEdge (e.getEventRelativeTo (this).getPosition()) && ! e.mods.isPopupMenu() ? getHeight() : 0;
+        }
+        void mouseDrag (const juce::MouseEvent& e) override
+        {
+            if (heightAtDown > 0) { owner.setTakeLaneHeightFromUI (laneId, heightAtDown + e.getDistanceFromDragStartY()); return; }
+            if (! e.mods.isPopupMenu() && (owner.draggedTakeLane.isNotEmpty() || e.getDistanceFromDragStart() > 6)) owner.dragTakeLane (laneId, e.getEventRelativeTo (&owner.canvas).y);
+        }
+        void mouseUp (const juce::MouseEvent&) override { heightAtDown = 0; owner.endTakeLaneDrag(); }
         juce::String laneId;
     private:
         Impl& owner;
@@ -3876,6 +3951,7 @@ private:
         juce::Label name;
         juce::TextButton remove { "x" };
         SpeakerButton audition;
+        int heightAtDown = 0;
     };
     class Canvas final : public juce::Component, private juce::ChangeListener
     {
@@ -4999,7 +5075,14 @@ private:
         void mouseWheelMove (const juce::MouseEvent& event, const juce::MouseWheelDetails& wheel) override
         {
             if (event.mods.isCommandDown()) { owner.zoom (wheel.deltaY > 0 ? 1.12 : 1.0 / 1.12); return; }
-            if (event.mods.isAltDown() && wheel.deltaY != 0) { owner.scaleTrackHeight (owner.trackAtY (event.y), wheel.deltaY > 0 ? 1.12 : 1 / 1.12); return; }
+            if (event.mods.isAltDown() && wheel.deltaY != 0)
+            {
+                // Over a take lane, its height.
+                for (const auto& lane : owner.lanes)
+                    if (lane.take >= 0 && event.y >= lane.y && event.y < lane.y + lane.height)
+                    { owner.scaleTakeLaneHeight (owner.state.tracks[(size_t) lane.index].takeLanes[(size_t) lane.take].id, wheel.deltaY > 0 ? 1.12 : 1 / 1.12); return; }
+                owner.scaleTrackHeight (owner.trackAtY (event.y), wheel.deltaY > 0 ? 1.12 : 1 / 1.12); return;
+            }
             if (event.mods.isShiftDown() || std::abs (wheel.deltaX) > std::abs (wheel.deltaY))
             {
                 const auto delta = event.mods.isShiftDown() ? wheel.deltaY : wheel.deltaX;
@@ -21655,6 +21738,49 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
                        && state.tracks[(size_t) t].takeLanes[1].name == state.tracks[(size_t) t].takeLanes[0].name,
                    "with a take lane selected, Cmd+D duplicates it below, as the reference's key does");
             session.undo(); refresh(); takeSelection = {};
+        }
+        {
+            // Reordering and resizing, as the reference's (its manual, section 21.2).
+            const auto lanesOf = [&] { return state.tracks[(size_t) t].takeLanes; };
+            const auto firstId = lanesOf()[0].id, secondId = lanesOf()[1].id;
+            const auto headerOf = [&] (const juce::String& id) -> TakeLaneHeader*
+            {
+                for (int i = 0; i < canvas.getNumChildComponents(); ++i)
+                    if (auto* h = dynamic_cast<TakeLaneHeader*> (canvas.getChildComponent (i)); h != nullptr && h->laneId == id) return h;
+                return nullptr;
+            };
+            const auto onHeader = [&] (juce::Component& c, juce::Point<float> at, juce::Point<float> from, bool dragged, int mods = 0)
+            {
+                const auto when = juce::Time::getCurrentTime();
+                return juce::MouseEvent (juce::Desktop::getInstance().getMainMouseSource(), at, juce::ModifierKeys (juce::ModifierKeys::leftButtonModifier | mods), 1.0f, 0, 0, 0, 0, &c, &c, when, from, when, 1, dragged);
+            };
+            auto* second = headerOf (secondId);
+            check (second != nullptr, "find Take 2's header");
+            const juce::Point<float> grab (20.0f, 30.0f);
+            second->mouseDown (onHeader (*second, grab, grab, false)); second->mouseUp (onHeader (*second, grab, grab, false));
+            check (takeSelection.laneId == secondId && handleKey (juce::KeyPress (juce::KeyPress::upKey, juce::ModifierKeys::commandModifier, 0)) && lanesOf()[0].id == secondId
+                       && session.undoSteps()[0] == "Move take lane", "after a click on its header, Cmd+Up moves Take 2 above Take 1, one undo step");
+            session.undo(); refresh(); resized();
+            // Dragging Take 1's header below Take 2 moves it there, in one undo step.
+            auto* first = headerOf (firstId);
+            const auto below = juce::Point<float> (20.0f, (float) (headerOf (secondId)->getBottom() - first->getY()) + 4.0f);
+            first->mouseDown (onHeader (*first, grab, grab, false)); first->mouseDrag (onHeader (*first, below, grab, true)); first->mouseUp (onHeader (*first, below, grab, true)); refresh();
+            check (lanesOf()[0].id == secondId && lanesOf()[1].id == firstId && session.undoSteps()[0] == "Move take lane", "dragging Take 1's header below Take 2 moves it there, one undo step");
+            session.undo(); refresh(); resized();
+            // Its lower edge drags its height; Option +/- and Option-scrolling over it scale it.
+            first = headerOf (firstId);
+            const juce::Point<float> edge (60.0f, (float) first->getHeight() - 2.0f), lower = edge + juce::Point<float> (0.0f, 30.0f);
+            first->mouseDown (onHeader (*first, edge, edge, false)); first->mouseDrag (onHeader (*first, lower, edge, true)); first->mouseUp (onHeader (*first, lower, edge, true)); refresh();
+            check (lanesOf()[0].height == takeLaneHeight + 30 && takeSelection.laneId == firstId, "dragging Take 1's lower edge down makes it 30 pixels taller");
+            check (handleKey (juce::KeyPress ('=', juce::ModifierKeys::altModifier, 0)) && lanesOf()[0].height == (int) std::round ((takeLaneHeight + 30) * 1.25), "and Option+= a quarter taller");
+            const Lane* lane = nullptr;
+            for (const auto& l : lanes) if (l.index == t && l.take == 0) lane = &l;
+            const juce::Point<float> over (40.0f, (float) (lane != nullptr ? lane->y + 10 : 0));
+            const auto scaled = lanesOf()[0].height;
+            canvas.mouseWheelMove (onHeader (canvas, over, over, false, juce::ModifierKeys::altModifier), juce::MouseWheelDetails { 0.0f, -1.0f, false, false, false });
+            refresh();
+            check (lane != nullptr && lanesOf()[0].height == (int) std::round (scaled / 1.12), "and Option-scrolling down over its lane a little shorter");
+            check (session.setTakeLaneHeight (firstId, 0).wasOk(), "back to the usual height"); refresh(); resized(); takeSelection = {};
         }
         check (handleKey (juce::KeyPress ('T', juce::ModifierKeys::shiftModifier | juce::ModifierKeys::altModifier, 0)) && state.tracks[(size_t) t].takeLanes.size() == 3,
                "Shift+Option+T inserts a take lane");
