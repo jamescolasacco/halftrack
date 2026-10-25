@@ -2083,6 +2083,18 @@ private:
     static constexpr const char* infoTitleProperty = "infoTitle";
     static constexpr const char* infoTextProperty = "infoText";
     bool headerFocus = false;
+    // A clip dragged between the views, as the reference's manual describes: dragged over the other
+    // view's selector, the view switches and the drag goes on there, dropping a copy. From a slot it
+    // aims at an Arrangement track and time; from the Arrangement at a slot.
+    struct CrossViewDrag
+    {
+        bool fromSession = true;
+        int track = -1, scene = -1; // The slot dragged from.
+        juce::String clipId;         // The Arrangement clip dragged.
+        int dropTrack = -1, dropScene = -1;
+        double dropTime = 0, length = 0;
+    };
+    std::optional<CrossViewDrag> crossViewDrag;
     // The clip view editor's tabs, as the reference's: the clip's content (Notes, or Sample for an
     // audio clip), its Envelopes, and its notes' MPE expression.
     enum class EditorTab { content, envelopes, expression };
@@ -3945,6 +3957,15 @@ private:
                 g.setColour (orange.withAlpha (0.1f)); g.fillRect (0, 0, tw, getHeight());
                 g.setColour (orange); g.drawRect (0, 0, tw, getHeight(), 2);
             }
+            // A slot clip dragged across, where it would land.
+            if (const auto& across = owner.crossViewDrag; across && across->fromSession && across->dropTrack >= 0)
+            {
+                const auto x = (float) ((across->dropTime - owner.viewStart) * owner.pixelsPerSecond);
+                const juce::Rectangle<float> box (x, (float) owner.laneY (across->dropTrack) + 2.0f, juce::jmax (4.0f, (float) (across->length * owner.pixelsPerSecond)),
+                                                  (float) owner.laneHeight (across->dropTrack) - 4.0f);
+                g.setColour (ink.withAlpha (0.15f)); g.fillRect (box);
+                g.setColour (ink); g.drawRect (box, 2.0f);
+            }
             g.restoreState();
             g.setColour (line); g.drawVerticalLine (tw, 0.0f, (float) getHeight());
             // The drop area under the tracks' headers, which makes a track of what is dropped there.
@@ -4209,6 +4230,10 @@ private:
                 return;
             }
             if (owner.selectedClipIds.size() > 1 && owner.selectedClipIds.contains (dragClipId)) { dragGroup (e, current); return; }
+            // Over the Session's selector the drag goes on in the Session: the move so far is taken back.
+            if (owner.dragArrangementClipAcross (dragClipId, e.getEventRelativeTo (&owner).getPosition(), [this]
+                { if (clipGesture) { owner.session.endEditGesture(); clipGesture = false; owner.session.undo(); movedClips.clear(); owner.refresh(); } }))
+                return;
             // Resolve the stable identity on every event; sorting, deletion or a
             // project switch must never redirect a body drag to the old index.
             for (int t=0; t<(int)current.tracks.size(); ++t)
@@ -4254,6 +4279,7 @@ private:
             }
             toggleOffOnUp = collapseOnUp = false;
             if (selectingTake) { selectingTake = false; return; }
+            if (owner.dropAcross()) { draggedClip = -1; dragClipId.clear(); return; } // Dropped in the Session.
             if (owner.envelopeKey.isNotEmpty())
             {
                 owner.refresh();
@@ -5406,6 +5432,13 @@ private:
             g.setColour (ink.withAlpha (0.85f)); g.fillRect (stopAll.getX() + 7, stopAll.getCentreY() - 4, 8, 8);
             g.setFont (font (10.0f)); g.drawText ("Stop All Clips", stopAll.withTrimmedLeft (22), juce::Justification::centredLeft, true);
             if (owner.state.scenes.empty()) { g.setColour (muted); g.setFont (font (13.0f)); g.drawText ("Insert a scene to begin launching clips.", grid.reduced (20), juce::Justification::centred); }
+            // An Arrangement clip dragged across, where it would land.
+            if (owner.crossViewDrag && ! owner.crossViewDrag->fromSession && owner.crossViewDrag->dropTrack >= 0)
+            {
+                g.saveState(); g.reduceClipRegion (grid);
+                g.setColour (ink); g.drawRect (slotBounds (owner.crossViewDrag->dropTrack, owner.crossViewDrag->dropScene).reduced (1), 2);
+                g.restoreState();
+            }
             // A dragged clip's destination.
             if (dragging && dropCell.first >= 0)
             {
@@ -5692,6 +5725,7 @@ private:
             }
             if (dragFrom.first < 0 || (! dragging && event.getDistanceFromDragStart() < 4)) return;
             dragging = true;
+            if (owner.dragSlotClipAcross (dragFrom, event.getEventRelativeTo (&owner).getPosition())) { dropCell = { -1, -1 }; repaint(); return; }
             dropCell = cellAt (event.getPosition());
             setMouseCursor (copyDrag (event.mods) ? juce::MouseCursor::CopyingCursor : juce::MouseCursor::DraggingHandCursor);
             repaint();
@@ -5731,6 +5765,7 @@ private:
             const auto from = std::exchange (dragFrom, { -1, -1 });
             if (! std::exchange (dragging, false)) return;
             setMouseCursor (juce::MouseCursor::NormalCursor);
+            if (owner.dropAcross()) return; // Dropped in the Arrangement.
             const auto to = std::exchange (dropCell, { -1, -1 });
             if (to.first >= 0 && to != from) dropClip (from, to, copyDrag (event.mods));
             repaint();
@@ -14496,6 +14531,70 @@ private:
     }
     // The clip view and the device view share the detail view, as the reference's do.
     void showClipView (bool clip) { if (clip == showPiano) return; if (clip) openPianoRoll(); else closeClipView(); }
+    // A slot clip's drag: over the Arrangement's selector the view switches and the drag aims at the
+    // Arrangement track and time under the pointer from then on; back over the Session's it returns.
+    // Returns whether the drag is going on in the Arrangement.
+    bool dragSlotClipAcross (std::pair<int, int> from, juce::Point<int> at)
+    {
+        if (selectedSlots.size() > 1) return false; // Several slots move only within the grid.
+        if (crossViewDrag && crossViewDrag->fromSession && sessionTab.getBounds().contains (at)) { crossViewDrag.reset(); showSessionView(); return false; }
+        if (! crossViewDrag && arrangementTab.getBounds().contains (at))
+        {
+            const auto* slot = juce::isPositiveAndBelow (from.first, (int) state.tracks.size()) && juce::isPositiveAndBelow (from.second, (int) state.tracks[(size_t) from.first].slots.size())
+                             ? &state.tracks[(size_t) from.first].slots[(size_t) from.second] : nullptr;
+            if (slot == nullptr || ! slot->hasClip) return false;
+            crossViewDrag = CrossViewDrag { true, from.first, from.second, {}, -1, -1, 0, slot->clip.length };
+            showArrangementView();
+        }
+        if (! crossViewDrag || ! crossViewDrag->fromSession) return false;
+        const auto p = canvas.getLocalPoint (this, at);
+        const bool inside = viewport.getBounds().contains (at) && p.x < canvas.timelineWidth();
+        const int track = inside ? trackAtY (p.y) : -1;
+        const auto& from_ = state.tracks[(size_t) crossViewDrag->track];
+        const bool fits = juce::isPositiveAndBelow (track, (int) state.tracks.size()) && state.tracks[(size_t) track].isMidi == from_.isMidi && ! state.tracks[(size_t) track].isReturn;
+        crossViewDrag->dropTrack = fits ? track : -1;
+        crossViewDrag->dropTime = snapTime (juce::jmax (0.0, viewStart + p.x / pixelsPerSecond), juce::ModifierKeys::getCurrentModifiers());
+        canvas.repaint();
+        return true;
+    }
+    // An Arrangement clip's drag, likewise, over the Session's selector: `takeBack` undoes the move
+    // made so far, and the drag aims at the slot under the pointer.
+    bool dragArrangementClipAcross (const juce::String& clipId, juce::Point<int> at, const std::function<void()>& takeBack)
+    {
+        if (crossViewDrag && ! crossViewDrag->fromSession && arrangementTab.getBounds().contains (at)) { crossViewDrag.reset(); showArrangementView(); return false; }
+        if (! crossViewDrag && sessionTab.getBounds().contains (at) && clipId.isNotEmpty())
+        {
+            takeBack();
+            crossViewDrag = CrossViewDrag { false, -1, -1, clipId };
+            showSessionView();
+        }
+        if (! crossViewDrag || crossViewDrag->fromSession) return false;
+        const auto cell = launcher.cellAt (launcher.getLocalPoint (this, at));
+        crossViewDrag->dropTrack = cell.first; crossViewDrag->dropScene = cell.second;
+        launcher.repaint();
+        return true;
+    }
+    // The drop at the end of a drag across: a copy where it aims. Returns whether there was one.
+    bool dropAcross()
+    {
+        const auto across = std::exchange (crossViewDrag, std::nullopt);
+        if (! across) return false;
+        if (across->fromSession && across->dropTrack >= 0)
+        {
+            juce::String copy;
+            const auto result = session.copySlotClipToArrangement (across->track, across->scene, state.tracks[(size_t) across->dropTrack].id, across->dropTime, copy);
+            report (result); refresh();
+            if (result.wasOk()) selectArrangementClip (copy);
+        }
+        else if (! across->fromSession && across->dropTrack >= 0 && across->dropScene >= 0)
+        {
+            const auto result = session.copyClipToSlot (across->clipId, across->dropTrack, across->dropScene);
+            report (result); refresh();
+            if (result.wasOk()) selectLauncherSlot (across->dropTrack, across->dropScene);
+        }
+        canvas.repaint(); launcher.repaint();
+        return true;
+    }
     // The clip the clip view shows: the selected audio clip, or the MIDI clip.
     const Session::ClipInfo* shownClip() const { if (const auto* audio = selectedAudioClip()) return audio; return currentMidiClip(); }
     // The clip title bar's menu, as the reference's: Rename, and the palette.
@@ -22998,6 +23097,59 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
             for (int step = 0; step < 9; ++step) session.undo();
             refresh();
             check ((int) state.tracks.size() == t, "nine undo steps remove the track");
+        }
+        {
+            // Between the views, as the reference's manual describes: a clip dragged over the other view's
+            // selector switches the view, the drag going on there, and dropped there it leaves a copy.
+            session.stop(); refresh();
+            const auto before = trackIds();
+            check (session.addMidiTrack ("Across").wasOk(), "a track to drag between the views"); refresh();
+            const int t = createdTrack (before);
+            const auto trackId = state.tracks[(size_t) t].id;
+            check (session.addMidiClipToSlot (trackId, 0, 4).wasOk(), "a clip in its first slot"); refresh();
+            check (session.addMidiNote (state.tracks[(size_t) t].slots[0].clip.id, 60, 1, 1, .8f).wasOk(), "a note in it"); refresh();
+            showSessionView(); selectLauncherSlot (t, 0); launcher.scrollSelectionIntoView(); refresh();
+            const auto now = juce::Time::getCurrentTime();
+            const juce::ModifierKeys pressed (juce::ModifierKeys::leftButtonModifier);
+            const auto down = launcher.launchPoint (t, 0) + juce::Point<float> (40, 0);
+            const auto onLauncher = [&] (juce::Point<float> at, bool dragged)
+            { return juce::MouseEvent (juce::Desktop::getInstance().getMainMouseSource(), at, pressed, 1.0f, 0, 0, 0, 0, &launcher, &launcher, now, down, now, 1, dragged); };
+            launcher.mouseDown (onLauncher (down, false));
+            launcher.mouseDrag (onLauncher (down + juce::Point<float> (0, 10), true));
+            launcher.mouseDrag (onLauncher (launcher.getLocalPoint (this, arrangementTab.getBounds().getCentre()).toFloat(), true));
+            check (! showSession && crossViewDrag.has_value() && crossViewDrag->fromSession, "dragged over the Arrangement's selector, a slot clip's drag goes on in the Arrangement");
+            viewport.setViewPosition (0, juce::jmax (0, laneY (t) - 10));
+            const juce::Point<int> onLane { 60, laneY (t) + laneHeight (t) / 2 };
+            const auto expected = snapTime (viewStart + 60.0 / pixelsPerSecond, {});
+            launcher.mouseDrag (onLauncher (launcher.getLocalPoint (&canvas, onLane).toFloat(), true));
+            check (crossViewDrag && crossViewDrag->dropTrack == t, "it aims at the track's lane under the pointer");
+            launcher.mouseUp (onLauncher (launcher.getLocalPoint (&canvas, onLane).toFloat(), true)); refresh();
+            {
+                const auto& clips = state.tracks[(size_t) t].clips;
+                check (! crossViewDrag && clips.size() == 1 && clips[0].notes.size() == 1 && std::abs (clips[0].start - expected) < 1e-6 && state.tracks[(size_t) t].slots[0].hasClip,
+                       "dropped there, a copy lands in the Arrangement at the time under the pointer, the slot keeping its clip");
+            }
+            const auto arranged = state.tracks[(size_t) t].clips[0];
+            const auto clipCentre = canvas.clipBounds (arranged, t).getCentre().toFloat();
+            const auto onCanvas = [&] (juce::Point<float> at, bool dragged)
+            { return juce::MouseEvent (juce::Desktop::getInstance().getMainMouseSource(), at, pressed, 1.0f, 0, 0, 0, 0, &canvas, &canvas, now, clipCentre, now, 1, dragged); };
+            canvas.mouseDown (onCanvas (clipCentre, false));
+            canvas.mouseDrag (onCanvas (clipCentre + juce::Point<float> (30, 0), true)); refresh();
+            const bool moved = std::abs (state.tracks[(size_t) t].clips[0].start - arranged.start) > 1e-6;
+            canvas.mouseDrag (onCanvas (canvas.getLocalPoint (this, sessionTab.getBounds().getCentre()).toFloat(), true)); refresh();
+            check (moved && showSession && crossViewDrag && ! crossViewDrag->fromSession && std::abs (state.tracks[(size_t) t].clips[0].start - arranged.start) < 1e-6,
+                   "dragged over the Session's selector, an Arrangement clip's drag goes on in the Session, the move so far taken back");
+            const auto onSlot = canvas.getLocalPoint (&launcher, launcher.slotCentre (t, 2).toInt()).toFloat();
+            canvas.mouseDrag (onCanvas (onSlot, true));
+            check (crossViewDrag && crossViewDrag->dropTrack == t && crossViewDrag->dropScene == 2, "it aims at the slot under the pointer");
+            canvas.mouseUp (onCanvas (onSlot, true)); refresh();
+            check (! crossViewDrag && state.tracks[(size_t) t].slots[2].hasClip && state.tracks[(size_t) t].slots[2].clip.notes.size() == 1
+                       && state.tracks[(size_t) t].clips.size() == 1 && std::abs (state.tracks[(size_t) t].clips[0].start - arranged.start) < 1e-6,
+                   "dropped there, a copy lands in the slot, the Arrangement keeping its clip");
+            for (int step = 0; step < 5; ++step) session.undo();
+            refresh();
+            check (state.tracks.size() == before.size(), "five undo steps take back both copies, the note, the clip and the track");
+            showSessionView();
         }
         {
             // Several Session slots: Shift-click takes in a rectangle, Cmd/Ctrl-click leaves one out, a drag

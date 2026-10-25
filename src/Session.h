@@ -907,6 +907,12 @@ public:
     // Pastes the copied clip into a slot; a copy of several slots pastes with its top-left clip there
     // and the rest at their places from it, all or none.
     juce::Result pasteSlotClip (int trackIndex, int sceneIndex);
+    // A clip dragged between the views, as the reference's manual describes (dragging it over the
+    // other view's selector): a slot clip copied into the Arrangement at a time on a track of its
+    // kind, or an Arrangement clip copied into a slot, replacing what is there, each as the
+    // clipboard's copy and paste do but leaving the clipboard as it was. One undo step.
+    juce::Result copySlotClipToArrangement (int trackIndex, int sceneIndex, const juce::String& trackId, double startSeconds, juce::String& copyId);
+    juce::Result copyClipToSlot (const juce::String& clipId, int trackIndex, int sceneIndex);
     // Several slots at once, as the reference's grid selection, each one undo step: their clips moved
     // or copied by a number of tracks and scenes (refused if any would leave the grid or land on a
     // track of the wrong kind; clips there are replaced), cleared, or copied (or cut) keeping their

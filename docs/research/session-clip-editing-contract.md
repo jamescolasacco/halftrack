@@ -71,6 +71,7 @@ Each is one undo step.
   - The group clears and comes back with one undo, and a two-clip cut pastes in order on another track.
 - **Between the views.**
   - A three-beat Arrangement MIDI clip with a note on its second beat, pasted into a slot, keeps the note and its three beats, with a new identity.
+  - Dragged across (`copySlotClipToArrangement`, `copyClipToSlot`), a four-beat slot clip lands in the Arrangement at beat 25 with its note, in one undo step, its slot keeping it, and the clipboard keeps what was copied before. A MIDI clip is refused on an audio track. The three-beat Arrangement clip dragged into an empty slot becomes a Session clip there, and two undo steps take both copies back.
   - A four-beat slot clip pasted into the Arrangement at beat 17 keeps its four beats and note.
   - A slot audio clip pasted into the Arrangement at one second has its audio collected.
 
@@ -84,7 +85,18 @@ For several slots, the UI suite checks:
 
 The UI suite drags a clip to another slot and copy-drags one with the platform's modifier. It also checks Cmd/Ctrl+C, V, D and X on the grid, pasting a clip into a slot, and Cmd/Ctrl+V in the Arrangement pasting the copied Session clip at the insert marker, with nine undo steps restoring the project.
 
+## Dragging between the views (2026-10-24)
+
+The reference's manual: clips move "from the Session View to the Arrangement and vice versa" by dragging them over the view selectors ([Session View](https://www.ableton.com/en/live-manual/12/session-view/), section 7.5, consulted 2026-10-24).
+
+- **Over the selector.** A slot clip dragged over the Arrangement selector switches to the Arrangement, and the drag goes on there, outlining where the clip would land on the lane under the pointer, at the snapped time. Back over the Session selector, the drag returns to the grid.
+- **From the Arrangement.** An Arrangement clip dragged over the Session selector switches to the Session: the move made so far is taken back, and the drag outlines the slot under the pointer. Back over the Arrangement selector, it moves along its track again.
+- **The drop.** Released over a lane of the clip's kind, or over a slot, it leaves a copy there, as the clipboard's copy and paste do, in one undo step, without touching the clipboard. The clip it came from stays. Released anywhere else, nothing changes.
+- A group of selected slots or clips moves only within its view.
+
+The UI suite drags a slot clip over the Arrangement selector and onto a lane, and an Arrangement clip over the Session selector and onto a slot, checking the view switches, the aims, the copies and their notes, the originals kept, and the undo steps.
+
 ## Not yet covered
 
-- Dragging clips between the views, and pasting a time selection (several tracks' clips) into the Session, which the reference lays out top to bottom.
+- Pasting a time selection (several tracks' clips) into the Session, which the reference lays out top to bottom, and dragging several clips or slots between the views.
 - Dragging a clip onto a group column or a scene's launch button.

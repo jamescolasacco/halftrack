@@ -231,6 +231,25 @@ int runSlotClipTests (const juce::File& artifacts)
                    "it becomes an Arrangement clip there, its four beats and note kept");
         }
 
+        // Dragged between the views, a clip is copied across, the clipboard left as it was.
+        {
+            const auto undoSteps = s.undoSteps().size();
+            juce::String draggedId;
+            ok (s.copySlotClipToArrangement (keys, 1, keysId, s.secondsAt (24), draggedId), "drag the four-beat Session clip into the Arrangement at beat 25");
+            const auto dragged = arrangementClip (keysId, 24);
+            check (dragged.id == draggedId && std::abs (dragged.lengthBeats - 4) < 1e-6 && dragged.notes.size() == 1 && slots (keys)[1].hasClip && s.undoSteps().size() == undoSteps + 1,
+                   "it is copied there in one undo step, its beats and note kept, the slot keeping its clip");
+            check (s.hasMidiClipClipboard() && s.hasSlotClipboard() && ! s.hasAudioClipClipboard(), "the clipboard keeps the clip copied before");
+            check (s.copySlotClipToArrangement (keys, 1, loopId, 0, draggedId).failed(), "a MIDI clip is refused on an audio track");
+            const int emptyScene = lastScene - 1;
+            check (! slots (bass)[(size_t) emptyScene].hasClip, "an empty bass slot");
+            ok (s.copyClipToSlot (arrangementId, bass, emptyScene), "drag the three-beat Arrangement clip into it");
+            const auto slot = slots (bass)[(size_t) emptyScene];
+            check (slot.hasClip && slot.clip.notes.size() == 1 && slot.clip.notes[0].pitch == 41 && std::abs (slot.clip.lengthBeats - 3) < 1e-6 && arrangementClip (bassId, 8).id == arrangementId,
+                   "it becomes a Session clip there, the Arrangement keeping its own");
+            s.undo(); s.undo();
+            check (! slots (bass)[(size_t) emptyScene].hasClip && arrangementClip (keysId, 24).id.isEmpty(), "two undo steps take both copies back");
+        }
         // Audio pastes into the Arrangement, and into another project, collected there.
         ok (s.copySlotClip (loop, 3), "copy the tone's clip");
         check (s.hasSlotClipboard() && s.hasAudioClipClipboard() && ! s.hasMidiClipClipboard(), "an audio copy replaces the MIDI one");

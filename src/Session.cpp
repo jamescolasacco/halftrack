@@ -6748,15 +6748,18 @@ struct Session::Impl
         std::shared_ptr<juce::TemporaryFile> audioMedia, slotMedia;
         std::vector<SlotEntry> slotGroup;
         std::unique_ptr<RangeClipboard> range;
+        bool slotFromArrangement = false;
     };
     Clipboards takeClipboards()
     {
-        return { audioClipboard, midiClipboard, slotClipboard, midiClipboardBeats, midiClipboardOffsetBeats, audioClipboardMedia, slotClipboardMedia, slotClipboardGroup, std::move (rangeClipboard) };
+        return { audioClipboard, midiClipboard, slotClipboard, midiClipboardBeats, midiClipboardOffsetBeats, audioClipboardMedia, slotClipboardMedia, slotClipboardGroup, std::move (rangeClipboard),
+                 slotClipboardFromArrangement };
     }
     void restoreClipboards (Clipboards c)
     {
         audioClipboard = c.audio; midiClipboard = c.midi; slotClipboard = c.slot; midiClipboardBeats = c.midiBeats; midiClipboardOffsetBeats = c.midiOffsetBeats;
         audioClipboardMedia = c.audioMedia; slotClipboardMedia = c.slotMedia; slotClipboardGroup = c.slotGroup; rangeClipboard = std::move (c.range);
+        slotClipboardFromArrangement = c.slotFromArrangement;
     }
     // The tracks the time commands copy and paste: every track but the returns, in order.
     juce::StringArray timeTracks() const
@@ -9497,6 +9500,23 @@ Result Session::pasteSlotClip (int trackIndex, int sceneIndex)
         return r;
     }
     impl->changed(); return Result::ok();
+}
+Result Session::copySlotClipToArrangement (int trackIndex, int sceneIndex, const String& trackId, double start, String& copyId)
+{
+    // Through the clipboard's copy and paste, the clipboard itself set aside meanwhile.
+    auto kept = impl->takeClipboards();
+    auto result = copySlotClip (trackIndex, sceneIndex);
+    if (result.wasOk()) result = impl->midiClipboard.isValid() ? pasteMidiClip (trackId, start, copyId) : pasteAudioClip (trackId, start, copyId);
+    impl->restoreClipboards (std::move (kept));
+    return result;
+}
+Result Session::copyClipToSlot (const String& clipId, int trackIndex, int sceneIndex)
+{
+    auto kept = impl->takeClipboards();
+    auto result = impl->midiClip (clipId) != nullptr ? copyMidiClip (clipId) : copyAudioClip (clipId);
+    if (result.wasOk()) result = pasteSlotClip (trackIndex, sceneIndex);
+    impl->restoreClipboards (std::move (kept));
+    return result;
 }
 Result Session::moveSlotClips (const std::vector<SlotRef>& slots, int trackDelta, int sceneDelta, bool copy)
 {

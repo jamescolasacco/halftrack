@@ -2729,3 +2729,7 @@ UI area. As the reference's manual describes, the triangles on the Clip View and
 ## The Clip View's title bar — 2026-10-24
 
 UI area. As the reference's Clip View has one, a title bar runs over the clip's boxes, MIDI and audio: the clip's name in its colour, dimmed while deactivated, and its activator. Its right-click menu renames the clip, colours it from the palette and folds the panels, as a double-click on it does: the boxes hide and the title runs down a strip at the left, the editor taking the width ([clip view contract](research/clip-view-contract.md)). Checked in the UI suite.
+
+## Dragging clips between the views — 2026-10-24
+
+Engine and UI areas. As the reference's manual describes, a clip dragged over the other view's selector switches the view and the drag goes on there: a slot clip lands on the Arrangement lane under the pointer, at the snapped time, and an Arrangement clip, its move so far taken back, lands in the slot under the pointer. The drop leaves a copy in one undo step without touching the clipboard (`Session::copySlotClipToArrangement`, `copyClipToSlot`), the clip it came from staying ([contract](research/session-clip-editing-contract.md#dragging-between-the-views-2026-10-24)). Checked in the slot clips and UI suites.
