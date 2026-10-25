@@ -137,10 +137,20 @@ Halftrack:
 
 The UI suite checks that a click in a clip's notes selects it and puts the insert marker there, that a drag there selects time and leaves the clip in place, that a Shift-click inside the selected clip selects from its start to the click, that Shift+Option along the bar selects time, that Shift+Option slides a MIDI clip's contents a beat and stops at their start, and a warped clip's audio, each one undo step, and that bar drags still move clips, groups and copies (the moving tests grab bars).
 
+## Group lanes (2026-10-25)
+
+The reference's manual ([Mixing](https://www.ableton.com/en/live-manual/12/mixing/), section 18.3, consulted 2026-10-25): group tracks in the Arrangement "show an overview of the clips in the contained tracks", and "cannot contain clips". It does not say how time is selected on them; Halftrack selects it on the tracks inside (see [open questions](../open-questions.md)).
+
+- A click on a group's lane selects the group, as its header does, and places the insert marker.
+- A drag along it selects that time on every track inside the group, nested groups' tracks included, and the group's lane lights with them. Dragging on across other lanes extends the selection by whole groups or single tracks, and Shift-click from a group's lane extends a selection to all its tracks.
+- The selection's commands (Cut, Copy, Duplicate, Delete, Split, Consolidate and the rest) then act on those tracks.
+
+The UI suite drags along a group's lane and checks the group selected and the time on both its tracks, and that dragging on down onto the track below takes that track in too.
+
 ## Not implemented
 
 - Dragging the clip bar with Shift to stretch a warped clip (section 42.16).
-- Selecting time on the ruler or across group lanes.
+- Selecting time on the ruler.
 - Pasting automation onto controls the destination lacks: such shapes are skipped.
 - Crop.
 - Any comparison with reference output.

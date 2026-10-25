@@ -2191,6 +2191,25 @@ private:
         for (const auto& lane : lanes) if (y >= lane.y && y < lane.y + lane.height && ! lane.group && lane.take < 0) return lane.index;
         return trackAtY (y);
     }
+    // The first and last tracks inside a group, at any depth, or -1s for none.
+    std::pair<int, int> groupTrackRange (int group) const
+    {
+        if (! juce::isPositiveAndBelow (group, (int) state.groups.size())) return { -1, -1 };
+        const auto& id = state.groups[(size_t) group].id;
+        int first = -1, last = -1;
+        for (int t = 0; t < (int) state.tracks.size(); ++t)
+            if (groupsAround (state.tracks[(size_t) t].id).contains (id)) { if (first < 0) first = t; last = t; }
+        return { first, last };
+    }
+    // The tracks a time selection takes at a canvas y: a track's lanes give the track, and a group's lanes
+    // every track inside the group, as the reference's group tracks select time on their tracks.
+    std::pair<int, int> selectionRangeAtY (int y) const
+    {
+        for (const auto& lane : lanes)
+            if (y >= lane.y && y < lane.y + lane.height) return lane.group ? groupTrackRange (lane.index) : std::pair { lane.index, lane.index };
+        const auto t = trackAtY (y);
+        return { t, t };
+    }
     // Track under a canvas y, -1 for none (including group header lanes).
     int trackAtY (int y) const
     {
@@ -4310,13 +4329,23 @@ private:
             {
                 const auto x0 = (float) ((owner.timeSelection.start - owner.viewStart) * owner.pixelsPerSecond);
                 const auto x1 = (float) ((owner.timeSelection.end - owner.viewStart) * owner.pixelsPerSecond);
+                const auto light = [&] (int y, int height)
+                {
+                    const juce::Rectangle<float> area (x0, (float) y, x1 - x0, (float) height);
+                    g.setColour (themes::colour (0xffb9d3ff).withAlpha (.3f)); g.fillRect (area);
+                    g.setColour (themes::colour (0xffb9d3ff).withAlpha (.7f)); g.drawVerticalLine ((int) x0, area.getY(), area.getBottom()); g.drawVerticalLine ((int) x1, area.getY(), area.getBottom());
+                };
                 for (int t = 0; t < (int) owner.state.tracks.size(); ++t)
-                    if (owner.timeSelection.trackIds.contains (owner.state.tracks[(size_t) t].id) && owner.laneHeight (t) > 0)
-                    {
-                        const juce::Rectangle<float> area (x0, (float) owner.laneY (t), x1 - x0, (float) owner.laneHeight (t));
-                        g.setColour (themes::colour (0xffb9d3ff).withAlpha (.3f)); g.fillRect (area);
-                        g.setColour (themes::colour (0xffb9d3ff).withAlpha (.7f)); g.drawVerticalLine ((int) x0, area.getY(), area.getBottom()); g.drawVerticalLine ((int) x1, area.getY(), area.getBottom());
-                    }
+                    if (owner.timeSelection.trackIds.contains (owner.state.tracks[(size_t) t].id) && owner.laneHeight (t) > 0) light (owner.laneY (t), owner.laneHeight (t));
+                // A group's lane lights with every track inside it selected.
+                for (const auto& lane : owner.lanes)
+                    if (lane.group && lane.automation < 0 && lane.height > 0)
+                        if (const auto [first, last] = owner.groupTrackRange (lane.index); first >= 0)
+                        {
+                            bool all = true;
+                            for (int t = first; t <= last && all; ++t) all = owner.timeSelection.trackIds.contains (owner.state.tracks[(size_t) t].id);
+                            if (all) light (lane.y, lane.height);
+                        }
             }
             // The insert marker, where Play starts, flashes; the play position shows while playing
             // or where playback stopped away from the marker.
@@ -4407,6 +4436,20 @@ private:
             auto track = owner.trackAtY (e.y);
             // An automation lane's background selects time on its track, as the reference's does.
             if (track < 0 && owner.automationMode) track = owner.selectionTrackAtY (e.y);
+            // A group's lane selects the group, and a drag there selects time on every track inside it.
+            if (const auto* lane = owner.laneAt (e.y); track < 0 && lane != nullptr && lane->group && ! e.mods.isPopupMenu())
+            {
+                owner.selectChain (owner.state.groups[(size_t) lane->index].id);
+                if (const auto range = owner.groupTrackRange (lane->index); range.first >= 0)
+                {
+                    const auto at = owner.snapTime (juce::jmax (0.0, owner.viewStart + e.x / owner.pixelsPerSecond), e.mods);
+                    if (e.mods.isShiftDown() && owner.timeSelection.active()) beginTimeSelection (at, range, -1, -1);
+                    else { owner.timeSelection = {}; selectionAnchorTime = at; selectionAnchorTrack = range.first; selectionAnchorLast = range.second; owner.session.setInsertMarker (at); }
+                    owner.selectedClipIds.clear(); owner.selectedClip = -1; draggedClip = -1;
+                    selecting = true;
+                }
+                owner.refresh(); repaint(); return;
+            }
             if (track < 0) return;
             owner.selectedClip = -1;
             owner.selectedLauncherClipId.clear();
@@ -4446,11 +4489,11 @@ private:
                             if ((bar && shiftOption) || (! bar && ! slide && (! previous || (hitFade (clip, track, e.position) == 0 && hitTrim (clip, track, e.position) == 0))))
                             {
                                 const auto at = owner.snapTime (owner.viewStart + e.x / owner.pixelsPerSecond, e.mods);
-                                if (e.mods.isShiftDown() && ! shiftOption) beginTimeSelection (at, track, previousTrack, previousClip);
+                                if (e.mods.isShiftDown() && ! shiftOption) beginTimeSelection (at, { track, track }, previousTrack, previousClip);
                                 else
                                 {
                                     owner.selectedClipIds.clear();
-                                    owner.timeSelection = {}; selectionAnchorTime = at; selectionAnchorTrack = track;
+                                    owner.timeSelection = {}; selectionAnchorTime = at; selectionAnchorTrack = track; selectionAnchorLast = -1;
                                     owner.session.setInsertMarker (at);
                                 }
                                 owner.selectedClip = c;
@@ -4502,8 +4545,8 @@ private:
             // Dragging over empty lane space selects time; Shift-click extends the selection.
             {
                 const auto at = owner.snapTime (owner.viewStart + e.x / owner.pixelsPerSecond, e.mods);
-                if (e.mods.isShiftDown() && owner.timeSelection.active()) beginTimeSelection (at, track, -1, -1);
-                else { owner.timeSelection = {}; selectionAnchorTime = at; selectionAnchorTrack = track; }
+                if (e.mods.isShiftDown() && owner.timeSelection.active()) beginTimeSelection (at, { track, track }, -1, -1);
+                else { owner.timeSelection = {}; selectionAnchorTime = at; selectionAnchorTrack = track; selectionAnchorLast = -1; }
                 owner.selectedClipIds.clear();
                 selecting = true;
             }
@@ -4567,7 +4610,7 @@ private:
             }
             if (selecting && e.mouseWasDraggedSinceMouseDown())
             {
-                extendSelection (owner.snapTime (juce::jmax (0.0, owner.viewStart + e.x / owner.pixelsPerSecond), e.mods), owner.selectionTrackAtY (juce::jmax (0, e.y)));
+                extendSelection (owner.snapTime (juce::jmax (0.0, owner.viewStart + e.x / owner.pixelsPerSecond), e.mods), owner.selectionRangeAtY (juce::jmax (0, e.y)));
                 return;
             }
             if (draggedClip < 0 || e.mods.isPopupMenu() || ! e.mouseWasDraggedSinceMouseDown()) return;
@@ -4831,8 +4874,10 @@ private:
         // Shift-click extends the selection to a time on a track, as the reference's does: a time selection
         // from its farther end, or a clip selected before the click from its farther edge (its start when
         // both are as far), which turns the selection into time.
-        void beginTimeSelection (double at, int track, int clipTrack, int clipIndex)
+        // Shift extends a time selection, or the selected clip, to the tracks given (one track, or a group's).
+        void beginTimeSelection (double at, std::pair<int, int> tracks, int clipTrack, int clipIndex)
         {
+            selectionAnchorLast = -1;
             if (owner.timeSelection.active())
             {
                 selectionAnchorTime = std::abs (at - owner.timeSelection.start) > std::abs (at - owner.timeSelection.end) ? owner.timeSelection.start : owner.timeSelection.end;
@@ -4844,16 +4889,18 @@ private:
                 selectionAnchorTime = std::abs (at - clip.start) >= std::abs (at - (clip.start + clip.length)) ? clip.start : clip.start + clip.length;
                 selectionAnchorTrack = clipTrack;
             }
-            else { owner.timeSelection = {}; selectionAnchorTime = at; selectionAnchorTrack = track; owner.session.setInsertMarker (at); return; }
+            else { owner.timeSelection = {}; selectionAnchorTime = at; selectionAnchorTrack = tracks.first; selectionAnchorLast = tracks.second; owner.session.setInsertMarker (at); return; }
             owner.selectedClipIds.clear();
-            extendSelection (at, track);
+            extendSelection (at, tracks);
         }
-        void extendSelection (double at, int track)
+        // The selection runs from the anchor's tracks to those under the pointer (the last track below them all).
+        void extendSelection (double at, std::pair<int, int> tracks)
         {
             const int count = (int) owner.state.tracks.size();
             if (count == 0 || selectionAnchorTrack < 0) return;
-            const int first = juce::jlimit (0, count - 1, juce::jmin (selectionAnchorTrack, track < 0 ? count - 1 : track));
-            const int last = juce::jlimit (0, count - 1, juce::jmax (selectionAnchorTrack, track < 0 ? count - 1 : track));
+            const auto [low, high] = tracks.first < 0 ? std::pair { count - 1, count - 1 } : tracks;
+            const int first = juce::jlimit (0, count - 1, juce::jmin (selectionAnchorTrack, low));
+            const int last = juce::jlimit (0, count - 1, juce::jmax (selectionAnchorLast >= 0 ? selectionAnchorLast : selectionAnchorTrack, high));
             Impl::TimeSelection next { juce::jmin (selectionAnchorTime, at), juce::jmax (selectionAnchorTime, at), {} };
             for (int t = first; t <= last; ++t) next.trackIds.add (owner.state.tracks[(size_t) t].id);
             owner.addLinkedTracks (next.trackIds);
@@ -4940,7 +4987,7 @@ private:
         double verticalCarry = 0; // The part of a pixel the lanes have yet to scroll by.
         std::optional<std::tuple<int, int, double, int, int>> lastDrag;
         std::map<juce::String, std::unique_ptr<juce::AudioThumbnail>> thumbnails;
-        int draggedClip = -1, selectionAnchorTrack = -1;
+        int draggedClip = -1, selectionAnchorTrack = -1, selectionAnchorLast = -1; // The anchor's last track when it is a group's.
         double dragStartX = 0;
         double originalStart = 0, originalFade = 0, selectionAnchorTime = 0;
         bool selecting = false;
@@ -21471,6 +21518,31 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
                "folding hides the member lanes and their clips");
         fold->onClick(); refresh();
         check (! state.groups[0].folded && laneHeight (0) == trackHeight, "unfolding restores the member lanes");
+        {
+            // A group's lane selects time on every track inside it, as the reference's group tracks do; a drag on
+            // down onto the track below takes that track in too.
+            const auto viewBefore = viewStart; viewStart = 0; updateScroll(); refresh();
+            const auto now = juce::Time::getCurrentTime();
+            const auto at = [&] (double beat, int y) { return juce::Point<float> ((float) ((secondsAt (beat) - viewStart) * pixelsPerSecond), (float) y); };
+            const auto press = [&] (juce::Point<float> p, juce::Point<float> down, bool dragged)
+            {
+                return juce::MouseEvent (juce::Desktop::getInstance().getMainMouseSource(), p, juce::ModifierKeys (juce::ModifierKeys::leftButtonModifier | bypassModifier),
+                                         1.0f, 0, 0, 0, 0, &canvas, &canvas, now, down, now, 1, dragged);
+            };
+            const auto from = at (1, lanes.front().y + groupHeight / 2), to = at (3, lanes.front().y + groupHeight / 2);
+            canvas.mouseDown (press (from, from, false)); canvas.mouseDrag (press ((from + to) / 2, from, true)); canvas.mouseDrag (press (to, from, true)); canvas.mouseUp (press (to, from, true)); refresh();
+            const auto pixel = 1.0 / pixelsPerSecond + 1e-9; // The canvas reads whole pixels.
+            check (timeSelection.active() && timeSelection.trackIds == juce::StringArray { firstId, secondId } && std::abs (timeSelection.start - secondsAt (1)) <= pixel
+                       && std::abs (timeSelection.end - secondsAt (3)) <= pixel && selectedChain == state.groups[0].id,
+                   "dragging along a group's lane selects the group, and that time on every track inside it");
+            if (state.tracks.size() > 2 && ! state.tracks[2].isReturn && laneHeight (2) > 0)
+            {
+                const auto below = at (3, laneY (2) + laneHeight (2) / 2);
+                canvas.mouseDown (press (from, from, false)); canvas.mouseDrag (press (below, from, true)); canvas.mouseUp (press (below, from, true)); refresh();
+                check (timeSelection.trackIds == juce::StringArray { firstId, secondId, state.tracks[2].id }, "dragging on down onto the track below takes it in too");
+            }
+            timeSelection = {}; viewStart = viewBefore; updateScroll(); refresh();
+        }
         const auto createItem = [this] (int id)
         {
             const auto create = getMenuForIndex (1, "Edit");

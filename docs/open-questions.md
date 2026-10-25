@@ -927,3 +927,5 @@ Several tracks ([groups contract](research/groups-contract.md#selecting-and-movi
 Sliding clip contents ([contract](research/arrangement-selection-contract.md#a-clips-bar-and-body-2026-10-25)). Default where the manual is silent: on a looped MIDI or warped clip, Shift+Option moves the loop with the start marker, so other material comes into the loop, rather than turning the loop's contents round within it; the drag's distance is measured in beats from the clip's start.
 
 Rack presets ([presets contract](research/presets-contract.md#rack-presets-2026-10-25)). Defaults where the reference was not read: a rack preset keeps its devices' samples by absolute path rather than copying them beside the preset; Hot-Swap fills a rack of the preset's kind in place, keeping the rack's macro automation, rather than replacing the device; rack presets are kept in a folder named after the rack's kind.
+
+Group lanes ([contract](research/arrangement-selection-contract.md#group-lanes-2026-10-25)). Default where the reference was not read: a press on a group's lane selects the group and selects time on every track inside it at any depth; the group itself holds nothing to select.

@@ -2809,3 +2809,7 @@ UI area. As the reference's manual describes, Shift+Option dragged in a MIDI or 
 ## Rack presets — 2026-10-25
 
 Engine and UI areas. Racks now save as presets from their device menu, as the reference's do: the preset keeps the rack whole, its chains, devices, nested racks, macro mappings and macros, without automation, checked on reading as a project's racks are. Loading one adds a rack of its kind with the preset's contents under new identities, its mappings following them, in one undo step, and the copy renders with 0.0 difference from the rack saved. Hot-Swap takes rack presets too, and the browser lists them under their racks ([presets contract](research/presets-contract.md#rack-presets-2026-10-25)). Checked by the racks and UI suites.
+
+## Group lane time selection — 2026-10-25
+
+UI area. A drag along a group's Arrangement lane now selects that time on every track inside the group, nested ones included, and selects the group; the lane lights with its tracks, and dragging on across other lanes extends by whole groups. Before, a group's lane ignored presses outside Automation Mode ([contract](research/arrangement-selection-contract.md#group-lanes-2026-10-25)). Checked in the UI suite.
