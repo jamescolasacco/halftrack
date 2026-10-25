@@ -2075,6 +2075,7 @@ Session::ClipInfo describeClip (te::Clip& clip)
     result.launch = clipLaunchSettings (clip.state);
     result.scale = clipScale (clip.state);
     result.grooveId = clip.state[clipGrooveProperty].toString();
+    result.compSource = clip.state[compSourceProperty].toString();
     result.envelopes = clipEnvelopes (clip);
     if (clip.usesSourceFile()) result.file = clip.getSourceFileReference().getFile();
     if (auto* audio = dynamic_cast<te::WaveAudioClip*> (&clip))

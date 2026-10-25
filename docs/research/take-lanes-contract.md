@@ -66,4 +66,20 @@ Evidence, from `tests/TakeLanesTests.cpp` with the synthetic input and the compu
 - **Audio.** 3.5 passes round a one-second loop fill four lanes, reusing the two free after the loop's start. The passes run one second each and then a half, at offsets 0, 1, 2 and 3 s through one file. The main lane plays the last pass and the third after it, and one undo removes every pass.
 - **MIDI.** Three passes round a two-second loop, each with a note, make three lanes each holding its own note half a beat in. The main lane plays only the last pass's note.
 
-Missing: source highlights, comp crossfades, duplicating, reordering and resizing lanes, dragging samples onto lanes, and MIDI comping through the UI.
+## Source highlights and drawing comps (2026-10-25)
+
+Evidence: Live 12 manual, [Comping](https://www.ableton.com/en/live-manual/12/comping/), consulted 2026-10-25.
+
+- Section 21.7: source material for each comp is highlighted in the track's colour in the take lanes, and unused take material is shown "in a desaturated shade of the track's color". Highlights appear only when clips have matching positions and properties. Dragging a highlight's edge moves the split point between two adjacent parts of a comp.
+- Section 21.6: in Draw Mode, a click, drag and release copies take material to the main lane in one gesture. With Create Fades on Clip Edges on, adjacent clips get four-millisecond crossfades.
+
+Halftrack:
+
+- **Highlights.** A take lane clip shows the material the main lane plays from it in the clip's colour, and the rest in a desaturated, darker shade of it. A main-lane clip counts where it was comped or recorded from that lane and still plays the same material at the same time: the same file at the same alignment for audio, the same content beat for MIDI. A part moved away loses its highlight. `ClipInfo::compSource` reports the lane a main-lane clip came from.
+- **Moving a split.** Dragging a highlight's edge, within 4 pixels, where two audio comp parts meet moves the split between them, each part's edge going with it within its material and at least 10 ms long. It is one undo step.
+- **Drawing.** In Draw Mode a drag across a take lane comps the range it covers on release, one undo step.
+- **Fades.** Comp parts are new clips and split edges, so Create Fades on Clip Edges already gives them their default fades ([clip fades contract](clip-fades-contract.md)).
+
+The UI suite checks Take 1's highlight over the comped range and Take 2's either side of it, a moved part losing its highlight, a highlight's edge dragged later moving the split in one undo step and undo returning it, and a Draw Mode drag comping a range in one step.
+
+Missing: moving a split between MIDI comp parts, duplicating, reordering and resizing lanes, dragging samples onto lanes, and MIDI comping through the UI.

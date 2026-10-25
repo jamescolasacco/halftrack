@@ -388,6 +388,8 @@ public:
         std::vector<ControllerLane> controllers; // Lanes with points, by controller number.
         ScaleSettings scale;
         juce::String grooveId; // The pool groove a MIDI clip plays with; empty for None.
+        // The take lane a main-lane clip was comped or recorded from; empty for others.
+        juce::String compSource;
         juce::String infoText; // Its own info text, from Edit Info Text; empty for none.
         std::vector<WarpMarker> warpMarkers; // A warped audio clip's markers, in order.
         // MIDI and warped audio clips: the beat of their content heard at the clip's start (the

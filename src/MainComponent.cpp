@@ -1651,6 +1651,22 @@ private:
         if (! takeSelection.active()) return;
         report (session.compTake (takeSelection.laneId, takeSelection.start, takeSelection.end)); refresh();
     }
+    // The times a take lane clip's material plays from the main lane: where a main-lane clip comped or
+    // recorded from the lane still plays the same material at the same time, as the reference's source
+    // highlights show them (its manual, section 21.7: they appear only where positions and properties match).
+    static std::vector<std::pair<double, double>> compSourceRanges (const Session::TrackInfo& track, const Session::TakeLaneInfo& lane, const Session::ClipInfo& take)
+    {
+        std::vector<std::pair<double, double>> ranges;
+        for (const auto& main : track.clips)
+        {
+            if (main.compSource != lane.id || main.isAudio != take.isAudio) continue;
+            const bool same = take.isAudio ? main.file == take.file && std::abs ((main.start - main.sourceOffset) - (take.start - take.sourceOffset)) < 1e-6
+                                           : std::abs ((main.startBeat - main.contentStartBeat) - (take.startBeat - take.contentStartBeat)) < 1e-6;
+            const auto from = std::max (main.start, take.start), to = std::min (main.start + main.length, take.start + take.length);
+            if (same && to > from + 1e-9) ranges.push_back ({ from, to });
+        }
+        return ranges;
+    }
     std::set<juce::String> multiSelectedTracks;
     // Solo and arm are exclusive by default, as in the reference: a plain click releases every other
     // track (and, for solo, group); Cmd/Ctrl-click adds to them. With exclusivity off in the
@@ -3769,6 +3785,30 @@ private:
         std::vector<std::unique_ptr<AutomationLaneHeader>> laneHeaders;
         std::vector<std::unique_ptr<TakeLaneHeader>> takeHeaders;
         bool selectingTake = false;
+        // A source highlight's edge dragged in a take lane moves the split between the two comp parts that meet
+        // there, as the reference's does (its manual, section 21.7): audio parts, within their material.
+        struct CompSplit { Session::ClipInfo left, right; double minimum = 0, maximum = 0; };
+        std::optional<CompSplit> compSplit;
+        std::optional<CompSplit> compSplitAt (const Session::TrackInfo& track, const Session::TakeLaneInfo& lane, float x) const
+        {
+            constexpr double shortest = 0.01;
+            for (const auto& take : lane.clips)
+                for (const auto& [from, to] : Impl::compSourceRanges (track, lane, take))
+                    for (const auto edge : { from, to })
+                    {
+                        if (std::abs ((edge - owner.viewStart) * owner.pixelsPerSecond - x) > 4) continue;
+                        const Session::ClipInfo* left = nullptr; const Session::ClipInfo* right = nullptr;
+                        for (const auto& c : track.clips)
+                        {
+                            if (std::abs (c.start + c.length - edge) < 1e-6) left = &c;
+                            if (std::abs (c.start - edge) < 1e-6) right = &c;
+                        }
+                        if (left == nullptr || right == nullptr || ! left->isAudio || ! right->isAudio || ! left->canEditAudioRange || ! right->canEditAudioRange) continue;
+                        return CompSplit { *left, *right, std::max (left->start + shortest, right->start - right->sourceOffset),
+                                           std::min (right->start + right->length - shortest, left->start + left->sourceLength - left->sourceOffset) };
+                    }
+            return std::nullopt;
+        }
         double takeAnchor = 0;
         juce::Rectangle<float> envelopeArea;
         // Automation Mode: the envelope a canvas y shows, as its track, key and drawing area.
@@ -4140,18 +4180,31 @@ private:
                     const juce::Rectangle<float> b ((float) ((clip.start - owner.viewStart) * owner.pixelsPerSecond), (float) lane.y + 4,
                                                     (float) juce::jmax (3.0, clip.length * owner.pixelsPerSecond), (float) lane.height - 8);
                     if (b.getRight() < 0 || b.getX() > tw) continue;
-                    g.setColour (clip.colour.withAlpha (.35f)); g.fillRect (b);
-                    if (clip.isAudio)
-                        if (auto* thumbnail = thumbnailFor (clip.file); thumbnail != nullptr && thumbnail->getTotalLength() > 0)
-                        { g.setColour (clip.colour.withAlpha (.8f)); thumbnail->drawChannels (g, b.reduced (0, 2).toNearestInt(), clip.sourceOffset, clip.sourceOffset + clip.length, .9f); }
-                    if (clip.isMidi)
-                        for (const auto& note : clip.notes)
-                        {
-                            const auto x = (float) ((owner.secondsAt (clip.startBeat + note.startBeat) - clip.sourceOffset - owner.viewStart) * owner.pixelsPerSecond);
-                            const auto w = (float) juce::jmax (1.0, (owner.secondsAt (clip.startBeat + note.startBeat + note.lengthBeats) - owner.secondsAt (clip.startBeat + note.startBeat)) * owner.pixelsPerSecond);
-                            const auto y = b.getBottom() - (float) (note.pitch % 48) / 48.0f * b.getHeight();
-                            g.setColour (clip.colour.brighter (.3f)); g.fillRect (x, y - 1, w, 2.0f);
-                        }
+                    const auto drawTake = [&] (juce::Colour colour)
+                    {
+                        g.setColour (colour.withAlpha (.35f)); g.fillRect (b);
+                        if (clip.isAudio)
+                            if (auto* thumbnail = thumbnailFor (clip.file); thumbnail != nullptr && thumbnail->getTotalLength() > 0)
+                            { g.setColour (colour.withAlpha (.8f)); thumbnail->drawChannels (g, b.reduced (0, 2).toNearestInt(), clip.sourceOffset, clip.sourceOffset + clip.length, .9f); }
+                        if (clip.isMidi)
+                            for (const auto& note : clip.notes)
+                            {
+                                const auto x = (float) ((owner.secondsAt (clip.startBeat + note.startBeat) - clip.sourceOffset - owner.viewStart) * owner.pixelsPerSecond);
+                                const auto w = (float) juce::jmax (1.0, (owner.secondsAt (clip.startBeat + note.startBeat + note.lengthBeats) - owner.secondsAt (clip.startBeat + note.startBeat)) * owner.pixelsPerSecond);
+                                const auto y = b.getBottom() - (float) (note.pitch % 48) / 48.0f * b.getHeight();
+                                g.setColour (colour.brighter (.3f)); g.fillRect (x, y - 1, w, 2.0f);
+                            }
+                    };
+                    // Material the comp plays shows in the clip's colour, the rest in a desaturated shade of it,
+                    // as the reference's source highlights (its manual, section 21.7).
+                    drawTake (clip.colour.withMultipliedSaturation (.25f).darker (.25f));
+                    for (const auto& [from, to] : Impl::compSourceRanges (track, take, clip))
+                    {
+                        g.saveState();
+                        g.reduceClipRegion (juce::Rectangle<float> ((float) ((from - owner.viewStart) * owner.pixelsPerSecond), b.getY(), (float) ((to - from) * owner.pixelsPerSecond), b.getHeight()).toNearestInt());
+                        drawTake (clip.colour);
+                        g.restoreState();
+                    }
                     g.setColour (clip.colour.darker (.4f)); g.drawRect (b, 1.0f);
                 }
                 if (owner.takeSelection.laneId == take.id && owner.takeSelection.end > owner.takeSelection.start)
@@ -4248,6 +4301,8 @@ private:
                     owner.showArrangementMenu ({ lane->index, {}, at, true });
                     return;
                 }
+                if (auto split = compSplitAt (track, track.takeLanes[(size_t) lane->take], e.position.x))
+                { compSplit = std::move (split); owner.session.beginEditGesture ("Move comp split"); repaint(); return; }
                 owner.takeSelection = { laneId, takeAnchor, takeAnchor };
                 owner.timeSelection = {}; selectingTake = true; repaint(); return;
             }
@@ -4415,6 +4470,18 @@ private:
                 owner.takeSelection.start = juce::jmin (takeAnchor, at); owner.takeSelection.end = juce::jmax (takeAnchor, at);
                 repaint(); return;
             }
+            if (compSplit)
+            {
+                const auto& [left, right, minimum, maximum] = *compSplit;
+                const auto at = juce::jlimit (minimum, juce::jmax (minimum, maximum), owner.snapTime (owner.viewStart + e.x / owner.pixelsPerSecond, e.mods));
+                // The part that shrinks goes first, so the two never overlap.
+                const auto moveLeft = [&] { return owner.session.setAudioClipRange (left.id, left.start, at - left.start, left.sourceOffset); };
+                const auto moveRight = [&] { return owner.session.setAudioClipRange (right.id, at, right.start + right.length - at, right.sourceOffset + (at - right.start)); };
+                const auto current = [&] { for (const auto& c : owner.state.tracks[(size_t) owner.selectedTrack].clips) if (c.id == left.id) return c.start + c.length; return left.start + left.length; }();
+                if (at >= current) { owner.report (moveRight()); owner.report (moveLeft()); }
+                else { owner.report (moveLeft()); owner.report (moveRight()); }
+                owner.refresh(); return;
+            }
             if (owner.envelopeKey.isNotEmpty())
             {
                 owner.refresh();
@@ -4548,7 +4615,10 @@ private:
                 repaint();
             }
             toggleOffOnUp = collapseOnUp = false;
-            if (selectingTake) { selectingTake = false; return; }
+            // In Draw Mode, the drag across a take lane comps what it covers in one gesture, as the reference's does
+            // (its manual, section 21.6).
+            if (compSplit) { compSplit.reset(); owner.session.endEditGesture(); owner.refresh(); return; }
+            if (selectingTake) { selectingTake = false; if (owner.drawMode && owner.takeSelection.end > owner.takeSelection.start + 1e-6) owner.compSelectedTake(); return; }
             if (owner.dropAcross()) { draggedClip = -1; dragClipId.clear(); return; } // Dropped in the Session.
             if (owner.envelopeKey.isNotEmpty())
             {
@@ -20370,6 +20440,33 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         check (playing (.3) == takeTwo, "the main lane plays the last take");
         check (handleKey (juce::KeyPress (juce::KeyPress::returnKey)), "Enter comps the selection"); refresh();
         check (playing (.3) == takeOne && playing (.1) == takeTwo, "the main lane now plays Take 1 in the range");
+        {
+            // Source highlights: each lane shows the material the comp plays from it.
+            const auto& track = state.tracks[(size_t) t];
+            const auto one = compSourceRanges (track, track.takeLanes[0], track.takeLanes[0].clips[0]);
+            const auto two = compSourceRanges (track, track.takeLanes[1], track.takeLanes[1].clips[0]);
+            auto around = two;
+            std::sort (around.begin(), around.end());
+            check (one.size() == 1 && std::abs (one[0].first - takeSelection.start) < 1e-6 && std::abs (one[0].second - takeSelection.end) < 1e-6 && around.size() == 2
+                       && std::abs (around[0].second - takeSelection.start) < 1e-6 && std::abs (around[1].first - takeSelection.end) < 1e-6,
+                   "Take 1 highlights the range the comp plays from it, and Take 2 the material either side, as the reference's source highlights");
+            // A part moved out of place no longer matches its take, so its highlight goes.
+            int first = 0;
+            for (int c = 1; c < (int) track.clips.size(); ++c) if (track.clips[(size_t) c].start < track.clips[(size_t) first].start) first = c;
+            const auto firstStart = track.clips[(size_t) first].start;
+            check (session.moveClip (t, first, firstStart + .05).wasOk(), "nudge the main lane's first part later"); refresh();
+            const auto moved = state.tracks[(size_t) t];
+            check (compSourceRanges (moved, moved.takeLanes[1], moved.takeLanes[1].clips[0]).size() == 1, "the moved part no longer matches its take, so only the other part stays highlighted");
+            session.undo(); refresh();
+            // Dragging Take 1's highlight edge moves the split between the comp's parts.
+            const juce::Point<float> edge { xAt (takeSelection.end), y }, later { xAt (takeSelection.end + .1), y };
+            const auto steps = session.undoSteps().size();
+            canvas.mouseDown (event (edge, false)); canvas.mouseDrag (event (later, true)); canvas.mouseUp (event (later, true)); refresh();
+            check (playing (takeSelection.end + .05) == takeOne && playing (takeSelection.end + .15) == takeTwo && session.undoSteps().size() == steps + 1,
+                   "dragging a highlight's edge moves the split between the comp's parts, one undo step, as the reference's does");
+            session.undo(); refresh();
+            check (playing (takeSelection.end + .05) == takeTwo, "and undo puts it back");
+        }
         if (const auto* configured = std::getenv ("HALFTRACK_TEST_UI_SNAPSHOT_DIRECTORY"))
             if (const juce::File directory (juce::String::fromUTF8 (configured)); directory.createDirectory().wasOk())
             {
@@ -20387,6 +20484,17 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         check (state.tracks[(size_t) t].auditionLane == state.tracks[(size_t) t].takeLanes[0].id && speaker->getToggleState(), "the switch auditions its lane");
         check (handleKey (juce::KeyPress ('T')) && state.tracks[(size_t) t].auditionLane.isEmpty() && ! speaker->getToggleState(),
                "T stops auditioning the selected lane");
+        {
+            // In Draw Mode a drag across a take lane comps what it covers in one gesture (away from the splits'
+            // edges, which drag the splits).
+            drawMode = true;
+            const auto steps = session.undoSteps().size();
+            const juce::Point<float> from { xAt (.75), y }, to { xAt (.9), y };
+            const auto drawEvent = [&] (juce::Point<float> at, bool dragged) { return juce::MouseEvent (juce::Desktop::getInstance().getMainMouseSource(), at, alt, 1.0f, 0, 0, 0, 0, &canvas, &canvas, now, from, now, 1, dragged); };
+            canvas.mouseDown (drawEvent (from, false)); canvas.mouseDrag (drawEvent (to, true)); canvas.mouseUp (drawEvent (to, true)); refresh();
+            check (playing (.8) == takeOne && session.undoSteps().size() == steps + 1, "in Draw Mode a drag across a take lane comps it in one gesture, as the reference's does");
+            drawMode = false; session.undo(); refresh();
+        }
         timeSelection = {};
         check (handleKey (juce::KeyPress ('T', juce::ModifierKeys::shiftModifier | juce::ModifierKeys::altModifier, 0)) && state.tracks[(size_t) t].takeLanes.size() == 3,
                "Shift+Option+T inserts a take lane");

@@ -2785,3 +2785,7 @@ Engine and UI areas. The crossfader now follows the reference's seven curves, Di
 ## Track Delay in samples — 2026-10-25
 
 Engine and UI areas. As the reference's manual describes, a toggle to the right of each Track Delay keeps the delay in milliseconds or samples. Switching keeps the delay heard at the running rate; a delay in samples plays that many samples at any rate, from -192000 to +192000. It is saved, undoable and validated on load ([contract](research/track-delay-contract.md)). Checked by the track delay and UI suites.
+
+## Take lane source highlights — 2026-10-25
+
+Engine and UI areas. As the reference's manual describes, take lanes show the material the comp plays from them in the clip's colour and the rest desaturated, only where the main lane still plays it at the same place. Dragging a highlight's edge moves the split between two audio comp parts, and in Draw Mode a drag across a lane comps it, each one undo step ([contract](research/take-lanes-contract.md#source-highlights-and-drawing-comps-2026-10-25)). Checked in the UI suite.

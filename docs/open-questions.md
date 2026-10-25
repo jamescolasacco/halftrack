@@ -917,3 +917,5 @@ A clip's bar and body ([contract](research/arrangement-selection-contract.md#a-c
 - **The bar.** It is Halftrack's 20-pixel name strip; a clip in a lane too short to show anything under it is all bar. The reference's bar height was not read.
 - **A click in the body.** It selects the clip alone, dropping a group, and puts the insert marker at the snapped click. Delete then deletes the clip.
 - **Shift-click from a selected clip.** The selection runs from the clip's farther edge to the click, from its start when both edges are as far.
+
+Take lane source highlights ([contract](research/take-lanes-contract.md#source-highlights-and-drawing-comps-2026-10-25)). Defaults where the manual is silent: the unused shade is the clip's colour at a quarter of its saturation, a quarter darker; a highlight's edge takes a drag within 4 pixels, nearest the pointer first; a split moves only between audio parts, each kept at least 10 ms long.
