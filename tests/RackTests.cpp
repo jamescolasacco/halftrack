@@ -836,6 +836,96 @@ void presetTests (const juce::File& root)
     corrupt ("Repeated chain", [&] (juce::XmlElement& x) { chain (x, 1)->setAttribute ("id", chain (x, 0)->getStringAttribute ("id")); });
     corrupt ("Instrument inside", [&] (juce::XmlElement& x) { chain (x, 1)->getFirstChildElement()->setAttribute ("effectKind", (int) Kind::polySynth); });
 }
+// Macro variations and Rand, as the reference's (its manual, sections 25.7.2 and 25.7.3): variations
+// store the macros and give them back except those excluded; Rand moves only mapped macros not
+// excluded from it; all of it reopens with the project and travels in rack presets.
+void variationTests (const juce::File& root)
+{
+    Session s (false);
+    ok (s.addNativeEffect (0, Kind::audioEffectRack), "insert an Audio Effect Rack");
+    const auto rack = s.snapshot().tracks[0].plugins[0].id;
+    const auto chain = addChain (s, rack, "Body");
+    const auto eq = gainStage (s, chain, 0);
+    ok (s.setRackMacroMapping (rack, { 0, eq, effectParameterIndex (Kind::equalizer, "outputDb"), -12, 0 }), "map macro 1 to the EQ's output");
+    ok (s.setRackMacroMapping (rack, { 1, chain, 0, -24, 0 }), "map macro 2 to the chain's volume");
+    const auto macros = [&] { return device (s, rack).effect.values; };
+    const auto setMacros = [&] (float a, float b, float c)
+    { auto e = device (s, rack).effect; e.values[0] = a; e.values[1] = b; e.values[2] = c; ok (s.setNativeEffectSettings (rack, e), "set macros 1 to 3"); };
+    const auto are = [&] (float a, float b, float c) { const auto v = macros(); return v[0] == a && v[1] == b && v[2] == c; };
+    const auto variations = [&] { return device (s, rack).variations; };
+    setMacros (10, 20, 30);
+    int index = -1;
+    ok (s.addRackVariation (rack, index), "store a variation");
+    check (index == 0 && variations().size() == 1 && variations()[0].name == "Variation 1" && variations()[0].values[0] == 10 && variations()[0].values[1] == 20
+               && variations()[0].values[2] == 30 && s.undoDescription() == "New macro variation",
+           "New stores the macros as Variation 1, one undo step");
+    setMacros (100, 110, 120);
+    ok (s.addRackVariation (rack, index), "store another");
+    check (index == 1 && variations()[1].name == "Variation 2" && variations()[1].values[0] == 100, "the next is Variation 2");
+    ok (s.launchRackVariation (rack, 0), "launch Variation 1");
+    check (are (10, 20, 30) && s.undoDescription() == "Launch Variation 1", "launching gives the macros its values, one undo step");
+    s.undo(); check (are (100, 110, 120), "one undo takes the launch back");
+    ok (s.setRackMacroExcluded (rack, 1, true, true), "exclude macro 2 from variations");
+    check (device (s, rack).excludedFromVariations[1] && ! device (s, rack).excludedFromVariations[0] && ! device (s, rack).excludedFromRandomization[1], "macro 2 is excluded from variations only");
+    ok (s.launchRackVariation (rack, 0), "launch Variation 1 again");
+    check (are (10, 110, 30), "a macro excluded from variations keeps its value");
+    ok (s.overwriteRackVariation (rack, 1), "overwrite Variation 2");
+    check (variations()[1].values[0] == 10 && variations()[1].values[1] == 110 && variations()[1].values[2] == 30 && s.undoDescription() == "Overwrite Variation 2",
+           "overwriting stores the macros as they are, one undo step");
+    ok (s.renameRackVariation (rack, 1, "  Drop "), "rename Variation 2");
+    check (variations()[1].name == "Drop", "it is renamed, trimmed");
+    check (s.renameRackVariation (rack, 1, " ").failed() && s.renameRackVariation (rack, 1, juce::String::repeatedString ("x", 65)).failed()
+               && s.renameRackVariation (rack, 1, "two\nlines").failed() && s.renameRackVariation (rack, 7, "Gone").failed(),
+           "names are one line of 1 to 64 characters, and unknown variations are refused");
+    int copy = -1;
+    ok (s.duplicateRackVariation (rack, 0, copy), "duplicate Variation 1");
+    check (copy == 1 && variations().size() == 3 && variations()[1] == variations()[0] && variations()[2].name == "Drop", "the copy goes after it, with its name and macros");
+    ok (s.addRackVariation (rack, index), "store a fourth");
+    check (index == 3 && variations()[3].name == "Variation 4", "the next number no name takes names it");
+    ok (s.removeRackVariation (rack, 1), "delete the copy");
+    check (variations().size() == 3 && variations()[1].name == "Drop" && s.removeRackVariation (rack, 9).failed(), "deleting takes it out of the list");
+    s.undo(); check (variations().size() == 4, "one undo puts it back");
+    s.redo();
+
+    // Rand: only mapped macros not excluded from randomization move, to whole values.
+    ok (s.setRackMacroExcluded (rack, 0, false, true), "exclude macro 1 from randomization");
+    bool moved = false;
+    for (int attempt = 0; attempt < 32 && ! moved; ++attempt)
+    {
+        const auto before = macros();
+        ok (s.randomizeRackMacros (rack), "Rand");
+        const auto after = macros();
+        check (after[0] == before[0] && after[2] == before[2] && after[1] >= 0 && after[1] <= 127 && after[1] == std::round (after[1]),
+               "Rand leaves the excluded and the unmapped macros, and gives the mapped one a whole value from 0 to 127");
+        moved = after[1] != before[1];
+    }
+    check (moved && s.undoDescription() == "Randomize macros", "Rand moves the mapped macro, one undo step");
+
+    // They reopen, travel in presets, and damaged ones are refused.
+    const auto project = root.getChildFile ("Variations.halftrack");
+    const auto saved = device (s, rack);
+    ok (s.saveProject (project), "save the project");
+    ok (s.loadProject (project), "reopen it");
+    check (device (s, rack).variations == saved.variations && device (s, rack).excludedFromVariations == saved.excludedFromVariations
+               && device (s, rack).excludedFromRandomization == saved.excludedFromRandomization, "variations and exclusions reopen");
+    const auto presetFile = root.getChildFile (juce::String ("Varied") + Session::presetExtension);
+    ok (s.saveDevicePreset (rack, presetFile, "Varied"), "save the rack as a preset");
+    juce::String loaded;
+    ok (s.loadDevicePreset (1, presetFile, loaded), "load it onto the second track");
+    check (device (s, loaded).variations == saved.variations && device (s, loaded).excludedFromVariations == saved.excludedFromVariations
+               && device (s, loaded).excludedFromRandomization == saved.excludedFromRandomization, "a rack preset keeps its variations and exclusions");
+    const auto text = project.loadFileAsString();
+    const auto rejects = [&] (const juce::String& changed, const juce::String& what)
+    {
+        const auto broken = root.getChildFile ("Broken variations.halftrack");
+        check (changed != text && broken.replaceWithText (changed), "write a project with " + what);
+        const auto result = s.loadProject (broken);
+        check (result.failed() && device (s, rack).variations.size() == saved.variations.size(), "a project with " + what + " is rejected and the open project kept");
+    };
+    rejects (text.replaceFirstOccurrenceOf ("<MACROVARIATION name=\"Variation 1\"", "<MACROVARIATION name=\"\""), "a variation without a name");
+    rejects (text.replaceFirstOccurrenceOf ("macro3=\"30.0\"", "macro3=\"200.0\""), "a variation's macro above 127");
+    rejects (text.replaceFirstOccurrenceOf ("halftrackVariationExcluded=\"2\"", "halftrackVariationExcluded=\"70000\""), "an exclusion mask past sixteen macros");
+}
 int runRackTests (const juce::File& artifacts)
 {
     try
@@ -847,6 +937,7 @@ int runRackTests (const juce::File& artifacts)
         drumRackTests (root);
         macroTests (root);
         presetTests (root);
+        variationTests (root);
         allocationTests (root);
         std::cout << "Racks passed: " << root.getFullPathName() << std::endl; return 0;
     }

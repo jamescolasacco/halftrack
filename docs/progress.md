@@ -2813,3 +2813,7 @@ Engine and UI areas. Racks now save as presets from their device menu, as the re
 ## Group lane time selection — 2026-10-25
 
 UI area. A drag along a group's Arrangement lane now selects that time on every track inside the group, nested ones included, and selects the group; the lane lights with its tracks, and dragging on across other lanes extends by whole groups. Before, a group's lane ignored presses outside Automation Mode ([contract](research/arrangement-selection-contract.md#group-lanes-2026-10-25)). Checked in the UI suite.
+
+## Macro variations and Rand — 2026-10-25
+
+Engine and UI areas. Racks now keep macro variations, as the reference's manual describes: New stores the macros as "Variation N", a row's launch button gives them back except macros excluded from variations, its overwrite button stores the current state, and its menu renames, duplicates or deletes it. Rand gives each mapped macro not excluded from randomization a random whole value. Each is one undo step, and variations and exclusions are saved, validated on load and kept in rack presets ([racks contract](research/racks-contract.md#macro-variations-and-rand-2026-10-25)). Checked by the racks and UI suites.

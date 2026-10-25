@@ -340,6 +340,13 @@ Session::PluginInfo describeDevice (NativeEffectPlugin& native)
         info.isRack = true;
         info.visibleMacros = juce::jlimit (1, Session::rackMacroCount, static_cast<int> (native.state.getProperty (racks::visibleMacrosProperty, 8)));
         for (int m = 0; m < Session::rackMacroCount; ++m) info.macroNames[(size_t) m] = native.state[racks::macroNameProperty (m)].toString();
+        for (const auto& variation : racks::variations (native.state)) info.variations.push_back (racks::readVariation (variation));
+        const int fromVariations = native.state.getProperty (racks::excludedFromVariationsProperty, 0), fromRandom = native.state.getProperty (racks::excludedFromRandomizationProperty, 0);
+        for (int m = 0; m < Session::rackMacroCount; ++m)
+        {
+            info.excludedFromVariations[(size_t) m] = (fromVariations & (1 << m)) != 0;
+            info.excludedFromRandomization[(size_t) m] = (fromRandom & (1 << m)) != 0;
+        }
         const auto devices = engine->plugins();
         for (const auto& child : native.state)
         {
@@ -4571,7 +4578,7 @@ struct Session::Impl
             else { auto child = tree.getChild (i); stripAutomation (child); }
         }
     }
-    // Gives a rack a rack preset's chains, returns, macro mappings and settings, in place of its own,
+    // Gives a rack a rack preset's chains, returns, macro mappings, variations and settings, in place of its own,
     // keeping its identity and its own controls' automation. The preset's chains and devices take new
     // identities, and its mappings follow them, those to the rack itself included.
     Result fillRack (const String& rackId, const juce::ValueTree& preset, const String& name)
@@ -4590,14 +4597,14 @@ struct Session::Impl
         auto* undo = &edit->getUndoManager();
         auto& state = rack->state;
         const auto rackPart = [] (const juce::ValueTree& child)
-        { return child.hasType (racks::chainType) || child.hasType (racks::returnType) || child.hasType (racks::mappingType); };
+        { return child.hasType (racks::chainType) || child.hasType (racks::returnType) || child.hasType (racks::mappingType) || child.hasType (racks::variationType); };
         for (int i = state.getNumChildren(); --i >= 0;) if (rackPart (state.getChild (i))) state.removeChild (i, undo);
         // Its macros and chain selector, then its macros' names and how many show.
         auto settings = defaultEffectSettings (rack->getKind());
         const auto fields = effectParameters (rack->getKind());
         for (size_t i = 0; i < fields.size(); ++i) settings.values[i] = static_cast<float> (static_cast<double> (copy.getProperty (fields[i].key, fields[i].initial)));
         rack->writeSettings (settings);
-        juce::Array<juce::Identifier> named { racks::visibleMacrosProperty };
+        juce::Array<juce::Identifier> named { racks::visibleMacrosProperty, racks::excludedFromVariationsProperty, racks::excludedFromRandomizationProperty };
         for (int m = 0; m < rackMacroCount; ++m) named.add (racks::macroNameProperty (m));
         for (const auto& property : named)
         {
@@ -16367,6 +16374,132 @@ Result Session::setRackMacroName (const String& rackId, int macro, const String&
     impl->transaction ("Rename macro");
     if (trimmed.isEmpty()) rack->state.removeProperty (racks::macroNameProperty (macro), &impl->edit->getUndoManager());
     else rack->state.setProperty (racks::macroNameProperty (macro), trimmed, &impl->edit->getUndoManager());
+    impl->changed(); return Result::ok();
+}
+Result Session::addRackVariation (const String& rackId, int& index)
+{
+    te::Track* track = nullptr;
+    auto* rack = impl->rack (rackId, &track);
+    if (rack == nullptr) return Result::fail ("Rack not found.");
+    if (auto r = impl->editable (track); r.failed()) return r;
+    const auto existing = racks::variations (rack->state);
+    if ((int) existing.size() >= maximumMacroVariations) return Result::fail ("A rack holds at most 128 variations.");
+    // Named in sequence, as the reference's: the next number that no variation's name takes.
+    juce::StringArray names;
+    for (const auto& v : existing) names.add (v[racks::variationNameProperty].toString());
+    int number = (int) existing.size() + 1;
+    while (names.contains ("Variation " + String (number))) ++number;
+    MacroVariation variation { "Variation " + String (number), {} };
+    const auto settings = rack->readSettings();
+    for (int m = 0; m < rackMacroCount; ++m) variation.values[(size_t) m] = settings.values[(size_t) m];
+    impl->transaction ("New macro variation");
+    rack->state.appendChild (racks::makeVariation (variation), &impl->edit->getUndoManager());
+    index = (int) existing.size();
+    impl->changed(); return Result::ok();
+}
+Result Session::launchRackVariation (const String& rackId, int index)
+{
+    auto* rack = impl->rack (rackId);
+    if (rack == nullptr) return Result::fail ("Rack not found.");
+    const auto tree = racks::variationAt (rack->state, index);
+    if (! tree.isValid()) return Result::fail ("Variation not found.");
+    const auto variation = racks::readVariation (tree);
+    const int excluded = rack->state.getProperty (racks::excludedFromVariationsProperty, 0);
+    auto settings = rack->readSettings();
+    for (int m = 0; m < rackMacroCount; ++m) if ((excluded & (1 << m)) == 0) settings.values[(size_t) m] = variation.values[(size_t) m];
+    beginEditGesture ("Launch " + variation.name);
+    const auto result = setNativeEffectSettings (rackId, settings);
+    endEditGesture(); return result;
+}
+Result Session::overwriteRackVariation (const String& rackId, int index)
+{
+    te::Track* track = nullptr;
+    auto* rack = impl->rack (rackId, &track);
+    if (rack == nullptr) return Result::fail ("Rack not found.");
+    if (auto r = impl->editable (track); r.failed()) return r;
+    auto tree = racks::variationAt (rack->state, index);
+    if (! tree.isValid()) return Result::fail ("Variation not found.");
+    const auto settings = rack->readSettings();
+    auto variation = racks::readVariation (tree);
+    const auto stored = variation.values;
+    for (int m = 0; m < rackMacroCount; ++m) variation.values[(size_t) m] = settings.values[(size_t) m];
+    if (variation.values == stored) return Result::ok();
+    impl->transaction ("Overwrite " + variation.name);
+    for (int m = 0; m < rackMacroCount; ++m) tree.setProperty (racks::variationMacroProperty (m), variation.values[(size_t) m], &impl->edit->getUndoManager());
+    impl->changed(); return Result::ok();
+}
+Result Session::renameRackVariation (const String& rackId, int index, const String& name)
+{
+    te::Track* track = nullptr;
+    auto* rack = impl->rack (rackId, &track);
+    if (rack == nullptr) return Result::fail ("Rack not found.");
+    if (auto r = impl->editable (track); r.failed()) return r;
+    auto tree = racks::variationAt (rack->state, index);
+    if (! tree.isValid()) return Result::fail ("Variation not found.");
+    const auto trimmed = name.trim();
+    if (trimmed.isEmpty() || trimmed.length() > 64 || trimmed.containsAnyOf ("\r\n")) return Result::fail ("Variation names are one line of 1 to 64 characters.");
+    if (tree[racks::variationNameProperty].toString() == trimmed) return Result::ok();
+    impl->transaction ("Rename variation");
+    tree.setProperty (racks::variationNameProperty, trimmed, &impl->edit->getUndoManager());
+    impl->changed(); return Result::ok();
+}
+Result Session::duplicateRackVariation (const String& rackId, int index, int& copyIndex)
+{
+    te::Track* track = nullptr;
+    auto* rack = impl->rack (rackId, &track);
+    if (rack == nullptr) return Result::fail ("Rack not found.");
+    if (auto r = impl->editable (track); r.failed()) return r;
+    const auto tree = racks::variationAt (rack->state, index);
+    if (! tree.isValid()) return Result::fail ("Variation not found.");
+    if ((int) racks::variations (rack->state).size() >= maximumMacroVariations) return Result::fail ("A rack holds at most 128 variations.");
+    impl->transaction ("Duplicate variation");
+    rack->state.addChild (tree.createCopy(), rack->state.indexOf (tree) + 1, &impl->edit->getUndoManager());
+    copyIndex = index + 1;
+    impl->changed(); return Result::ok();
+}
+Result Session::removeRackVariation (const String& rackId, int index)
+{
+    te::Track* track = nullptr;
+    auto* rack = impl->rack (rackId, &track);
+    if (rack == nullptr) return Result::fail ("Rack not found.");
+    if (auto r = impl->editable (track); r.failed()) return r;
+    const auto tree = racks::variationAt (rack->state, index);
+    if (! tree.isValid()) return Result::fail ("Variation not found.");
+    impl->transaction ("Delete variation");
+    rack->state.removeChild (tree, &impl->edit->getUndoManager());
+    impl->changed(); return Result::ok();
+}
+Result Session::randomizeRackMacros (const String& rackId)
+{
+    auto* rack = impl->rack (rackId);
+    if (rack == nullptr) return Result::fail ("Rack not found.");
+    std::array<bool, rackMacroCount> mapped {};
+    for (const auto& child : rack->state)
+        if (child.hasType (racks::mappingType))
+            if (const auto m = racks::readMapping (child); juce::isPositiveAndBelow (m.macro, rackMacroCount)) mapped[(size_t) m.macro] = true;
+    const int excluded = rack->state.getProperty (racks::excludedFromRandomizationProperty, 0);
+    auto settings = rack->readSettings();
+    auto& random = juce::Random::getSystemRandom();
+    for (int m = 0; m < rackMacroCount; ++m)
+        if (mapped[(size_t) m] && (excluded & (1 << m)) == 0) settings.values[(size_t) m] = (float) random.nextInt (128);
+    beginEditGesture ("Randomize macros");
+    const auto result = setNativeEffectSettings (rackId, settings);
+    endEditGesture(); return result;
+}
+Result Session::setRackMacroExcluded (const String& rackId, int macro, bool fromVariations, bool excluded)
+{
+    te::Track* track = nullptr;
+    auto* rack = impl->rack (rackId, &track);
+    if (rack == nullptr) return Result::fail ("Rack not found.");
+    if (auto r = impl->editable (track); r.failed()) return r;
+    if (! juce::isPositiveAndBelow (macro, rackMacroCount)) return Result::fail ("Racks have macros 1 to 16.");
+    const auto& property = fromVariations ? racks::excludedFromVariationsProperty : racks::excludedFromRandomizationProperty;
+    const int mask = rack->state.getProperty (property, 0);
+    const int next = excluded ? (mask | (1 << macro)) : (mask & ~(1 << macro));
+    if (next == mask) return Result::ok();
+    impl->transaction (juce::String (excluded ? "Exclude" : "Include") + " macro " + (fromVariations ? "in variations" : "in randomization"));
+    if (next == 0) rack->state.removeProperty (property, &impl->edit->getUndoManager());
+    else rack->state.setProperty (property, next, &impl->edit->getUndoManager());
     impl->changed(); return Result::ok();
 }
 Result Session::setDrumRackPadSample (const String& rackId, int note, const File& sample, String& chainId)

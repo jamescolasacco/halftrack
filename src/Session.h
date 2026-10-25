@@ -144,6 +144,15 @@ public:
         float minimum = 0, maximum = 1;
         bool operator== (const MacroMapping&) const = default;
     };
+    // A rack's macro variation, after the reference's (its manual, section 25.7.3): a stored state of
+    // its sixteen macros, which launching gives back to them.
+    struct MacroVariation
+    {
+        juce::String name;
+        std::array<float, rackMacroCount> values {};
+        bool operator== (const MacroVariation&) const = default;
+    };
+    static constexpr int maximumMacroVariations = 128;
     struct RackChainInfo;
     struct EffectSettings
     {
@@ -493,6 +502,9 @@ public:
         std::array<juce::String, rackMacroCount> macroNames; // Names given to macros; empty for automatic names.
         std::vector<RackChainInfo> chains, returns;
         std::vector<MacroMapping> mappings;
+        // Its macro variations, and the macros a launched variation or Rand leaves as they are.
+        std::vector<MacroVariation> variations;
+        std::array<bool, rackMacroCount> excludedFromVariations {}, excludedFromRandomization {};
     };
     struct RackChainInfo
     {
@@ -1858,6 +1870,22 @@ public:
     juce::Result setRackVisibleMacros (const juce::String& rackId, int count);
     // Names a macro (1-64 characters); an empty name returns it to its automatic name.
     juce::Result setRackMacroName (const juce::String& rackId, int macro, const juce::String& name);
+    // Macro variations, as the reference's (its manual, section 25.7.3): New stores the macros as
+    // "Variation N", numbered in sequence (`index` is where it went); launching one gives each macro
+    // not excluded from variations its value; overwriting stores the macros in it; renaming (one line
+    // of 1-64 characters), duplicating (after it, with its name) and deleting edit the list. Each is
+    // one undo step. A rack holds at most 128.
+    juce::Result addRackVariation (const juce::String& rackId, int& index);
+    juce::Result launchRackVariation (const juce::String& rackId, int index);
+    juce::Result overwriteRackVariation (const juce::String& rackId, int index);
+    juce::Result renameRackVariation (const juce::String& rackId, int index, const juce::String& name);
+    juce::Result duplicateRackVariation (const juce::String& rackId, int index, int& copyIndex);
+    juce::Result removeRackVariation (const juce::String& rackId, int index);
+    // Rand, as the reference's (section 25.7.2): each mapped macro not excluded from randomization
+    // takes a random whole value from 0 to 127, in one undo step.
+    juce::Result randomizeRackMacros (const juce::String& rackId);
+    // Excludes a macro from variations or from randomization, or includes it again. One undo step.
+    juce::Result setRackMacroExcluded (const juce::String& rackId, int macro, bool fromVariations, bool excluded);
     // Drum Rack: a sample on a pad (note 0-127) goes into the pad's Sampler, or a new chain that
     // receives the note and plays it at C3 with a one-shot Sampler; an empty file removes the pad's chains.
     juce::Result setDrumRackPadSample (const juce::String& rackId, int note, const juce::File&, juce::String& chainId);

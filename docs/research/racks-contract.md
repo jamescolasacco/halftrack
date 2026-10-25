@@ -56,9 +56,24 @@ The rack's chains, returns, devices, mappings, visible-macro count and macro nam
 
 The realtime source guard covers the rack callback and choke path. The UI suite drives the rack editor's chains, zone edges and fades, the macro knob and mapping list, More macros, chain-device power and removal, the Drum Rack drop, choke, returns, sends, pad drag and banks, and device selection with Cmd/Ctrl+G, Cmd/Ctrl+Shift+G and Delete.
 
+## Macro variations and Rand (2026-10-25)
+
+The reference's manual ([Instrument, Drum and Effect Racks](https://www.ableton.com/en/live-manual/12/instrument-drum-and-effect-racks/), consulted 2026-10-25): the Rand button randomizes a rack's mapped macros, and a macro's menu offers Exclude Macro from Randomization (25.7.2). Variations store the macros' states: New stores one, named in sequence "Variation 1", "Variation 2" and so on; Launch Macro Variation, to the right, recalls one; Overwrite Macro Variation, to the left, replaces one with the current state; the Edit or context menu renames, duplicates or deletes one; and a macro excluded with Exclude Macro From Variations does not change when a variation is launched (25.7.3).
+
+Halftrack:
+
+- **Variations.** `addRackVariation` stores the sixteen macros as "Variation N", the next number no variation's name takes. `launchRackVariation` gives each macro not excluded from variations its stored value; `overwriteRackVariation` stores the macros as they are; `renameRackVariation` takes one line of 1 to 64 characters; `duplicateRackVariation` puts a copy, with the same name, after it; `removeRackVariation` deletes it. Each is one undo step. A rack holds at most 128.
+- **Rand.** `randomizeRackMacros` gives each mapped macro not excluded from randomization a random whole value from 0 to 127, in one undo step. Unmapped macros stay.
+- **Exclusions.** `setRackMacroExcluded` excludes a macro from variations or from randomization, or includes it again, one undo step.
+- **Keeping them.** Variations are `MACROVARIATION` children of the rack (a name and `macro1` to `macro16`), and the exclusions are 16-bit masks on it. They are saved, reopened, copied with the rack or its track, and kept in rack presets. A project with a nameless variation, a stored macro outside 0 to 127, more than 128 variations or an exclusion mask past sixteen bits is refused before it replaces the open one.
+- **The editor.** Var, beside Map at the top of the macros, shows the variations in place of the mappings: New, then a row per variation with its overwrite button on the left and its launch button on the right; a row's menu renames, duplicates or deletes it. Rand beside it randomizes, enabled while the rack has a mapping. A macro's menu has Exclude Macro from Randomization and Exclude Macro From Variations, ticked while it is excluded.
+- **Not followed.** The reference's randomizing distribution, its Volume exclusion in Instrument Rack presets, its variation list's limits and the Edit menu's variation commands were not read; Halftrack's defaults are in [open questions](../open-questions.md).
+
+`tests/RackTests.cpp` (`variationTests`) stores two variations, launches the first and undoes it, launches it again with macro 2 excluded, overwrites, renames (refusing empty, long, two-line and unknown), duplicates, names a fourth, and deletes with undo. Rand, with macro 1 excluded, leaves it and the unmapped macro and gives the mapped one whole values within 0 to 127. Variations and exclusions reopen with the project and come with a rack preset, and three damaged projects are refused, keeping the open one. The UI suite shows the variations with Var, stores one with New, launches and overwrites it from its row, and checks Rand and an excluded macro.
+
 ## Not implemented
 
-- Chain Selector filtering of MIDI controllers, macro variations, randomize and hot-swap.
+- Chain Selector filtering of MIDI controllers.
 - Chain colors, and third-party plug-ins inside racks.
 - Drum Rack pad outputs routed to the project's returns, extracting chains to tracks, and ungrouping Drum Racks.
 - Sample-accurate macro automation; it settles at block rate.

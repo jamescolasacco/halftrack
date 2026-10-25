@@ -136,6 +136,32 @@ Session::MacroMapping readMapping (const juce::ValueTree& tree)
     m.minimum = tree.getProperty (minimumProperty, 0.0f); m.maximum = tree.getProperty (maximumProperty, 1.0f);
     return m;
 }
+Session::MacroVariation readVariation (const juce::ValueTree& tree)
+{
+    Session::MacroVariation v;
+    v.name = tree[variationNameProperty].toString();
+    for (int m = 0; m < Session::rackMacroCount; ++m)
+        v.values[(size_t) m] = juce::jlimit (0.0f, 127.0f, static_cast<float> (static_cast<double> (tree.getProperty (variationMacroProperty (m), 0.0))));
+    return v;
+}
+juce::ValueTree makeVariation (const Session::MacroVariation& v)
+{
+    juce::ValueTree tree (variationType);
+    tree.setProperty (variationNameProperty, v.name, nullptr);
+    for (int m = 0; m < Session::rackMacroCount; ++m) tree.setProperty (variationMacroProperty (m), v.values[(size_t) m], nullptr);
+    return tree;
+}
+std::vector<juce::ValueTree> variations (const juce::ValueTree& rackState)
+{
+    std::vector<juce::ValueTree> found;
+    for (const auto& child : rackState) if (child.hasType (variationType)) found.push_back (child);
+    return found;
+}
+juce::ValueTree variationAt (const juce::ValueTree& rackState, int index)
+{
+    const auto all = variations (rackState);
+    return juce::isPositiveAndBelow (index, (int) all.size()) ? all[(size_t) index] : juce::ValueTree();
+}
 juce::ValueTree makeMapping (const Session::MacroMapping& m)
 {
     juce::ValueTree tree (mappingType);
@@ -243,6 +269,16 @@ juce::Result validateRack (const juce::ValueTree& rack)
             || ! parse (child.getProperty (maximumProperty, range->second), range->first, range->second, false, maximum)
             || ! mapped.insert ({ target, (int) parameter }).second) return fail();
     }
+    // Variations: a named line each, macros from 0 to 127, at most 128; the exclusions are masks of 16 bits.
+    const auto stored = variations (rack);
+    if ((int) stored.size() > Session::maximumMacroVariations) return fail();
+    for (const auto& v : stored)
+    {
+        const auto name = v[variationNameProperty].toString();
+        if (name.trim().isEmpty() || name.length() > 64 || name.containsAnyOf ("\r\n")) return fail();
+        for (int m = 0; m < Session::rackMacroCount; ++m) if (! optional (v, variationMacroProperty (m), 0, 127, false)) return fail();
+    }
+    if (! optional (rack, excludedFromVariationsProperty, 0, 65535, true) || ! optional (rack, excludedFromRandomizationProperty, 0, 65535, true)) return fail();
     return juce::Result::ok();
 }
 

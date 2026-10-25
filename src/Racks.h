@@ -24,6 +24,11 @@ using Kind = Session::EffectKind;
 inline const juce::Identifier chainType { "RACKCHAIN" }, returnType { "RACKRETURN" }, mappingType { "MACROMAPPING" };
 inline const juce::Identifier visibleMacrosProperty { "halftrackVisibleMacros" };
 inline juce::Identifier macroNameProperty (int macro) { return juce::Identifier ("halftrackMacroName" + juce::String (macro + 1)); }
+// Macro variations are children of the rack's state, holding a name and the sixteen macros; the
+// macros left out of variations and of Rand are bit masks on the rack (bit 0 for macro 1).
+inline const juce::Identifier variationType { "MACROVARIATION" }, variationNameProperty { "name" };
+inline const juce::Identifier excludedFromVariationsProperty { "halftrackVariationExcluded" }, excludedFromRandomizationProperty { "halftrackRandomExcluded" };
+inline juce::Identifier variationMacroProperty (int macro) { return juce::Identifier ("macro" + juce::String (macro + 1)); }
 constexpr int maximumSlots = Session::maximumRackChains + Session::maximumRackReturns;
 constexpr int maximumDepth = 4;            // A rack and up to three racks nested inside it.
 constexpr double rampSeconds = .005;       // Chain gain, input and send changes ramp over 5 ms.
@@ -56,6 +61,11 @@ void writeChain (juce::ValueTree&, const Session::RackChainSettings&, juce::Undo
 bool validChain (const Session::RackChainSettings&, Kind rack, bool isReturn) noexcept;
 Session::MacroMapping readMapping (const juce::ValueTree&);
 juce::ValueTree makeMapping (const Session::MacroMapping&);
+Session::MacroVariation readVariation (const juce::ValueTree&);
+juce::ValueTree makeVariation (const Session::MacroVariation&);
+// The rack's variations in order, and one of them by its place (invalid when there is none).
+std::vector<juce::ValueTree> variations (const juce::ValueTree& rackState);
+juce::ValueTree variationAt (const juce::ValueTree& rackState, int index);
 // The range of a mapping target's parameter, in its units: a device control, chain volume, pan
 // or send, or the chain selector. Empty when the target has no such parameter.
 std::optional<std::pair<float, float>> targetRange (Kind targetKind, bool chainTarget, bool rackTarget, int parameter) noexcept;

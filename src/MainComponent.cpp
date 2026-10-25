@@ -20238,6 +20238,34 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         dynamic_cast<juce::Button*> (named (*editor, "More macros"))->onClick(); refresh();
         check (rackInfo().visibleMacros == 9, "+ shows another macro");
         map->setToggleState (false, juce::dontSendNotification); map->onClick();
+        {
+            // Macro variations and Rand, as the reference's rack has them (its manual, sections 25.7.2-3).
+            auto* variationsView = dynamic_cast<juce::Button*> (named (*editor, "Macro variations view"));
+            variationsView->setToggleState (true, juce::dontSendNotification); variationsView->onClick(); refresh();
+            auto* newVariation = dynamic_cast<juce::Button*> (named (*editor, "New variation"));
+            check (newVariation != nullptr && named (*editor, "Macro variations")->isVisible() && ! named (*editor, "Macro mappings")->isVisible(),
+                   "Var shows the variations in place of the mappings");
+            newVariation->onClick(); refresh();
+            check (rackInfo().variations.size() == 1 && rackInfo().variations[0].values[0] == 64 && named (*editor, "Variation name 1") != nullptr
+                       && dynamic_cast<juce::Label*> (named (*editor, "Variation name 1"))->getText() == "Variation 1",
+                   "New stores the macros as Variation 1, listed by name");
+            macro->setValue (10, juce::sendNotificationSync);
+            dynamic_cast<juce::Button*> (named (*editor, "Launch variation 1"))->onClick(); refresh();
+            check (rackInfo().effect.values[0] == 64 && macro->getValue() == 64, "its launch button gives the macros back their stored values");
+            macro->setValue (20, juce::sendNotificationSync);
+            dynamic_cast<juce::Button*> (named (*editor, "Overwrite variation 1"))->onClick(); refresh();
+            check (rackInfo().variations[0].values[0] == 20, "its overwrite button stores the macros as they are");
+            auto* randomize = dynamic_cast<juce::Button*> (named (*editor, "Randomize macros"));
+            check (randomize != nullptr && randomize->isEnabled(), "Rand is there for a rack with a mapping");
+            bool moved = false;
+            for (int attempt = 0; attempt < 32 && ! moved; ++attempt) { randomize->onClick(); refresh(); moved = rackInfo().effect.values[0] != 20; }
+            check (moved && rackInfo().effect.values[1] == 0, "Rand moves the mapped macro and leaves the unmapped ones");
+            check (session.setRackMacroExcluded (rackInfo().id, 0, false, true).wasOk(), "exclude macro 1 from randomization"); refresh();
+            const auto held = rackInfo().effect.values[0];
+            randomize->onClick(); refresh();
+            check (rackInfo().effect.values[0] == held, "an excluded macro stays where it is");
+            variationsView->setToggleState (false, juce::dontSendNotification); variationsView->onClick(); refresh();
+        }
         // Chain devices: a device added to the selected chain shows inline and can be bypassed or removed.
         juce::String deviceId;
         check (session.addRackDevice (rackInfo().chains[0].id, Session::EffectKind::polySynth, deviceId).wasOk(), "add a Poly Synth to the first chain");

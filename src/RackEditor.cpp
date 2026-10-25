@@ -252,6 +252,30 @@ private:
     bool gesture = false;
 };
 
+// The rack's macro variations, as the reference's view of them (its manual, section 25.7.3): New
+// stores the macros; each row overwrites its variation from the left and launches it from the right,
+// and its menu renames, duplicates or deletes it.
+class VariationList final : public juce::Component
+{
+public:
+    explicit VariationList (RackEditor& o);
+    void sync (const Session::PluginInfo& rack);
+    void resized() override;
+    void paint (juce::Graphics& g) override;
+    void mouseDown (const juce::MouseEvent& e) override;
+    void mouseWheelMove (const juce::MouseEvent&, const juce::MouseWheelDetails& wheel) override;
+    int rowAt (int y) const;
+    juce::TextButton add { "New" };
+    juce::OwnedArray<juce::TextButton> overwrites, launches;
+    juce::OwnedArray<juce::Label> names;
+    static constexpr int rowHeight = 18;
+private:
+    void rename (int index);
+    RackEditor& owner;
+    std::vector<Session::MacroVariation> shown;
+    int first = 0; // The first row shown, as the list scrolls.
+};
+
 // One device of the selected chain: on/off, name and remove over its compact controls.
 class ChainDevice final : public juce::Component, public juce::FileDragAndDropTarget
 {
@@ -290,7 +314,7 @@ class RackEditor final : public juce::Component, private juce::ChangeListener, p
 {
 public:
     RackEditor (Session& s, juce::String id, std::function<void (const juce::String&, int)> automation)
-        : session (s), rackId (std::move (id)), showAutomation (std::move (automation)), zones (*this), pads (*this), padControls (*this), mappings (*this)
+        : session (s), rackId (std::move (id)), showAutomation (std::move (automation)), zones (*this), pads (*this), padControls (*this), mappings (*this), variationList (*this)
     {
         setName ("Rack editor");
         for (int i = 0; i < Session::rackMacroCount; ++i)
@@ -317,17 +341,23 @@ public:
         map.setClickingTogglesState (true); map.setColour (juce::TextButton::buttonOnColourId, green.withAlpha (.6f));
         fewer.onClick = [this] { report (session.setRackVisibleMacros (rackId, juce::jmax (1, rack.visibleMacros - 1))); };
         more.onClick = [this] { report (session.setRackVisibleMacros (rackId, juce::jmin (Session::rackMacroCount, rack.visibleMacros + 1))); };
-        map.onClick = [this] { resized(); repaint(); };
+        map.onClick = [this] { if (map.getToggleState()) variations.setToggleState (false, juce::dontSendNotification); resized(); repaint(); };
+        // The macro variations' view, and Rand, as the reference's rack has them (its manual, sections 25.7.2-3).
+        variations.setName ("Macro variations view"); variations.setTooltip ("Show macro variations: store the macros' state and launch it again");
+        variations.setClickingTogglesState (true); variations.setColour (juce::TextButton::buttonOnColourId, green.withAlpha (.6f));
+        variations.onClick = [this] { if (variations.getToggleState()) map.setToggleState (false, juce::dontSendNotification); resized(); repaint(); };
+        rand.setName ("Randomize macros"); rand.setTooltip ("Rand: give each mapped macro not excluded from randomization a random value");
+        rand.onClick = [this] { report (session.randomizeRackMacros (rackId)); };
         addChain.setName ("Add chain"); addChain.setTooltip ("Add an empty chain");
         addChain.onClick = [this] { juce::String id; if (report (session.addRackChain (rackId, {}, id))) selectChain (id); };
         addDevice.setName ("Add device to chain"); addDevice.setTooltip ("Add a device to the selected chain");
         addDevice.onClick = [this] { deviceMenu(); };
-        for (auto* c : std::initializer_list<juce::Component*> { &fewer, &more, &map, &addChain, &addDevice }) { quiet (*c); addAndMakeVisible (*c); }
+        for (auto* c : std::initializer_list<juce::Component*> { &fewer, &more, &map, &variations, &rand, &addChain, &addDevice }) { quiet (*c); addAndMakeVisible (*c); }
         chainView.setViewedComponent (&chainContent, false); chainView.setScrollBarsShown (true, false); chainView.setScrollBarThickness (6);
         chainView.setName ("Chain list"); addAndMakeVisible (chainView);
         deviceView.setViewedComponent (&deviceContent, false); deviceView.setScrollBarsShown (true, true); deviceView.setScrollBarThickness (6);
         deviceContent.setName ("Chain devices"); addAndMakeVisible (deviceView);
-        addChildComponent (zones); addChildComponent (pads); addChildComponent (padControls); addChildComponent (mappings);
+        addChildComponent (zones); addChildComponent (pads); addChildComponent (padControls); addChildComponent (mappings); addChildComponent (variationList);
         error.setName ("Rack error"); error.setColour (juce::Label::textColourId, themes::colour (0xfff4ab84)); error.setFont (font (9.5f)); addAndMakeVisible (error);
         session.addChangeListener (this);
         sync(); startTimerHz (15);
@@ -371,6 +401,8 @@ public:
             macroLabels[(size_t) i].setColour (juce::Label::textColourId, mapped ? ink : muted);
         }
         fewer.setEnabled (rack.visibleMacros > 1); more.setEnabled (rack.visibleMacros < Session::rackMacroCount);
+        rand.setEnabled (! rack.mappings.empty());
+        variationList.sync (rack);
         const auto selector = racks::macroValue (rack, rack.id, Session::rackChainSelector);
         zones.sync (rack.chains, rack.effect.kind, (int) (selector ? *selector : rack.effect.values[(size_t) Session::rackChainSelector]), selector.has_value());
         pads.repaint();
@@ -414,7 +446,8 @@ public:
         error.setBounds (r.removeFromBottom (12));
         auto macroArea = r.removeFromLeft (macroWidth());
         auto header = macroArea.removeFromTop (18);
-        map.setBounds (header.removeFromLeft (34).reduced (1)); more.setBounds (header.removeFromRight (22).reduced (1)); fewer.setBounds (header.removeFromRight (22).reduced (1));
+        map.setBounds (header.removeFromLeft (34).reduced (1)); variations.setBounds (header.removeFromLeft (30).reduced (1)); rand.setBounds (header.removeFromLeft (36).reduced (1));
+        more.setBounds (header.removeFromRight (22).reduced (1)); fewer.setBounds (header.removeFromRight (22).reduced (1));
         const int columns = macroColumns();
         for (int i = 0; i < rack.visibleMacros; ++i)
         {
@@ -433,9 +466,10 @@ public:
         for (size_t i = 0; i < rows.size(); ++i) rows[i]->setBounds (0, (int) i * 20, chainContent.getWidth(), 19);
         r.removeFromLeft (4);
         auto middle = r.removeFromLeft (middleWidth());
-        const bool mapping = map.getToggleState();
-        mappings.setVisible (mapping); zones.setVisible (! mapping && ! drum); padControls.setVisible (! mapping && drum);
-        mappings.setBounds (middle); zones.setBounds (middle); padControls.setBounds (middle);
+        const bool mapping = map.getToggleState(), varying = variations.getToggleState() && ! mapping;
+        mappings.setVisible (mapping); variationList.setVisible (varying);
+        zones.setVisible (! mapping && ! varying && ! drum); padControls.setVisible (! mapping && ! varying && drum);
+        mappings.setBounds (middle); variationList.setBounds (middle); zones.setBounds (middle); padControls.setBounds (middle);
         r.removeFromLeft (4);
         addDevice.setBounds (r.removeFromLeft (20).withHeight (40));
         r.removeFromLeft (2);
@@ -474,6 +508,9 @@ public:
         juce::PopupMenu menu;
         menu.addItem (1, "Show Automation for " + racks::macroName (rack, macro), (bool) showAutomation);
         menu.addItem (2, "Rename...");
+        // As the reference's macro menu (its manual, sections 25.7.2 and 25.7.3).
+        menu.addItem (3, "Exclude Macro from Randomization", true, rack.excludedFromRandomization[(size_t) macro]);
+        menu.addItem (4, "Exclude Macro From Variations", true, rack.excludedFromVariations[(size_t) macro]);
         int item = 100;
         std::vector<Session::MacroMapping> listed;
         for (const auto& m : rack.mappings)
@@ -484,6 +521,12 @@ public:
             if (safe == nullptr || choice == 0) return;
             if (choice == 1 && safe->showAutomation) safe->showAutomation (safe->rackId, macro);
             else if (choice == 2) safe->renameMacro (macro);
+            else if (choice == 3 || choice == 4)
+            {
+                const bool fromVariations = choice == 4;
+                const bool now = fromVariations ? safe->rack.excludedFromVariations[(size_t) macro] : safe->rack.excludedFromRandomization[(size_t) macro];
+                safe->report (safe->session.setRackMacroExcluded (safe->rackId, macro, fromVariations, ! now));
+            }
             else if (choice >= 100 && choice - 100 < (int) listed.size())
                 safe->report (safe->session.removeRackMacroMapping (safe->rackId, macro, listed[(size_t) choice - 100].targetId, listed[(size_t) choice - 100].parameter));
         });
@@ -548,7 +591,7 @@ public:
     bool drum = false, available = false, macroGesture = false;
     std::array<ValueSlider, Session::rackMacroCount> macros;
     std::array<juce::Label, Session::rackMacroCount> macroLabels;
-    juce::TextButton fewer { "-" }, more { "+" }, map { "Map" }, addChain { "+ Chain" }, addDevice { "+" };
+    juce::TextButton fewer { "-" }, more { "+" }, map { "Map" }, variations { "Var" }, rand { "Rand" }, addChain { "+ Chain" }, addDevice { "+" };
     juce::Viewport chainView, deviceView;
     juce::Component chainContent, deviceContent;
     std::vector<std::unique_ptr<ChainRow>> rows;
@@ -557,12 +600,13 @@ public:
     PadGrid pads;
     PadControls padControls;
     MappingList mappings;
+    VariationList variationList;
     juce::Label error;
 private:
     int macroColumns() const noexcept { return juce::jmax (1, (rack.visibleMacros + 1) / 2); }
-    int macroWidth() const noexcept { return 4 + macroColumns() * 50; }
+    int macroWidth() const noexcept { return juce::jmax (150, 4 + macroColumns() * 50); } // Room for the header's buttons.
     int listWidth() const noexcept { return drum ? 170 : 196; }
-    int middleWidth() const noexcept { return map.getToggleState() ? 300 : drum ? 210 : 280; }
+    int middleWidth() const noexcept { return map.getToggleState() ? 300 : variations.getToggleState() ? 220 : drum ? 210 : 280; }
     int deviceWidth() const
     {
         int width = 0; for (const auto& d : devices) width += d->preferredWidth() + 3;
@@ -859,6 +903,99 @@ void PadControls::paint (juce::Graphics& g)
         g.drawFittedText ("Empty pad. Drop a sample on it to make a chain.", getLocalBounds().reduced (8).withTrimmedTop (16).withTrimmedBottom (22), juce::Justification::centred, 3);
     }
     g.setColour (line); g.drawRect (getLocalBounds());
+}
+
+VariationList::VariationList (RackEditor& o) : owner (o)
+{
+    setName ("Macro variations");
+    add.setName ("New variation"); add.setTooltip ("New: store the macros as a variation");
+    add.onClick = [this] { int index = 0; owner.report (owner.session.addRackVariation (owner.rackId, index)); };
+    quiet (add); addAndMakeVisible (add);
+}
+void VariationList::sync (const Session::PluginInfo& rack)
+{
+    shown = rack.variations;
+    while (names.size() < (int) shown.size())
+    {
+        const int i = names.size();
+        auto* overwrite = overwrites.add (new juce::TextButton ("<"));
+        overwrite->setName ("Overwrite variation " + juce::String (i + 1)); overwrite->setTooltip ("Overwrite this variation with the macros as they are now");
+        overwrite->onClick = [this, i] { owner.report (owner.session.overwriteRackVariation (owner.rackId, i)); };
+        auto* launch = launches.add (new juce::TextButton (">"));
+        launch->setName ("Launch variation " + juce::String (i + 1)); launch->setTooltip ("Launch this variation: the macros take its values");
+        launch->onClick = [this, i] { owner.report (owner.session.launchRackVariation (owner.rackId, i)); };
+        auto* name = names.add (new juce::Label());
+        name->setName ("Variation name " + juce::String (i + 1)); name->setFont (font (10.0f)); name->setInterceptsMouseClicks (false, false);
+        name->setColour (juce::Label::textColourId, ink);
+        for (auto* c : std::initializer_list<juce::Component*> { overwrite, launch, name }) { quiet (*c); addAndMakeVisible (*c); }
+    }
+    while (names.size() > (int) shown.size()) { names.removeLast(); overwrites.removeLast(); launches.removeLast(); }
+    for (int i = 0; i < names.size(); ++i) names[i]->setText (shown[(size_t) i].name, juce::dontSendNotification);
+    add.setEnabled ((int) shown.size() < Session::maximumMacroVariations);
+    first = juce::jlimit (0, juce::jmax (0, (int) shown.size() - 1), first);
+    resized(); repaint();
+}
+void VariationList::resized()
+{
+    auto r = getLocalBounds().reduced (4);
+    add.setBounds (r.removeFromTop (20).removeFromLeft (60));
+    r.removeFromTop (4);
+    for (int i = 0; i < names.size(); ++i)
+    {
+        const int row = i - first;
+        const bool visible = row >= 0 && (row + 1) * rowHeight <= r.getHeight();
+        for (auto* c : std::initializer_list<juce::Component*> { overwrites[i], launches[i], names[i] }) c->setVisible (visible);
+        if (! visible) continue;
+        auto line = juce::Rectangle<int> (r.getX(), r.getY() + row * rowHeight, r.getWidth(), rowHeight - 1);
+        overwrites[i]->setBounds (line.removeFromLeft (20));
+        launches[i]->setBounds (line.removeFromRight (20));
+        names[i]->setBounds (line.reduced (3, 0));
+    }
+}
+void VariationList::paint (juce::Graphics& g)
+{
+    g.fillAll (panel);
+    if (shown.empty()) { g.setColour (muted); g.setFont (font (10.0f)); g.drawFittedText ("New stores the macros as a variation.", getLocalBounds().reduced (6).withTrimmedTop (26), juce::Justification::centredTop, 2); }
+}
+int VariationList::rowAt (int y) const
+{
+    const int top = 4 + 20 + 4;
+    if (y < top) return -1;
+    const int index = (y - top) / rowHeight + first;
+    return index < (int) shown.size() ? index : -1;
+}
+void VariationList::mouseDown (const juce::MouseEvent& e)
+{
+    const int index = rowAt (e.y);
+    if (! e.mods.isPopupMenu() || index < 0) return;
+    juce::PopupMenu menu;
+    menu.addItem (1, "Rename..."); menu.addItem (2, "Duplicate", (int) shown.size() < Session::maximumMacroVariations); menu.addItem (3, "Delete");
+    auto safe = juce::Component::SafePointer<VariationList> (this);
+    menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (names[index]), [safe, index] (int choice)
+    {
+        if (safe == nullptr || choice == 0) return;
+        int copy = 0;
+        if (choice == 1) safe->rename (index);
+        else if (choice == 2) safe->owner.report (safe->owner.session.duplicateRackVariation (safe->owner.rackId, index, copy));
+        else safe->owner.report (safe->owner.session.removeRackVariation (safe->owner.rackId, index));
+    });
+}
+void VariationList::mouseWheelMove (const juce::MouseEvent&, const juce::MouseWheelDetails& wheel)
+{
+    first = juce::jlimit (0, juce::jmax (0, (int) shown.size() - 1), first + (wheel.deltaY < 0 ? 1 : -1));
+    resized();
+}
+void VariationList::rename (int index)
+{
+    if (! juce::isPositiveAndBelow (index, (int) shown.size())) return;
+    auto* window = new juce::AlertWindow ("Rename variation", "A name for " + shown[(size_t) index].name + ".", juce::MessageBoxIconType::NoIcon);
+    window->addTextEditor ("name", shown[(size_t) index].name);
+    window->addButton ("Rename", 1, juce::KeyPress (juce::KeyPress::returnKey)); window->addButton ("Cancel", 0, juce::KeyPress (juce::KeyPress::escapeKey));
+    auto safe = juce::Component::SafePointer<VariationList> (this);
+    window->enterModalState (true, juce::ModalCallbackFunction::create ([safe, window, index] (int result)
+    {
+        if (safe != nullptr && result == 1) safe->owner.report (safe->owner.session.renameRackVariation (safe->owner.rackId, index, window->getTextEditorContents ("name")));
+    }), true);
 }
 
 MappingList::MappingList (RackEditor& o) : owner (o)
