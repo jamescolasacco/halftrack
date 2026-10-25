@@ -449,7 +449,7 @@ These are simplest defaults pending a comparison with the reference:
 
 - **The marker** flashes across every lane. The reference shows it on the track that was clicked.
 - **Clicks** snap the marker to the grid, unless Alt is held.
-- **Scrubbing.** Clicks in the ruler's scrub area (the locators' row, and the loop brace's row) jump immediately, without starting playback. The reference's manual says a click there launches playback, its jumps quantized by the control bar's quantization, and holding loops a section; none of that is implemented yet.
+- **Scrubbing.** The reference's manual gives the scrub area's click, quantized jumps and hold looping, but not their details. Halftrack's defaults: the clicked time rounds down to the launch grid; a jump while playing lands keeping time; without quantization a held scrub does not loop; dragging scrubs on; a scrub moves the insert marker; with Permanent Scrub Areas off a plain click places the insert marker, and Shift then scrubs instead of drawing a loop. Jumps are timed from the message thread rather than in the engine, whose scheduled jumps cannot be withdrawn.
 - **The beat-time ruler.** Dragging the bar numbers keeps the pressed time under the pointer, and zooms 1% a pixel, down zooming in, as Halftrack's overview does. The reference's rate and scroll direction were not read.
 
 ### Missing media matching

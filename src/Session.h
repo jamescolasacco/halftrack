@@ -1369,6 +1369,10 @@ public:
         // Draw Mode with Pitch Lock, after the reference's (its song preference data, off): Draw Mode draws notes
         // at one pitch, and Option draws them melodically, the other way round from its default.
         bool drawWithPitchLock = false;
+        // Permanent Scrub Areas, after the reference's (its song preference data, `mpPreferScrubbing`, on): a click in
+        // the Arrangement's scrub area scrubs. Off, a click there places the insert marker, and a Shift-click there or
+        // on the bar numbers scrubs, as its manual says (section 6.3).
+        bool permanentScrubAreas = true;
         // The computer MIDI keyboard (KEYS) and Options > Scale Highlighting (K), which the reference keeps with
         // its song preference data, both off at first: they come back as they were left.
         bool computerMidiKeyboard = false, highlightScale = false;
@@ -1682,6 +1686,14 @@ public:
     // Ends the Arrangement recording, keeping its takes as Stop does, while playback carries on.
     juce::Result stopRecording();
     void seek (double seconds);
+    // The Arrangement's scrub area, as the reference's (its manual, sections 6.1 and 6.3): playback starts from
+    // the time rounded down to the global launch quantization's grid, which becomes the insert marker; while
+    // playing, it jumps there once the play head reaches the grid's next line, keeping time (at once without
+    // quantization, or while recording, which the jump ends as seek does). While the scrub is held, the grid step
+    // from there loops; scrubbing again before the jump moves it, and endScrub lets playback run on. The jumps
+    // are made from the message thread, watched every millisecond, so they land within a device block.
+    juce::Result scrub (double seconds);
+    void endScrub();
     void setInsertMarker (double seconds);
     void returnToStart();
     void setTempo (double bpm); // Constant tempo only; ignored while the tempo is automated.

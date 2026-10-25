@@ -2885,3 +2885,7 @@ UI area. As the reference's manual describes (sections 6.1 and 6.2), the Arrange
 ## Follow pauses — 2026-10-25
 
 UI area. As the reference's manual describes (section 6.2), Follow now pauses instead of switching off: for a mouse gesture in the Arrangement, and after a hand scroll, a mouse edit there or a press on the bar numbers until playback stops or restarts, or a click in the Arrangement or a scrub area. The switch stays on, dimmed while paused ([timeline navigation contract](research/timeline-navigation-contract.md#behaviour), [open questions](open-questions.md#follows-pause)). Checked in the UI suite.
+
+## Scrub area — 2026-10-25
+
+Engine and UI areas. As the reference's manual describes (sections 6.1 and 6.3), a click in the Arrangement's scrub area now starts playback from the time rounded down to the global launch quantization, jumps there on the grid's next line while playing (keeping time), and loops the grid step while held; dragging scrubs on (`Session::scrub`, `Session::endScrub`). Display & Input gains Permanent Scrub Areas (on, as the reference's `mpPreferScrubbing`): off, a click places the insert marker and Shift-click scrubs ([transport contract](research/transport-contract.md#behaviour), [preferences contract](research/preferences-contract.md)). Checked in the transport, preferences and UI suites.

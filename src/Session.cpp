@@ -3215,8 +3215,43 @@ struct Session::Impl
     {
         std::function<void()> tick;
         void timerCallback() override { tick(); }
-    } sceneWatch, rangeWatch, tapWatch;
+    } sceneWatch, rangeWatch, tapWatch, scrubWatch;
     std::optional<double> rangeEnd; // Where Play Arrangement Selection stops.
+    // A scrub (Session::scrub): the grid line it waits for before jumping, where it jumps to, and while held the
+    // grid step from there that loops. `from` is the play head when the jump was asked for, so a loop taking the
+    // play head back before the line jumps at once; `landing` waits for the play head to arrive after a jump, as
+    // the engine reports the old position until the device's next block.
+    struct Scrub { std::optional<double> jumpAt; double from = 0, target = 0, length = 0; bool held = true, landing = false; };
+    std::optional<Scrub> scrubbing;
+    // Where the engine's play head is, more closely than the transport's position, which follows it by a timer.
+    double playheadSeconds() const
+    {
+        auto& transport = edit->getTransport();
+        if (auto* context = transport.getCurrentPlaybackContext()) return context->getPosition().inSeconds();
+        return transport.getPosition().inSeconds();
+    }
+    // A launch grid's last line at or before a beat, as Tracktion's getNext finds the next one at or after it.
+    static te::BeatPosition previousGridLine (te::LaunchQType grid, const te::TempoSequence& sequence, te::BeatPosition beat)
+    {
+        if (grid == te::LaunchQType::none) return beat;
+        const auto& tempo = sequence.getInternalSequence();
+        constexpr auto adjustment = 1.0e-10;
+        const auto fraction = te::toBarFraction (grid);
+        auto position = tempo.toBarsAndBeats (tempo.toTime (beat));
+        if (grid <= te::LaunchQType::bar)
+        {
+            const auto bars = position.bars + position.beats.inBeats() / position.numerator;
+            position.bars = static_cast<int> (fraction * std::floor (bars / fraction + adjustment));
+            position.beats = {};
+        }
+        else
+        {
+            const auto meter = tempo.getTimeSignatureAt (tempo.toTime (beat));
+            const auto step = fraction * position.numerator * meter.denominator / std::max (1, meter.numerator);
+            position.beats = te::BeatDuration::fromBeats (step * std::floor (position.beats.inBeats() / step + adjustment));
+        }
+        return tempo.toBeats (position);
+    }
     void scheduleSceneChange (const te::Scene& scene, std::optional<te::MonotonicBeat> boundary)
     {
         SceneChange change { boundary, {}, {} };
@@ -4510,6 +4545,8 @@ struct Session::Impl
             const int fullHeight = number ("fullHeightBrowser", 0, 2);
             read.fullHeightBrowser = fullHeight == 1;
             read.drawWithPitchLock = number ("drawWithPitchLock", 0, 2) == 1;
+            const int scrubAreas = number ("permanentScrubAreas", 1, 2);
+            read.permanentScrubAreas = scrubAreas == 1;
             read.computerMidiKeyboard = number ("computerMidiKeyboard", 0, 2) == 1; read.highlightScale = number ("highlightScale", 0, 2) == 1;
             read.selectOnLaunch = number ("selectOnLaunch", 1, 2) == 1; read.selectNextSceneOnLaunch = number ("selectNextSceneOnLaunch", 1, 2) == 1;
             read.startPlaybackWithRecord = startPlayback == 1;
@@ -4520,7 +4557,7 @@ struct Session::Impl
             for (auto* project : xml->getChildWithTagNameIterator ("RECENTPROJECT")) read.recentProjects.add (project->getStringAttribute ("path"));
             read.createFadesOnClipEdges = edgeFades == 1;
             read.metronomeSound = static_cast<Session::MetronomeSound> (juce::jmax (0, sound));
-            valid = valid && follow >= 0 && sceneRecord >= 0 && audioUnits >= 0 && vst3System >= 0 && vst3Custom >= 0 && edgeFades >= 0 && sound >= 0 && startPlayback >= 0 && locked >= 0 && tapStart >= 0 && fullHeight >= 0 && validPreferences (read);
+            valid = valid && follow >= 0 && sceneRecord >= 0 && audioUnits >= 0 && vst3System >= 0 && vst3Custom >= 0 && edgeFades >= 0 && sound >= 0 && startPlayback >= 0 && locked >= 0 && tapStart >= 0 && fullHeight >= 0 && scrubAreas >= 0 && validPreferences (read);
         }
         if (valid) { prefs = read; fadesOnClipEdges = prefs.createFadesOnClipEdges; return; }
         // Set an unreadable file aside rather than lose it, and keep the defaults.
@@ -4549,7 +4586,7 @@ struct Session::Impl
         xml.setAttribute ("lockEnvelopes", next.lockEnvelopes ? 1 : 0);
         xml.setAttribute ("startPlaybackWithTapTempo", next.startPlaybackWithTapTempo ? 1 : 0);
         xml.setAttribute ("fullHeightBrowser", next.fullHeightBrowser ? 1 : 0);
-        xml.setAttribute ("drawWithPitchLock", next.drawWithPitchLock ? 1 : 0);
+        xml.setAttribute ("drawWithPitchLock", next.drawWithPitchLock ? 1 : 0); xml.setAttribute ("permanentScrubAreas", next.permanentScrubAreas ? 1 : 0);
         xml.setAttribute ("computerMidiKeyboard", next.computerMidiKeyboard ? 1 : 0); xml.setAttribute ("highlightScale", next.highlightScale ? 1 : 0);
         xml.setAttribute ("selectOnLaunch", next.selectOnLaunch ? 1 : 0); xml.setAttribute ("selectNextSceneOnLaunch", next.selectNextSceneOnLaunch ? 1 : 0);
         xml.setAttribute ("preferencesTab", next.preferencesTab);
@@ -15123,7 +15160,7 @@ Result Session::playRange (double startSeconds, double endSeconds)
 Result Session::play()
 {
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
-    impl->rangeEnd.reset();
+    impl->rangeEnd.reset(); impl->scrubbing.reset();
     if (! audioDeviceManager().getCurrentAudioDevice()) return Result::fail (impl->noDeviceMessage());
     auto& transport = impl->edit->getTransport();
     // A waiting Record starts with playback, from the insert marker.
@@ -15143,6 +15180,7 @@ void Session::stop()
 {
     if (impl->exporting) return;
     impl->rangeEnd.reset(); impl->rangeWatch.stopTimer();
+    impl->scrubbing.reset(); impl->scrubWatch.stopTimer();
     impl->tapStart.reset(); impl->tapWatch.stopTimer();
     impl->deviceRestart.stopTimer(); // A stop after a device restart is the user's, not the engine's.
     impl->recordWaiting = false;
@@ -15357,6 +15395,7 @@ void Session::seek (double seconds)
     if (impl->exporting) return;
     if (std::isfinite (seconds))
     {
+        impl->scrubbing.reset();
         // Takes are timed by the play head, so any recording ends where it is first.
         if (impl->anyRecording()) stop();
         impl->cancelLaunches();
@@ -15369,6 +15408,72 @@ void Session::seek (double seconds)
         transport.setPosition (target);
         if (unchanged) transport.state.sendPropertyChangeMessage (te::IDs::position);
     }
+}
+Result Session::scrub (double seconds)
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    if (! std::isfinite (seconds)) return Result::fail ("That time is not a number.");
+    if (! audioDeviceManager().getCurrentAudioDevice()) return Result::fail (impl->noDeviceMessage());
+    auto& transport = impl->edit->getTransport();
+    auto& tempo = impl->edit->tempoSequence;
+    const auto grid = impl->edit->getLaunchQuantisation().type.get();
+    const auto line = Impl::previousGridLine (grid, tempo, tempo.toBeats (te::TimePosition::fromSeconds (juce::jmax (0.0, seconds))));
+    const auto target = tempo.toTime (line).inSeconds();
+    const auto length = grid == te::LaunchQType::none ? 0.0 : tempo.toTime (te::getNext (grid, tempo, line + te::BeatDuration::fromBeats (1.0e-6))).inSeconds() - target;
+    Impl::Scrub next; next.target = target; next.length = length;
+    if (transport.isPlaying() && ! impl->anyRecording() && grid != te::LaunchQType::none)
+    {
+        // Dragging on before the jump moves it.
+        if (impl->scrubbing && impl->scrubbing->jumpAt) { next.jumpAt = impl->scrubbing->jumpAt; next.from = impl->scrubbing->from; }
+        else
+        {
+            next.from = impl->playheadSeconds();
+            next.jumpAt = tempo.toTime (te::getNext (grid, tempo, tempo.toBeats (te::TimePosition::fromSeconds (next.from)) + te::BeatDuration::fromBeats (1.0e-6))).inSeconds();
+        }
+    }
+    else
+    {
+        seek (target);
+        if (! transport.isPlaying()) if (auto r = continuePlayback(); r.failed()) return r;
+        next.landing = true;
+    }
+    impl->scrubbing = next;
+    impl->scrubWatch.tick = [this]
+    {
+        auto& playing = impl->edit->getTransport();
+        if (! impl->scrubbing || ! playing.isPlaying()) { impl->scrubbing.reset(); impl->scrubWatch.stopTimer(); return; }
+        auto& scrub = *impl->scrubbing;
+        const auto now = impl->playheadSeconds();
+        const auto landAt = [&] (double late)
+        {
+            scrub.landing = true;
+            playing.setPosition (te::TimePosition::fromSeconds (scrub.target + (scrub.length > 0 ? std::fmod (late, scrub.length) : late)));
+        };
+        if (scrub.jumpAt)
+        {
+            // The jump waits for the grid line, unless a loop takes the play head back before it.
+            if (now < *scrub.jumpAt && now >= scrub.from - 1.0e-9) return;
+            const auto late = juce::jmax (0.0, now - *scrub.jumpAt);
+            scrub.jumpAt.reset();
+            impl->cancelLaunches();
+            playing.startPosition = te::TimePosition::fromSeconds (scrub.target);
+            landAt (late); sendChangeMessage(); return;
+        }
+        if (scrub.landing)
+        {
+            if (now >= scrub.target - 1.0e-6 && now < scrub.target + juce::jmax (scrub.length, 1.0e-3)) scrub.landing = false;
+            else if (scrub.held) return;
+        }
+        if (! scrub.held || scrub.length <= 0) { impl->scrubbing.reset(); impl->scrubWatch.stopTimer(); return; }
+        // Held, the grid step loops, keeping time.
+        if (now >= scrub.target + scrub.length) landAt (now - scrub.target - scrub.length);
+    };
+    impl->scrubWatch.startTimer (1);
+    sendChangeMessage(); return Result::ok();
+}
+void Session::endScrub()
+{
+    if (impl->scrubbing) impl->scrubbing->held = false;
 }
 void Session::setInsertMarker (double seconds)
 {

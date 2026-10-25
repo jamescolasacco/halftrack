@@ -78,6 +78,40 @@ int runTransportTests (const juce::File& artifacts)
         s.stop(); s.returnToStart();
         check (! s.snapshot().dirty && ! s.canUndo(), "playing a range is not an edit");
 
+        // Scrubbing, as the reference's scrub area: playback starts from the bar the time is in (the global launch
+        // grid, a bar of two seconds at 120 BPM), a held scrub loops that bar, and while playing a jump waits for
+        // the grid's next line, keeping time.
+        ok (s.scrub (3.1), "scrub at 3.1 s while stopped");
+        check (s.snapshot().playing && near (s.snapshot().position, 2, slack) && near (s.snapshot().insertMarker, 2), "playback starts from the start of the bar, which becomes the insert marker");
+        pumpSyntheticTestDevice (s, blocksPerSecond * 5 / 2);
+        const auto looped = s.snapshot().position;
+        check (looped >= 2 && looped < 2.5 + slack, "held, the scrub loops the bar (" + juce::String (looped, 3) + " s after two and a half seconds)");
+        s.endScrub();
+        pumpSyntheticTestDevice (s, blocksPerSecond * 2);
+        const auto released = s.snapshot().position;
+        check (released > 4.1 && released < 4.5 + slack, "let go, playback runs on past the bar (" + juce::String (released, 3) + " s)");
+        ok (s.scrub (9.3), "scrub at 9.3 s while playing");
+        s.endScrub();
+        check (s.snapshot().position < 6 && near (s.snapshot().insertMarker, 2), "the jump waits for the next bar line");
+        pumpSyntheticTestDevice (s, blocksPerSecond * 3 / 4);
+        const auto waiting = s.snapshot().position;
+        check (waiting > 5 && waiting < 6, "playing on until it (" + juce::String (waiting, 3) + " s)");
+        pumpSyntheticTestDevice (s, blocksPerSecond);
+        juce::Thread::sleep (250); // The transport keeps a jump's position for 200 ms before following the play head again.
+        pumpSyntheticTestDevice (s, 1);
+        const auto jumped = s.snapshot().position;
+        check (jumped > 8.1 && jumped < 8.26 + slack && near (s.snapshot().insertMarker, 8), "at the line it jumps to the bar scrubbed, keeping time (" + juce::String (jumped, 3) + " s)");
+        s.stop();
+        check (! s.snapshot().dirty && ! s.canUndo(), "scrubbing is not an edit");
+        ok (s.setLaunchQuantisation (Session::LaunchQuantisation::none), "launch quantization off");
+        ok (s.continuePlayback(), "play on");
+        ok (s.scrub (3.3), "scrub at 3.3 s");
+        s.endScrub();
+        pumpSyntheticTestDevice (s, 2);
+        check (near (s.snapshot().position, 3.3, slack) && near (s.snapshot().insertMarker, 3.3), "without quantization it jumps at once, to the time itself");
+        s.stop(); s.undo(); s.returnToStart();
+        check (s.snapshot().launchQuantisation == Session::LaunchQuantisation::bar, "undo restores the bar's quantization");
+
         // Recording starts from the insert marker.
         ok (s.saveProject (root.getChildFile ("Transport").getChildFile ("Transport.halftrack")), "save a recording destination");
         ok (s.setTrackInput (0, s.inputNames()[0]), "route the input"); ok (s.setTrackArmed (0, true), "arm the track");

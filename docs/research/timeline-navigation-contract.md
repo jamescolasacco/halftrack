@@ -34,7 +34,7 @@ The Arrangement and piano roll follow the playhead and zoom to selections, after
   - A drag keeps the pressed time under the pointer: across, it scrolls; down zooms in and up zooms out, 1% a pixel as in the overview. The reference's rate and the direction of its scroll were not read.
   - A double-click zooms to the time selection or the selected clip, as Z does, and with neither shows the whole Arrangement.
   - A press neither locates nor selects; while playing it pauses Follow. Shift-dragging still draws a loop.
-  - The locators' row below the bar numbers (and the loop brace's row above them) locates as before ([transport contract](transport-contract.md)).
+  - The locators' row below the bar numbers (and the loop brace's row above them) is the scrub area, where a click scrubs ([transport contract](transport-contract.md)).
 - **Scrolling during a drag** (2026-10-24). Halftrack's Arrangement scrolls while a drag reaches its edge, at speeds of its own. The reference's drag scrolling was neither read nor measured.
   - Dragging a clip, a clip's edge or fade, a time selection or a take lane's selection to within 16 pixels of the timeline's left or right edge, or past it, scrolls the time. Dragging those, or a track's or group's header, to the top or bottom of the lanes shown scrolls the lanes.
   - The speed grows with the distance into the border, from 60 to 2400 pixels a second, and scrolling goes on while the pointer rests there.

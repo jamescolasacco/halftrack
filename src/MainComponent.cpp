@@ -5135,6 +5135,11 @@ private:
         // Where the locators' scrub area starts: under the bar numbers, and the time signature lane while it shows.
         int scrubTop() const { return 35 + (owner.meterLaneShown() ? meterLaneHeight : 0); }
         bool onBarNumbers (juce::Point<float> point) const { return point.y >= 14 && point.y < 35 && point.x >= 0 && point.x < owner.canvas.timelineWidth(); }
+        void startScrub (double seconds)
+        {
+            selected.clear();scrubbing=true;owner.report (owner.session.scrub (seconds));
+            owner.resumeFollow();owner.refresh();
+        }
         // A time signature marker's place in its lane, as wide as its meter's text or the room before the next.
         juce::Rectangle<float> meterBounds (int index) const
         {
@@ -5289,6 +5294,10 @@ private:
                 return;
             }
             selectedMeter=-1;
+            // Without Permanent Scrub Areas, Shift scrubs from the bar numbers or the scrub area, as the reference's
+            // manual says (section 6.3); with them, it draws a loop.
+            const bool permanent=owner.session.preferences().permanentScrubAreas;
+            if (! permanent && event.mods.isShiftDown() && hit.isEmpty() && bracePart (event.position)==BracePart::none) { startScrub (anchor);return; }
             definingLoop=event.mods.isShiftDown();
             braceDrag=definingLoop?BracePart::none:bracePart (event.position);
             braceSelected=braceDrag!=BracePart::none;
@@ -5312,6 +5321,8 @@ private:
                 for (const auto& marker : owner.state.locators) if (marker.id==hit) original=marker.position;
                 owner.report (owner.session.seekLocator (hit));
             }
+            // A click in the scrub area scrubs: playback starts or jumps there, and holding loops (Session::scrub).
+            else if (permanent) { startScrub (anchor);return; }
             else {selected.clear();owner.session.seek (anchor);}
             owner.resumeFollow(); // A click in the scrub area resumes Follow.
             owner.refresh();
@@ -5329,6 +5340,8 @@ private:
         void mouseDrag (const juce::MouseEvent& event) override
         {
             if (owner.session.isExporting()) return;
+            // Dragging a scrub on scrubs at the pointer.
+            if (scrubbing) { if (event.mouseWasDraggedSinceMouseDown()) owner.report (owner.session.scrub (juce::jmax (0.0,owner.viewStart+event.x/owner.pixelsPerSecond)));return; }
             if (zoomFrom)
             {
                 // Down zooms in, 1% a pixel, as the overview does.
@@ -5382,6 +5395,7 @@ private:
         }
         void mouseUp (const juce::MouseEvent& event) override
         {
+            if (std::exchange (scrubbing,false)) owner.session.endScrub();
             // Clicking the brace selects the loop's time across the tracks, as the reference's Select Loop.
             if (braceDrag!=BracePart::none && ! event.mouseWasDraggedSinceMouseDown())
             {
@@ -5448,7 +5462,7 @@ private:
         juce::String selected,dragId;
         double anchor=0,original=0,braceStart=0,braceEnd=0,originalMeter=0;int downX=0,meterDrag=-1;
         std::optional<std::pair<double,double>> zoomFrom; // A press on the bar numbers: the time pressed, and the zoom then.
-        bool definingLoop=false,locatorGesture=false,meterGesture=false;
+        bool definingLoop=false,locatorGesture=false,meterGesture=false,scrubbing=false;
         BracePart braceDrag=BracePart::none;
     public:
         // The ruler's menu, and acting on a choice from it; the UI suite uses both.
@@ -17734,40 +17748,40 @@ private:
     public:
         explicit DisplayPage (Impl& o) : owner (o)
         {
-            for (auto* c : std::initializer_list<juce::Component*> { &heading, &zoomLabel, &zoom, &followLabel, &follow, &mouseHeading, &pitchLock }) addAndMakeVisible (c);
+            for (auto* c : std::initializer_list<juce::Component*> { &heading, &zoomLabel, &zoom, &followLabel, &follow, &mouseHeading, &scrubAreas, &pitchLock }) addAndMakeVisible (c);
             styleHeading (heading, "Display"); styleHeading (mouseHeading, "Mouse and Pen Input");
             zoomLabel.setText ("Zoom Display", juce::dontSendNotification); followLabel.setText ("Follow Behavior", juce::dontSendNotification);
-            zoom.setName ("Display zoom"); follow.setName ("Follow behavior"); pitchLock.setName ("Draw Mode with Pitch Lock");
+            zoom.setName ("Display zoom"); follow.setName ("Follow behavior"); scrubAreas.setName ("Permanent Scrub Areas"); pitchLock.setName ("Draw Mode with Pitch Lock");
             for (int percent = 50; percent <= 200; percent += 25) zoom.addItem (juce::String (percent) + "%", percent);
             follow.addItem ("Page", 1); follow.addItem ("Scroll", 2);
             zoom.onChange = follow.onChange = [this] { apply(); };
-            pitchLock.onClick = [this] { apply(); };
+            scrubAreas.onClick = pitchLock.onClick = [this] { apply(); };
             sync();
         }
         void sync()
         {
             const auto p = owner.session.preferences();
             zoom.setSelectedId (p.zoomPercent, juce::dontSendNotification); follow.setSelectedId (p.scrollFollow ? 2 : 1, juce::dontSendNotification);
-            pitchLock.setToggleState (p.drawWithPitchLock, juce::dontSendNotification);
+            scrubAreas.setToggleState (p.permanentScrubAreas, juce::dontSendNotification); pitchLock.setToggleState (p.drawWithPitchLock, juce::dontSendNotification);
         }
         void apply()
         {
             auto p = owner.session.preferences();
             p.zoomPercent = zoom.getSelectedId() > 0 ? zoom.getSelectedId() : 100; p.scrollFollow = follow.getSelectedId() == 2;
-            p.drawWithPitchLock = pitchLock.getToggleState();
+            p.permanentScrubAreas = scrubAreas.getToggleState(); p.drawWithPitchLock = pitchLock.getToggleState();
             owner.report (owner.session.setPreferences (p)); owner.applyInterfaceLook(); sync();
         }
         void resized() override
         {
             auto area = getLocalBounds().reduced (16, 8);
             preferenceHeading (area, heading); preferenceRow (area, zoomLabel, zoom, 110); preferenceRow (area, followLabel, follow, 110);
-            area.removeFromTop (8); preferenceHeading (area, mouseHeading); pitchLock.setBounds (area.removeFromTop (22));
+            area.removeFromTop (8); preferenceHeading (area, mouseHeading); scrubAreas.setBounds (area.removeFromTop (22)); pitchLock.setBounds (area.removeFromTop (22));
         }
     private:
         Impl& owner;
         juce::Label heading, zoomLabel, followLabel, mouseHeading;
         juce::ComboBox zoom, follow;
-        juce::ToggleButton pitchLock { "Draw Mode with Pitch Lock" };
+        juce::ToggleButton scrubAreas { "Permanent Scrub Areas" }, pitchLock { "Draw Mode with Pitch Lock" };
     };
     // Preferences' Theme & Colors page: the interface's theme, Halftrack's own.
     class ThemePage final : public juce::Component
@@ -21017,6 +21031,32 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         timeSelection = {}; session.seek (0); refresh();
     }
     {
+        // The scrub area, as the reference's (its manual, sections 6.1 and 6.3): a click starts playback from the bar it
+        // is in; without Permanent Scrub Areas a click there places the insert marker, and Shift-clicking scrubs.
+        showArrangementView(); refresh();
+        check (session.setLaunchQuantisation (Session::LaunchQuantisation::bar).wasOk(), "a bar's launch quantization"); refresh();
+        setView (0, 100); refresh();
+        const auto now = juce::Time::getCurrentTime();
+        const auto mouse = [&] (juce::Point<float> at, int modifiers)
+        { return juce::MouseEvent (juce::Desktop::getInstance().getMainMouseSource(), at, juce::ModifierKeys (juce::ModifierKeys::leftButtonModifier | modifiers), 1.0f, 0, 0, 0, 0, &ruler, &ruler, now, at, now, 1, false); };
+        const auto barSeconds = state.timeSignature.beatsPerBar() * 60.0 / state.tempo;
+        const juce::Point<float> scrub ((float) (1.5 * barSeconds * pixelsPerSecond), (float) ruler.scrubTop() + 10.0f), onBars (scrub.x, 24.0f);
+        const auto loopBefore = std::tuple { state.looping, state.loopStart, state.loopEnd };
+        ruler.mouseDown (mouse (scrub, 0)); refresh();
+        check (ruler.hitLocator (scrub).isEmpty() && state.playing && std::abs (state.insertMarker - barSeconds) < 1e-6, "a click in the scrub area starts playback from the bar it is in");
+        ruler.mouseUp (mouse (scrub, 0)); session.stop(); refresh();
+        auto prefs = session.preferences(); prefs.permanentScrubAreas = false;
+        check (session.setPreferences (prefs).wasOk(), "Permanent Scrub Areas off");
+        ruler.mouseDown (mouse (scrub, 0)); ruler.mouseUp (mouse (scrub, 0)); refresh();
+        check (! state.playing && std::abs (state.insertMarker - 1.5 * barSeconds) < 1e-6, "without them a click there places the insert marker");
+        ruler.mouseDown (mouse (onBars, juce::ModifierKeys::shiftModifier)); ruler.mouseUp (mouse (onBars, juce::ModifierKeys::shiftModifier)); refresh();
+        check (state.playing && std::abs (state.insertMarker - barSeconds) < 1e-6 && std::tuple { state.looping, state.loopStart, state.loopEnd } == loopBefore,
+               "and a Shift-click on the bar numbers scrubs, drawing no loop");
+        session.stop(); prefs.permanentScrubAreas = true;
+        check (session.setPreferences (prefs).wasOk(), "Permanent Scrub Areas on again");
+        session.undo(); session.seek (0); refresh();
+    }
+    {
         // Dragging a clip or a time selection past the timeline's edge scrolls the Arrangement on, the
         // clip staying under the pointer, and dragging below the lanes shown scrolls them down.
         showArrangementView(); refresh();
@@ -23369,6 +23409,11 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
             followChooser->setSelectedId (2, juce::sendNotificationSync); refresh();
             check (session.preferences().scrollFollow && session.preferences().driverErrorCompensationMs == 1.5, "choosing Scroll sets it, keeping the compensation");
             check (scrolledViewStart (12, 10) == 7 && scrolledViewStart (3, 10) == 0, "scrolling keeps the play head in the middle once it reaches it");
+            auto* scrubToggle = dynamic_cast<juce::ToggleButton*> (findNamed (panel, "Permanent Scrub Areas"));
+            check (scrubToggle != nullptr && scrubToggle->getToggleState() && session.preferences().permanentScrubAreas, "the panel offers Permanent Scrub Areas, on by default as in the reference");
+            scrubToggle->setToggleState (false, juce::sendNotificationSync); refresh();
+            check (! session.preferences().permanentScrubAreas && session.preferences().scrollFollow, "switching it off sets it, keeping the others");
+            scrubToggle->setToggleState (true, juce::sendNotificationSync); refresh();
             auto* sceneRecordToggle = dynamic_cast<juce::ToggleButton*> (findNamed (panel, "Start recording on scene launch"));
             check (sceneRecordToggle != nullptr && sceneRecordToggle->getButtonText() == "Start Recording on Scene Launch" && ! sceneRecordToggle->getToggleState()
                        && ! session.preferences().startRecordingOnSceneLaunch, "the panel offers Start Recording on Scene Launch, off by default");
