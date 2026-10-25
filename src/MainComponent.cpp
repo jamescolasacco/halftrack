@@ -877,8 +877,11 @@ public:
         browserSearch.setTextToShowWhenEmpty ("Search this folder", muted);
         browserSearch.setFont (font (12.0f));
         browserSearch.onTextChange = [this] { similarFile = juce::File(); updateBrowser(); };
-        // A search joins the browser's history when it is finished with.
-        browserSearch.onReturnKey = browserSearch.onFocusLost = [this] { noteBrowserState(); };
+        // A search joins the browser's history when it is finished with. Return or Down then moves into
+        // its results, selecting the first, as the reference's keys do (its manual, section 42.22).
+        browserSearch.onReturnKey = [this] { noteBrowserState(); jumpToSearchResults(); };
+        browserSearch.onFocusLost = [this] { noteBrowserState(); };
+        browserSearch.addKeyListener (&searchKeys);
         for (const auto& [button, step, title] : { std::tuple { &browseBack, -1, "Browse back" }, std::tuple { &browseForward, 1, "Browse forward" } })
         {
             button->setTitle (title); button->setName (title); button->setWantsKeyboardFocus (false); button->setMouseClickGrabsKeyboardFocus (false);
@@ -18176,7 +18179,29 @@ private:
         }
         else session.stopPreview();
     }
-    void returnKeyPressed (int row) override { activateBrowserRow (row); }
+    // Return loads the selected item, and Shift+Return previews it instead, as the reference's key does
+    // (its manual, section 42.22).
+    void returnKeyPressed (int row) override
+    {
+        if (juce::ModifierKeys::currentModifiers.isShiftDown()) { previewSelectedSample(); return; }
+        activateBrowserRow (row);
+    }
+    void jumpToSearchResults()
+    {
+        if (getNumRows() <= 0) return;
+        browserList.selectRow (0);
+        if (browserList.isShowing()) browserList.grabKeyboardFocus();
+    }
+    struct SearchKeys final : juce::KeyListener
+    {
+        explicit SearchKeys (Impl& o) : owner (o) {}
+        bool keyPressed (const juce::KeyPress& key, juce::Component*) override
+        {
+            if (key != juce::KeyPress::downKey) return false;
+            owner.noteBrowserState(); owner.jumpToSearchResults(); return true;
+        }
+        Impl& owner;
+    } searchKeys { *this };
     bool isInterestedInFileDrag (const juce::StringArray& files) override
     {
         for (const auto& path : files)
@@ -19080,6 +19105,25 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
             browserList.selectRow (rowOf (library.getChildFile ("Real.wav")));
             check (browserListKey (juce::KeyPress (juce::KeyPress::rightKey)) && session.snapshot().previewing == library.getChildFile ("Real.wav"), "Right on a file previews it");
             session.stopPreview();
+            {
+                // Shift+Return previews it too, rather than loading it.
+                const auto tracksBefore = session.snapshot().tracks.size();
+                const auto modifiers = juce::ModifierKeys::currentModifiers;
+                juce::ModifierKeys::currentModifiers = juce::ModifierKeys (juce::ModifierKeys::shiftModifier);
+                returnKeyPressed (browserList.getSelectedRow());
+                juce::ModifierKeys::currentModifiers = modifiers;
+                check (session.snapshot().previewing == library.getChildFile ("Real.wav") && session.snapshot().tracks.size() == tracksBefore,
+                       "Shift+Return previews the file instead of loading it, as the reference's key does");
+                session.stopPreview();
+                // Down in the search field moves into the results, selecting the first.
+                browserList.deselectAllRows();
+                browserSearch.setText ("Real", juce::sendNotificationSync); settle();
+                check (searchKeys.keyPressed (juce::KeyPress (juce::KeyPress::downKey), &browserSearch) && browserList.getSelectedRow() == 0 && getNumRows() > 0,
+                       "Down in the search field selects the first result, as the reference's key does");
+                browserList.deselectAllRows(); browserSearch.onReturnKey();
+                check (browserList.getSelectedRow() == 0, "and so does Return");
+                browserSearch.setText ({}, juce::sendNotificationSync); settle();
+            }
         }
         browserFolder = folder; updateBrowser(); setBrowserCategory (category);
         library.deleteRecursively();
