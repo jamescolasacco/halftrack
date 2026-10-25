@@ -2956,3 +2956,7 @@ UI area. As the reference's manual describes for every comp (section 21.7), drag
 
 Engine and UI areas. MIDI files dropped on a MIDI track's Session slot now go into it and the slots below, or beside the tracks into a new MIDI track. Import File in the Session takes a MIDI file for a MIDI track's selected slot, as the reference's manual describes (section 5.2). `Session::importMidiFileToSlot` makes one clip named for the file, looping over its length, one undo step.
 
+## Shown clips' loops in the note editor — 2026-10-25
+
+UI area. In multi-clip editing, the notes of the other shown clips now show where the Arrangement plays them: from each clip's start marker, and at each pass of a looped clip's loop. Before, each note showed once at its content beat. Clicking any of them still edits its clip with the note selected, keeping it under the pointer.
+

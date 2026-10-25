@@ -9021,15 +9021,15 @@ private:
             const auto clipStart = (float) (keysWidth + (played - viewBeat) * pixelsPerBeat);
             if (clipStart > keysWidth) { g.setColour (background.withAlpha (0.7f)); g.fillRect ((float) keysWidth, (float) gridTop, clipStart - keysWidth, (float) grid.getHeight()); }
             g.reduceClipRegion (grid);
-            // Other shown clips' notes, dimmed, where they fall against this clip.
+            // Other shown clips' notes, dimmed, where they play against this clip.
             for (const auto* other : owner.extraMidiClips())
             {
-                const auto from = (float) (keysWidth + (other->startBeat - clip->startBeat - viewBeat) * pixelsPerBeat);
+                const auto from = (float) (keysWidth + (other->startBeat - clip->startBeat + clip->contentStartBeat - viewBeat) * pixelsPerBeat);
                 g.setColour (themes::colour (0xffffffff).withAlpha (0.035f)); g.fillRect (from, (float) gridTop, (float) (other->lengthBeats * pixelsPerBeat), (float) grid.getHeight());
-                for (const auto& note : other->notes)
+                for (const auto& ghost : ghostNotes (*other))
                 {
-                    const auto r = ghostBounds (*other, note);
-                    g.setColour (themes::colour (0xff5d6e6a).withAlpha (note.active ? 0.75f : 0.35f)); g.fillRect (r);
+                    const auto r = ghostRect (ghost);
+                    g.setColour (themes::colour (0xff5d6e6a).withAlpha (ghost.note->active ? 0.75f : 0.35f)); g.fillRect (r);
                     g.setColour (themes::colour (0xff2a3633)); g.drawRect (r, 1.0f);
                 }
             }
@@ -9203,11 +9203,12 @@ private:
             // keeping the view where it was.
             if (std::none_of (clip->notes.begin(), clip->notes.end(), [&] (const auto& n) { return noteBounds (n).contains (e.position); }))
                 for (const auto* other : owner.extraMidiClips())
-                    for (const auto& note : other->notes)
-                        if (ghostBounds (*other, note).contains (e.position))
+                    for (const auto& ghost : ghostNotes (*other))
+                        if (ghostRect (ghost).contains (e.position))
                         {
-                            const auto otherId = other->id, noteId = note.id;
-                            const auto shift = other->startBeat - clip->startBeat;
+                            const auto otherId = other->id, noteId = ghost.note->id;
+                            // The clicked note stays under the pointer in its own clip's beats.
+                            const auto shift = ghost.beat - ghost.note->startBeat;
                             owner.focusMidiClip (otherId);
                             viewBeat = juce::jmax (0.0, viewBeat - shift);
                             selectedNoteIds = { noteId }; selectedNoteId = noteId;
@@ -10790,11 +10791,35 @@ private:
         // Shows the key tracks from a pitch at a height, as a view restored.
         void setKeyTracks (int top, int height)
         { rowHeight = juce::jlimit ((int) minimumRowHeight, (int) maximumRowHeight, height); topPitch = juce::jlimit (0, 127, top); updateScroll(); repaint(); }
-        // A note of another shown clip, placed against the edited clip's start.
+        // Where another shown clip's notes play against the edited clip, in its beats, as the Arrangement plays them: from
+        // the clip's start marker, and for a looped clip round its loop at each pass until the clip ends.
+        struct GhostNote { const Session::MidiNoteInfo* note; double beat; };
+        std::vector<GhostNote> ghostNotes (const Session::ClipInfo& other) const
+        {
+            std::vector<GhostNote> result;
+            const auto* clip = owner.currentMidiClip();
+            if (clip == nullptr) return result;
+            const auto shown = clip->contentStartBeat - clip->startBeat; // An Arrangement beat's place in the edited clip, less the beat.
+            const auto end = other.startBeat + other.lengthBeats;
+            constexpr size_t most = 20000;
+            const auto place = [&] (const Session::MidiNoteInfo& n, double at)
+            { if (at >= other.startBeat - 1e-9 && at < end - 1e-9 && result.size() < most) result.push_back ({ &n, at + shown }); };
+            const auto loopEnd = other.loop.start + other.loop.length;
+            for (const auto& n : other.notes)
+                if (! other.loop.on || n.startBeat < loopEnd - 1e-9) place (n, other.startBeat + n.startBeat - other.contentStartBeat);
+            if (other.loop.on && other.loop.length > 1.0 / 64)
+                for (auto pass = other.startBeat + loopEnd - other.contentStartBeat; pass < end - 1e-9 && result.size() < most; pass += other.loop.length)
+                    for (const auto& n : other.notes)
+                        if (n.startBeat >= other.loop.start - 1e-9 && n.startBeat < loopEnd - 1e-9) place (n, pass + n.startBeat - other.loop.start);
+            return result;
+        }
+        juce::Rectangle<float> ghostRect (const GhostNote& ghost) const
+        { return noteBounds (*ghost.note).translated ((float) ((ghost.beat - ghost.note->startBeat) * pixelsPerBeat), 0); }
+        // Where a note of another shown clip first plays against the edited clip.
         juce::Rectangle<float> ghostBounds (const Session::ClipInfo& other, const Session::MidiNoteInfo& note) const
         {
-            const auto* clip = owner.currentMidiClip();
-            return noteBounds (note).translated ((float) ((clip != nullptr ? other.startBeat - clip->startBeat : 0.0) * pixelsPerBeat), 0);
+            for (const auto& ghost : ghostNotes (other)) if (ghost.note->id == note.id) return ghostRect (ghost);
+            return {};
         }
     private:
     public:
@@ -22990,6 +23015,14 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
                "with its note selected, so Delete removes that note only");
         session.undo(); refresh();
         check (state.tracks[(size_t) lane].clips[1].notes.size() == 1, "undo restores it");
+        {
+            // A looped shown clip's notes show at each pass of its loop, where the Arrangement plays them.
+            check (session.setClipLoop (firstId, { true, 0, 1 }, 0).wasOk(), "loop the first clip's first beat"); refresh();
+            std::vector<double> beats;
+            for (const auto& ghost : pianoRoll.ghostNotes (*extraMidiClips().front())) beats.push_back (ghost.beat);
+            check (beats == std::vector<double> { -4, -3, -2, -1 }, "the shown clip's note shows at each of its four passes, against the edited clip's beats");
+            session.undo(); refresh();
+        }
         clipClick (firstId, 0);
         check (currentMidiClip()->id == firstId && extraMidiClipIds.empty() && extraMidiClips().empty(), "a plain click edits one clip again");
         closeClipView();
