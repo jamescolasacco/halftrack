@@ -8682,10 +8682,10 @@ private:
         EnvelopeEditor envelope;
         // MPE: the selected note's own pitch bend, slide or pressure when one is chosen.
         std::optional<Session::NoteExpression> expression;
-        // -1 shows velocities and chanceLane note chances; otherwise a controller number or
+        // -1 shows velocities, chanceLane note chances and releaseLane release velocities; otherwise a controller number or
         // Session::pitchBendLane / channelPressureLane.
         int lane = -1;
-        static constexpr int chanceLane = -2;
+        static constexpr int chanceLane = -2, releaseLane = -3;
         void paint (juce::Graphics& g) override
         {
             g.fillAll (themes::colour (0xff262626));
@@ -8824,7 +8824,7 @@ private:
                 if (const auto* clip = roll.owner.currentMidiClip(); clip != nullptr && clip->id == clipId)
                     for (const auto& note : previewNotes)
                         for (const auto& old : clip->notes)
-                            if (old.id == note.id && (old.velocity != note.velocity || old.chance != note.chance)) changed.push_back (note);
+                            if (old.id == note.id && (old.velocity != note.velocity || old.chance != note.chance || old.releaseVelocity != note.releaseVelocity)) changed.push_back (note);
                 previewNotes.clear();
                 if (changed.empty()) { repaint(); return; }
                 if (lane == chanceLane)
@@ -8833,6 +8833,15 @@ private:
                     for (const auto& note : changed) byChance[note.chance].add (note.id);
                     roll.owner.session.beginEditGesture ("Draw note chances");
                     for (const auto& [chance, ids] : byChance) roll.owner.report (roll.owner.session.setMidiNotesChance (clipId, ids, chance));
+                    roll.owner.session.endEditGesture();
+                    roll.owner.refresh();
+                }
+                else if (lane == releaseLane)
+                {
+                    std::map<int, juce::StringArray> byRelease;
+                    for (const auto& note : changed) byRelease[note.releaseVelocity].add (note.id);
+                    roll.owner.session.beginEditGesture ("Draw release velocities");
+                    for (const auto& [release, ids] : byRelease) roll.owner.report (roll.owner.session.setMidiNotesReleaseVelocity (clipId, ids, release));
                     roll.owner.session.endEditGesture();
                     roll.owner.refresh();
                 }
@@ -8850,6 +8859,7 @@ private:
                         if (note.id == velocityNote || (group && roll.selectedNoteIds.contains (note.id))) { changed.push_back (note); ids.add (note.id); }
                     const auto dragged = std::find_if (previewNotes.begin(), previewNotes.end(), [this] (const auto& n) { return n.id == velocityNote; });
                     if (lane == chanceLane) roll.owner.report (roll.owner.session.setMidiNotesChance (clipId, ids, dragged->chance));
+                    else if (lane == releaseLane) roll.owner.report (roll.owner.session.setMidiNotesReleaseVelocity (clipId, ids, dragged->releaseVelocity));
                     else if (rangeDrag) roll.owner.report (roll.owner.session.setMidiNotesVelocityRange (clipId, ids, dragged->velocityRange));
                     else roll.updateNotes (clipId, changed, "Note velocity");
                     roll.owner.refresh();
@@ -8861,6 +8871,7 @@ private:
         static juce::String laneName (int lane)
         {
             if (lane == chanceLane) return "Chance";
+            if (lane == releaseLane) return "Release Velocity";
             if (lane < 0) return "Velocity";
             if (lane == Session::pitchBendLane) return "Pitch Bend";
             if (lane == Session::channelPressureLane) return "Pressure";
@@ -8893,7 +8904,11 @@ private:
             const bool chosen = std::any_of (clip->notes.begin(), clip->notes.end(), [this] (const auto& n) { return roll.selectedNoteIds.contains (n.id); });
             const auto takes = [&] (const Session::MidiNoteInfo& n) { return ! chosen || roll.selectedNoteIds.contains (n.id); };
             const auto set = [this] (Session::MidiNoteInfo& n, int v)
-            { if (lane == chanceLane) n.chance = (float) juce::jlimit (0, 100, v) / 100.0f; else n.velocity = (float) juce::jlimit (1, 127, v) / 127.0f; };
+            {
+                if (lane == chanceLane) n.chance = (float) juce::jlimit (0, 100, v) / 100.0f;
+                else if (lane == releaseLane) n.releaseVelocity = juce::jlimit (0, 127, v);
+                else n.velocity = (float) juce::jlimit (1, 127, v) / 127.0f;
+            };
             if (e.mods.isAltDown())
             {
                 previewNotes = clip->notes;
@@ -9010,11 +9025,11 @@ private:
         int dragged = -1;
         bool drawing = false;
         juce::Rectangle<int> plot() const { return { keysWidth, 6, juce::jmax (1, getWidth() - keysWidth), juce::jmax (1, getHeight() - 10) }; }
-        int low() const { return lane == Session::pitchBendLane ? -8192 : lane == chanceLane ? 0 : lane < 0 ? 1 : 0; }
+        int low() const { return lane == Session::pitchBendLane ? -8192 : lane == chanceLane || lane == releaseLane ? 0 : lane < 0 ? 1 : 0; }
         int high() const { return lane == Session::pitchBendLane ? 8191 : lane == chanceLane ? 100 : 127; }
-        // A note's bar in a note lane: its velocity, or its chance in percent.
+        // A note's bar in a note lane: its velocity, its chance in percent, or its release velocity.
         int noteValue (const Session::MidiNoteInfo& note) const
-        { return lane == chanceLane ? juce::roundToInt (note.chance * 100) : juce::roundToInt (note.velocity * 127); }
+        { return lane == chanceLane ? juce::roundToInt (note.chance * 100) : lane == releaseLane ? note.releaseVelocity : juce::roundToInt (note.velocity * 127); }
         float x (double beat) const { return (float) (keysWidth + (beat - roll.viewBeat) * roll.pixelsPerBeat); }
         float y (int value) const { const auto a = plot(); return (float) a.getBottom() - (float) (value - low()) / (float) (high() - low()) * (float) a.getHeight(); }
         double beatAt (float px) const { return roll.viewBeat + (px - keysWidth) / roll.pixelsPerBeat; }
@@ -9061,6 +9076,7 @@ private:
                 if (note.id == velocityNote || (group && roll.selectedNoteIds.contains (note.id)))
                 {
                     if (lane == chanceLane) note.chance = (float) value / 100.0f;
+                    else if (lane == releaseLane) note.releaseVelocity = juce::jlimit (0, 127, value);
                     else if (rangeDrag) note.velocityRange = juce::jlimit (-127, 127, value - juce::roundToInt (note.velocity * 127));
                     else note.velocity = juce::jlimit (0.01f, 1.0f, (float) value / 127.0f);
                 }
@@ -9333,9 +9349,12 @@ private:
         static constexpr int laneHeight = 92, hiddenLane = 99;
         // Lane menu: velocity, common controllers, then any other controller the clip uses.
         static constexpr int commonLanes[] { Session::pitchBendLane, 1, 7, 10, 11, 64, Session::channelPressureLane };
-        static constexpr int chanceChoice = 97, expressionChoice = 90;
+        static constexpr int chanceChoice = 97, releaseChoice = 96, expressionChoice = 90;
         int laneForChoice (int id) const
-        { return id == 1 ? -1 : id == chanceChoice ? LaneView::chanceLane : id >= 2 && id < 2 + (int) std::size (commonLanes) ? commonLanes[id - 2] : id - 100; }
+        {
+            return id == 1 ? -1 : id == chanceChoice ? LaneView::chanceLane : id == releaseChoice ? LaneView::releaseLane
+                 : id >= 2 && id < 2 + (int) std::size (commonLanes) ? commonLanes[id - 2] : id - 100;
+        }
         void refreshLaneChoices (const Session::ClipInfo* clip)
         {
             const auto common = [] (int lane) { return std::find (std::begin (commonLanes), std::end (commonLanes), lane) != std::end (commonLanes); };
@@ -9362,7 +9381,7 @@ private:
             // and Envelopes the MIDI controllers (as the reference's MIDI Ctrl envelopes) and envelopes.
             if (tab != EditorTab::envelopes)
             {
-                if (tab == EditorTab::content) { laneChoice.addItem ("Velocity", 1); laneChoice.addItem ("Chance", chanceChoice); }
+                if (tab == EditorTab::content) { laneChoice.addItem ("Velocity", 1); laneChoice.addItem ("Release Velocity", releaseChoice); laneChoice.addItem ("Chance", chanceChoice); }
                 else for (int i = 0; i < 3; ++i) laneChoice.addItem (LaneView::expressionName (static_cast<Session::NoteExpression> (i)), expressionChoice + i);
                 laneChoice.addSeparator(); laneChoice.addItem ("Hide lane", hiddenLane);
                 const int first = tab == EditorTab::content ? 1 : expressionChoice;
@@ -18357,6 +18376,14 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         check (std::abs (currentMidiClip()->notes.front().chance - .5f) < .02f, "dragging a chance bar to the middle sets a 50% chance");
         pianoRoll.keyPressed (undo);
         check (currentMidiClip()->notes.front().chance == 1, "one undo restores the certain note");
+        // The Release Velocity lane sets a note's note-off velocity, as the reference's does.
+        laneMenu->setSelectedId (96, juce::sendNotificationSync);
+        check (laneMenu->getText() == "Release Velocity" && currentMidiClip()->notes.front().releaseVelocity == 0, "the lane chooser offers Release Velocity, the note's at 0");
+        laneView->mouseDown (laneEvent ({ noteX, 80 }, { noteX, 80 })); laneView->mouseDrag (laneEvent ({ noteX, 47 }, { noteX, 80 }, true)); laneView->mouseUp (laneEvent ({ noteX, 47 }, { noteX, 80 }, true));
+        check (std::abs (currentMidiClip()->notes.front().releaseVelocity - 64) <= 2, "dragging its bar to the middle sets a release velocity of about 64 ("
+                   + juce::String (currentMidiClip()->notes.front().releaseVelocity) + ")");
+        pianoRoll.keyPressed (undo);
+        check (currentMidiClip()->notes.front().releaseVelocity == 0, "one undo takes it back");
         laneMenu->setSelectedId (1, juce::sendNotificationSync);
         {
             const auto now = juce::Time::getCurrentTime();

@@ -2749,3 +2749,7 @@ UI area. A groove dragged from the browser onto a MIDI clip, in the Arrangement 
 ## Mixer meters' decibel scale — 2026-10-24
 
 UI area. As the reference's manual describes, a widened mixer strip whose meter is made taller shows a decibel scale beside it, marked every 12 dB from 0 to -60, on track, group and Main strips in either mixer ([contract](research/mixer-sections-contract.md#the-arrangements-mixer-2026-10-24)). Checked in the UI suite.
+
+## Release velocity — 2026-10-24
+
+Engine and UI areas. Notes now expose their note-off velocity (`MidiNoteInfo::releaseVelocity`), which the engine already played and MIDI files kept, and the note editor's Notes tab gains a Release Velocity lane that sets it by dragging or drawing, one undo step (`Session::setMidiNotesReleaseVelocity`), as the reference's editor has one. It is saved, copied, exported and validated on load ([contract](research/note-chance-contract.md#release-velocity-2026-10-24)). Checked in the note chance and UI suites.

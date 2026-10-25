@@ -21,7 +21,7 @@ Status: partial. This follows the reference's manual and static reading. No refe
 - **Fold.** A double-click on the title bar, or its menu's Fold, minimizes the panels: the boxes hide, and the title runs down a strip at the clip view's left, its name reading upward, while the editor takes the width. Folding again brings the boxes back. The fold lasts while the window is open, for every clip.
 
 - **The tabs.** The note editor's header starts with Notes, Envelopes and MPE. An audio clip's editor has Sample and Envelopes over its waveform. The tab shown lasts while the window is open, for every clip; an audio clip shown while MPE is chosen shows Sample.
-- **Notes** shows the notes with the velocity or chance lane under them, or no lane.
+- **Notes** shows the notes with the velocity, release velocity or chance lane under them, or no lane.
 - **Envelopes** fills the editor with one lane under the ruler. Its chooser offers the clip's MIDI controllers under a MIDI Ctrl heading (pitch bend, the common controllers and any other controller), then its envelopes by device, for modulation and, on Session clips, automation. At first it shows the clip's first modulation envelope, or its pitch bend.
 - **MPE** shows the notes with the lane of the chosen note expression under them: Note Pitch Bend, Note Slide or Note Pressure.
 - **An audio clip's tabs.** Sample shows the waveform with its warp markers and loop. Envelopes draws the chosen envelope over it, its chooser beside the tabs. At first it shows the clip's first modulation envelope; it remembers the one shown while Sample shows. Choosing an envelope shows the Envelopes tab.

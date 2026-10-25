@@ -89,12 +89,31 @@ int runNoteChanceTests (const juce::File& artifacts)
         check (played (ranged) == 32 && low >= level * .98f && high <= level * 127 / 64 * 1.02f && high > level * 1.2f,
                "each pass plays louder by up to the range (" + juce::String (low / level, 3) + " to " + juce::String (high / level, 3) + " times)");
 
+        // Release velocity: the note-off's velocity, as the reference's Release Velocity lane edits it.
+        check (clip().notes[0].releaseVelocity == 0 && s.setMidiNotesReleaseVelocity (clip().id, { noteId }, 128).failed()
+                   && s.setMidiNotesReleaseVelocity (clip().id, { noteId }, -1).failed(), "release velocity starts at 0, and values outside 0 to 127 are refused");
+        ok (s.setMidiNotesReleaseVelocity (clip().id, { noteId }, 90), "a release velocity of 90");
+        check (clip().notes[0].releaseVelocity == 90, "the note reports it");
+        s.undo();
+        check (clip().notes[0].releaseVelocity == 0, "one undo takes it back");
+        s.redo();
+        {
+            const auto midiFile = root.getChildFile ("release.mid");
+            ok (s.exportMidiClip (clip().id, midiFile), "export the clip");
+            juce::FileInputStream in (midiFile); juce::MidiFile file;
+            check (in.openedOk() && file.readFrom (in), "read the export");
+            int offVelocity = -1;
+            for (int i = 0; i < file.getNumTracks(); ++i)
+                for (const auto* event : *file.getTrack (i))
+                    if (event->message.isNoteOff (false)) offVelocity = event->message.getVelocity();
+            check (offVelocity == 90, "the export's note-off carries it (" + juce::String (offVelocity) + ")");
+        }
         // Reopening: the same note identity gives the same passes.
         ok (s.setMidiNotesChance (clip().id, { noteId }, .5f), "a 50% chance with the range");
         const auto before = passes (64);
         const auto project = root.getChildFile ("Chance").getChildFile ("Chance.halftrack");
         ok (s.saveProject (project), "save"); ok (s.loadProject (project), "reopen");
-        check (clip().notes[0].chance == .5f && clip().notes[0].velocityRange == 63, "the settings reopen");
+        check (clip().notes[0].chance == .5f && clip().notes[0].velocityRange == 63 && clip().notes[0].releaseVelocity == 90, "the settings reopen");
         const auto after = passes (64);
         bool same = true;
         for (int i = 0; i < 64; ++i) same = same && ((before[(size_t) i] > .01f) == (after[(size_t) i] > .01f)) && std::abs (before[(size_t) i] - after[(size_t) i]) < 1e-3f;

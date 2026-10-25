@@ -239,6 +239,7 @@ public:
         float chance = 1;      // The probability the note plays on each pass of its clip, 0 to 1.
         int velocityRange = 0; // Each pass adds a random velocity between 0 and this, -127 to 127.
         std::vector<ExpressionPoint> pitchBend, slide, pressure;
+        int releaseVelocity = 0; // Its note-off's velocity, 0 to 127, as the reference's Release Velocity lane edits it.
     };
     // MIDI controller lanes in a clip: CC numbers 0-119, plus pitch bend and channel pressure.
     // Each point's value holds until the next point (step playback).
@@ -971,6 +972,8 @@ public:
     // Sets one of a note's expression curves as one undo step; no points removes it.
     juce::Result setMidiNoteExpression (const juce::String& clipId, const juce::String& noteId, NoteExpression, const std::vector<ExpressionPoint>&);
     juce::Result setMidiNotesVelocityRange (const juce::String& clipId, const juce::StringArray& noteIds, int range);
+    // The notes' release velocity, their note-offs' velocity from 0 to 127, as one undo step.
+    juce::Result setMidiNotesReleaseVelocity (const juce::String& clipId, const juce::StringArray& noteIds, int velocity);
     juce::Result splitMidiNotes (const juce::String& clipId, const juce::StringArray& noteIds, double splitBeat, juce::StringArray& insertedIds);
     juce::Result transformMidiNotes (const juce::String& clipId, const juce::StringArray& noteIds, NoteTransform, double gridBeats);
     // Applies a note tool in one undo step. A transformation replaces the chosen notes with its

@@ -1501,6 +1501,9 @@ Result validateAudioClips (const juce::ValueTree& state)
         const auto value = state[te::IDs::m].toString().trim();
         if (value != "0" && value != "1") return Result::fail ("The project contains invalid MIDI note activation.");
     }
+    if (state.hasType (te::IDs::NOTE) && state.hasProperty (te::IDs::lift)
+        && (! finiteProperty (state[te::IDs::lift], 0, 127) || std::floor ((double) state[te::IDs::lift]) != (double) state[te::IDs::lift]))
+        return Result::fail ("The project contains an invalid MIDI note release velocity.");
     if (state.hasType (te::IDs::NOTE)
         && ((state.hasProperty (noteChanceProperty) && ! finiteProperty (state[noteChanceProperty], 0, 1))
             || (state.hasProperty (noteVelocityRangeProperty)
@@ -2072,7 +2075,7 @@ Session::ClipInfo describeClip (te::Clip& clip)
                                      static_cast<float> (static_cast<double> (note->state.getProperty (noteChanceProperty, 1.0))),
                                      static_cast<int> (note->state.getProperty (noteVelocityRangeProperty, 0)),
                                      noteExpression (note->state, Session::NoteExpression::pitchBend), noteExpression (note->state, Session::NoteExpression::slide),
-                                     noteExpression (note->state, Session::NoteExpression::pressure) });
+                                     noteExpression (note->state, Session::NoteExpression::pressure), juce::jlimit (0, 127, note->getNoteOffVelocity()) });
         std::map<int, Session::ControllerLane> lanes;
         for (auto* event : midi->getSequence().getControllerEvents())
             if (const int lane = controllerLane (event->getType()); lane >= 0)
@@ -10036,6 +10039,7 @@ Result Session::addMidiNotes (const String& clipId, const std::vector<MidiNoteIn
         note->setMute (!value.active, undo);
         if (value.chance < 1) note->state.setProperty (noteChanceProperty, juce::jlimit (0.0f, 1.0f, value.chance), undo);
         if (value.velocityRange != 0) note->state.setProperty (noteVelocityRangeProperty, juce::jlimit (-127, 127, value.velocityRange), undo);
+        if (value.releaseVelocity != 0) note->setNoteOffVelocity (juce::jlimit (0, 127, value.releaseVelocity), undo);
         for (const auto kind : { NoteExpression::pitchBend, NoteExpression::slide, NoteExpression::pressure })
             if (const auto& points = kind == NoteExpression::pitchBend ? value.pitchBend : kind == NoteExpression::slide ? value.slide : value.pressure;
                 ! points.empty() && validExpression (points, kind, value.lengthBeats))
@@ -10147,6 +10151,11 @@ Result Session::setMidiNotesVelocityRange (const String& clipId, const juce::Str
 {
     if (range < -127 || range > 127) return Result::fail ("Choose a velocity range from -127 to 127.");
     return impl->setNotesProperty (clipId, ids, noteVelocityRangeProperty, range, 0, "Velocity range");
+}
+Result Session::setMidiNotesReleaseVelocity (const String& clipId, const juce::StringArray& ids, int velocity)
+{
+    if (velocity < 0 || velocity > 127) return Result::fail ("Choose a release velocity from 0 to 127.");
+    return impl->setNotesProperty (clipId, ids, te::IDs::lift, velocity, 0, "Release velocity");
 }
 Result Session::splitMidiNotes(const String& clipId,const juce::StringArray& ids,double beat,juce::StringArray& insertedIds)
 {
