@@ -911,3 +911,9 @@ Value controls ([contract](research/value-controls-contract.md)). Defaults where
 - **Typed values.** Typing starts with a digit, a minus sign or a point, in a field over the control. Return or a click elsewhere sets the value, read as the control reads its own text box, and Escape leaves it.
 - **The control clicked last.** It takes the keys until a click elsewhere in the window, and Halftrack draws no mark on it. On a control without a default, Delete does nothing and does not reach the view.
 - **Number fields.** A step takes 3 pixels of drag. With Shift the arrow keys step a field's last part, as a fine adjustment, except the time signature's. The clip's Start, End and Loop fields now edit their text on a double-click rather than a single click, as the Control Bar's do; whether the reference's single click starts typing was not read.
+
+A clip's bar and body ([contract](research/arrangement-selection-contract.md#a-clips-bar-and-body-2026-10-25)). Defaults where the manual is silent:
+
+- **The bar.** It is Halftrack's 20-pixel name strip; a clip in a lane too short to show anything under it is all bar. The reference's bar height was not read.
+- **A click in the body.** It selects the clip alone, dropping a group, and puts the insert marker at the snapped click. Delete then deletes the clip.
+- **Shift-click from a selected clip.** The selection runs from the clip's farther edge to the click, from its start when both edges are as far.

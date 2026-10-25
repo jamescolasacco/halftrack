@@ -2769,3 +2769,7 @@ UI area. The Control Bar's tempo, time signature, song position, loop start and 
 ## Scene field drags — 2026-10-25
 
 UI area. A scene's tempo and time signature fields in the Session drag by their parts as the Control Bar's do, from the scene's own value or the song's, each drag one undo step; a click without a drag still opens the dialog, now on release ([scene tempo contract](research/scene-tempo-contract.md)). Checked in the UI suite.
+
+## Clip bar and body — 2026-10-25
+
+UI area. As the reference's manual has it, only an Arrangement clip's bar, its name strip, moves it: a click in its waveform or notes selects the clip and places the insert marker, and a drag there selects time within it. Shift-click there extends the selection, so a Shift-click inside the selected clip selects part of it as time, and Shift+Option along the bar selects time ([contract](research/arrangement-selection-contract.md#a-clips-bar-and-body-2026-10-25)). The UI suite's moving tests now grab clip bars. Checked in the UI suite.

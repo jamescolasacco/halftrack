@@ -119,9 +119,26 @@ The UI suite checks:
 - Cmd/Ctrl+C and V of two clips, pasting just them;
 - nine undo steps restoring the project.
 
+## A clip's bar and body (2026-10-25)
+
+Evidence. Live 12 manual, [Arrangement View](https://www.ableton.com/en/live-manual/12/arrangement-view/), consulted 2026-10-25:
+
+- section 6.7: "Dragging a clip moves it to another song position or track", but "only the clip bar is draggable, it is not possible to drag from the clip's waveform or MIDI display". Dragging a clip's left or right edge changes its length, and Shift+Option (Ctrl+Shift on Windows) dragged in a warped audio or MIDI clip's waveform or MIDI display slides its contents;
+- section 6.9: "Clicking a clip selects the clip", "Clicking and dragging in the clip's waveform or MIDI display allows you to select time within the clip", and Shift extends an existing selection in the same track or across tracks;
+- section 42.16 (keyboard shortcuts): Select Time Within Clip is Shift+Option dragged in the clip's title bar.
+
+Halftrack:
+
+- **The clip bar,** the 20-pixel strip with a clip's name along its top, is what selects, multi-selects, moves and copy-drags clips, as before. A clip whose lane is too short to show anything under its bar is all bar.
+- **The body,** its waveform or notes below the bar, selects the clip on a click and puts the insert marker at the snapped click, dropping any group of clips. A drag there selects time within the clip, across tracks as any time selection does, and leaves the clip where it is. Fade handles and, on a selected clip, its edges still take their drags, and Shift+Option still slides an audio clip's contents from the body.
+- **Shift-click** in a body extends the selection there: a time selection from its farther end, or the clip selected before from its farther edge, its start when both are as far. So a Shift-click inside the selected clip selects part of it as time.
+- **Shift+Option** dragged along a clip's bar selects time within it.
+
+The UI suite checks that a click in a clip's notes selects it and puts the insert marker there, that a drag there selects time and leaves the clip in place, that a Shift-click inside the selected clip selects from its start to the click, that Shift+Option along the bar selects time, and that bar drags still move clips, groups and copies (the moving tests grab bars).
+
 ## Not implemented
 
-- Shift-click that selects part of a clip as time, as the reference's does. (Dragging over empty space selects time, as in the reference; there is no rubber-band selection of clips in its Arrangement.)
+- Sliding a MIDI clip's notes with Shift+Option from its body; dragging the clip bar with Shift to stretch a warped clip (section 42.16).
 - Selecting time on the ruler or across group lanes.
 - Pasting automation onto controls the destination lacks: such shapes are skipped.
 - Crop.

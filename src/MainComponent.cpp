@@ -3789,6 +3789,21 @@ private:
                 if (lane.take >= 0 && takeHeader < takeHeaders.size()) takeHeaders[takeHeader++]->setBounds (timelineWidth() + x, lane.y, trackWidth - x, lane.height);
             }
         }
+        // A clip's bar, the strip with its name along its top, which is all that moves the clip, as in the
+        // reference (its manual, section 6.7); its waveform or notes below select time within it. A clip
+        // too short to show any below is all bar.
+        static constexpr float clipBar = 20;
+        bool inClipBar (const Session::ClipInfo& clip, int track, juce::Point<float> point) const
+        {
+            const auto bounds = clipBounds (clip, track);
+            return point.y < bounds.getY() + clipBar || bounds.getHeight() < clipBar + 12;
+        }
+        // The middle of a clip's bar, where a click selects the clip and a drag moves it.
+        juce::Point<float> clipBarPoint (const Session::ClipInfo& clip, int track) const
+        {
+            const auto bounds = clipBounds (clip, track);
+            return { bounds.getCentreX(), bounds.getY() + juce::jmin (clipBar, bounds.getHeight()) / 2 };
+        }
         juce::Rectangle<float> clipBounds (const Session::ClipInfo& clip, int track) const
         {
             return { (float) ((clip.start - owner.viewStart) * owner.pixelsPerSecond), (float) (owner.laneY (track) + 6),
@@ -3911,9 +3926,9 @@ private:
                     if (!clip.active) colour=muted;
                     g.setColour (colour.withAlpha (track.mute || !clip.active ? 0.24f : 0.72f)); g.fillRect (bounds);
                     g.setColour (selected ? orange : colour.brighter (0.1f));
-                    g.fillRect (bounds.withHeight (20));
+                    g.fillRect (bounds.withHeight (clipBar));
                     g.setColour (themes::colour (0xff182025)); g.setFont (font (11.0f, true));
-                    g.drawText ((clip.active?juce::String():juce::String("OFF  /  "))+clip.name, bounds.withHeight (20).reduced (6, 0), juce::Justification::centredLeft, true);
+                    g.drawText ((clip.active?juce::String():juce::String("OFF  /  "))+clip.name, bounds.withHeight (clipBar).reduced (6, 0), juce::Justification::centredLeft, true);
                     auto wave = bounds.withTrimmedTop (24).reduced (2, 4);
                     g.setColour (themes::colour (0xff14252b).withAlpha (track.mute ? 0.4f : 0.9f));
                     // Each stretch of content the clip plays, a loop's pass at a time.
@@ -4245,6 +4260,31 @@ private:
                             owner.showArrangementMenu (place);
                             return;
                         }
+                        {
+                            // A click in the clip's waveform or notes, away from its fade handles and edges, selects
+                            // it and places the insert marker, and a drag there selects time within it, as the
+                            // reference's does (its manual, sections 6.7 and 6.9); Shift extends the selection.
+                            // Shift+Option drags select time from the bar, and slide the audio from below it.
+                            const auto& clip = clips[(size_t) c];
+                            const bool previous = track == previousTrack && c == previousClip;
+                            const bool bar = inClipBar (clip, track, e.position), shiftOption = e.mods.isShiftDown() && e.mods.isAltDown();
+                            const bool slide = shiftOption && clip.canEditAudioRange && ! bar;
+                            if ((bar && shiftOption) || (! bar && ! slide && (! previous || (hitFade (clip, track, e.position) == 0 && hitTrim (clip, track, e.position) == 0))))
+                            {
+                                const auto at = owner.snapTime (owner.viewStart + e.x / owner.pixelsPerSecond, e.mods);
+                                if (e.mods.isShiftDown() && ! shiftOption) beginTimeSelection (at, track, previousTrack, previousClip);
+                                else
+                                {
+                                    owner.selectedClipIds.clear();
+                                    owner.timeSelection = {}; selectionAnchorTime = at; selectionAnchorTrack = track;
+                                    owner.session.setInsertMarker (at);
+                                }
+                                owner.selectedClip = c;
+                                draggedClip = -1; selecting = true;
+                                owner.refresh(); repaint();
+                                return;
+                            }
+                        }
                         chooseClips (track, c, e.mods, previousTrack, previousClip);
                         owner.selectedClip = c;
                         owner.timeSelection = {};
@@ -4285,17 +4325,12 @@ private:
                 }
                 return;
             }
-            owner.selectedClipIds.clear();
             // Dragging over empty lane space selects time; Shift-click extends the selection.
             {
                 const auto at = owner.snapTime (owner.viewStart + e.x / owner.pixelsPerSecond, e.mods);
-                if (e.mods.isShiftDown() && owner.timeSelection.active())
-                {
-                    selectionAnchorTime = std::abs (at - owner.timeSelection.start) > std::abs (at - owner.timeSelection.end) ? owner.timeSelection.start : owner.timeSelection.end;
-                    selectionAnchorTrack = owner.trackIndex (owner.timeSelection.trackIds[0]);
-                    extendSelection (at, track);
-                }
+                if (e.mods.isShiftDown() && owner.timeSelection.active()) beginTimeSelection (at, track, -1, -1);
                 else { owner.timeSelection = {}; selectionAnchorTime = at; selectionAnchorTrack = track; }
+                owner.selectedClipIds.clear();
                 selecting = true;
             }
             owner.session.setInsertMarker (owner.snapTime (owner.viewStart + e.x / owner.pixelsPerSecond, e.mods));
@@ -4575,6 +4610,26 @@ private:
         int dragTrack = -1;
         bool toggleOffOnUp = false, collapseOnUp = false;
         // The selection runs from the anchor to the pointer in time and across the tracks between them.
+        // Shift-click extends the selection to a time on a track, as the reference's does: a time selection
+        // from its farther end, or a clip selected before the click from its farther edge (its start when
+        // both are as far), which turns the selection into time.
+        void beginTimeSelection (double at, int track, int clipTrack, int clipIndex)
+        {
+            if (owner.timeSelection.active())
+            {
+                selectionAnchorTime = std::abs (at - owner.timeSelection.start) > std::abs (at - owner.timeSelection.end) ? owner.timeSelection.start : owner.timeSelection.end;
+                selectionAnchorTrack = owner.trackIndex (owner.timeSelection.trackIds[0]);
+            }
+            else if (juce::isPositiveAndBelow (clipTrack, (int) owner.state.tracks.size()) && juce::isPositiveAndBelow (clipIndex, (int) owner.state.tracks[(size_t) clipTrack].clips.size()))
+            {
+                const auto& clip = owner.state.tracks[(size_t) clipTrack].clips[(size_t) clipIndex];
+                selectionAnchorTime = std::abs (at - clip.start) >= std::abs (at - (clip.start + clip.length)) ? clip.start : clip.start + clip.length;
+                selectionAnchorTrack = clipTrack;
+            }
+            else { owner.timeSelection = {}; selectionAnchorTime = at; selectionAnchorTrack = track; owner.session.setInsertMarker (at); return; }
+            owner.selectedClipIds.clear();
+            extendSelection (at, track);
+        }
         void extendSelection (double at, int track)
         {
             const int count = (int) owner.state.tracks.size();
@@ -19843,7 +19898,9 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         const auto dragTo = [&] (juce::Point<float> at, juce::Point<float> down, int events)
         { for (int step = 0; step < events; ++step) { canvas.lastDragScroll -= 100; canvas.mouseDrag (event (at, down, true)); } };
         const auto y = (float) (laneY (t) + laneHeight (t) / 2);
-        const juce::Point<float> grab { (float) std::round (.5 * pixelsPerSecond), y }, past { (float) canvas.timelineWidth() + 40, y };
+        // A clip moves by its bar.
+        const auto barY = canvas.clipBounds (state.tracks[(size_t) t].clips.at (0), t).getY() + Canvas::clipBar / 2;
+        const juce::Point<float> grab { (float) std::round (.5 * pixelsPerSecond), barY }, past { (float) canvas.timelineWidth() + 40, barY };
         canvas.mouseDown (event (grab, grab, false)); dragTo (past, grab, 3); canvas.mouseUp (event (past, grab, true)); refresh();
         const auto scrolled = viewStart;
         check (scrolled > 0 && std::abs (state.tracks[(size_t) t].clips.at (0).start - (scrolled + past.x / pixelsPerSecond - grab.x / pixelsPerSecond)) < 1.5 / pixelsPerSecond,
@@ -20377,7 +20434,7 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
             const auto dragClip = [&] (double seconds)
             {
                 selectTrack (t); selectedClip = 0; refresh();
-                const auto from = canvas.clipBounds (state.tracks[(size_t) t].clips[0], t).getCentre();
+                const auto from = canvas.clipBarPoint (state.tracks[(size_t) t].clips[0], t);
                 const auto to = from.translated ((float) (seconds * pixelsPerSecond), 0);
                 const auto at = [&] (juce::Point<float> p, bool dragged)
                 { return juce::MouseEvent (juce::Desktop::getInstance().getMainMouseSource(), p, juce::ModifierKeys (juce::ModifierKeys::leftButtonModifier | bypassModifier), 1.0f, 0, 0, 0, 0, &canvas, &canvas, now, from, now, 1, dragged); };
@@ -20541,7 +20598,7 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         auto clipClick = [&] (const juce::String& id, int modifiers)
         {
             const auto [t, c] = locateClip (id);
-            const auto at = canvas.clipBounds (state.tracks[(size_t) t].clips[(size_t) c], t).getCentre();
+            const auto at = canvas.clipBarPoint (state.tracks[(size_t) t].clips[(size_t) c], t);
             const auto now = juce::Time::getCurrentTime();
             const juce::MouseEvent e (juce::Desktop::getInstance().getMainMouseSource(), at, juce::ModifierKeys (juce::ModifierKeys::leftButtonModifier | modifiers),
                                       1.0f, 0, 0, 0, 0, &canvas, &canvas, now, at, now, 1, false);
@@ -23665,7 +23722,7 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
                        "dropped there, a copy lands in the Arrangement at the time under the pointer, the slot keeping its clip");
             }
             const auto arranged = state.tracks[(size_t) t].clips[0];
-            const auto clipCentre = canvas.clipBounds (arranged, t).getCentre().toFloat();
+            const auto clipCentre = canvas.clipBarPoint (arranged, t);
             const auto onCanvas = [&] (juce::Point<float> at, bool dragged)
             { return juce::MouseEvent (juce::Desktop::getInstance().getMainMouseSource(), at, pressed, 1.0f, 0, 0, 0, 0, &canvas, &canvas, now, clipCentre, now, 1, dragged); };
             canvas.mouseDown (onCanvas (clipCentre, false));
@@ -23898,7 +23955,7 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
             const auto a = idAt (0), b = idAt (4), c = idAt (8);
             const auto beatOf = [&] (const juce::String& id) { const auto [ct, cc] = arrangementClipIndex (id); return ct >= 0 ? state.tracks[(size_t) ct].clips[(size_t) cc].startBeat : -1.0; };
             const auto now = juce::Time::getCurrentTime();
-            const auto pointOf = [&] (const juce::String& id) { const auto [ct, cc] = arrangementClipIndex (id); return canvas.clipBounds (state.tracks[(size_t) ct].clips[(size_t) cc], ct).getCentre(); };
+            const auto pointOf = [&] (const juce::String& id) { const auto [ct, cc] = arrangementClipIndex (id); return canvas.clipBarPoint (state.tracks[(size_t) ct].clips[(size_t) cc], ct); };
             const auto event = [&] (juce::Point<float> at, juce::Point<float> down, int modifiers, bool dragged)
             { return juce::MouseEvent (juce::Desktop::getInstance().getMainMouseSource(), at, juce::ModifierKeys (juce::ModifierKeys::leftButtonModifier | modifiers), 1.0f, 0, 0, 0, 0, &canvas, &canvas, now, down, now, 1, dragged); };
             const auto click = [&] (const juce::String& id, int modifiers) { const auto at = pointOf (id); canvas.mouseDown (event (at, at, modifiers, false)); canvas.mouseUp (event (at, at, modifiers, false)); refresh(); };
@@ -23935,6 +23992,43 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
             session.setInsertMarker (secondsAt (24)); refresh();
             check (handleKey (commandKey ('V')) && state.tracks[(size_t) t].clips.size() == 6 && idAt (24).isNotEmpty() && idAt (32).isNotEmpty() && idAt (28).isEmpty(),
                    "and Cmd/Ctrl+V pastes just the two clips at the insert marker, in their places");
+            {
+                // A clip's notes or waveform select time within it rather than moving it; only its bar moves
+                // it, as the reference's manual has it (sections 6.7 and 6.9).
+                const auto bodyAt = [&] (const juce::String& id, double beatsIn)
+                {
+                    const auto [ct, cc] = arrangementClipIndex (id);
+                    const auto& clip = state.tracks[(size_t) ct].clips[(size_t) cc];
+                    return juce::Point<float> ((float) ((secondsAt (clip.startBeat + beatsIn) - viewStart) * pixelsPerSecond), canvas.clipBounds (clip, ct).getBottom() - 8);
+                };
+                const auto snapped = [&] (juce::Point<float> at) { return beatsAt (snapTime (viewStart + at.x / pixelsPerSecond, {})); };
+                // The clip at 12 beats, and the pasted one at 24, have no others over them.
+                const auto start = beatOf (c);
+                const auto from = bodyAt (c, .5), to = bodyAt (c, 1.5);
+                canvas.mouseDown (event (from, from, 0, false));
+                check (selectedClipIds.isEmpty() && currentTrack() != nullptr && juce::isPositiveAndBelow (selectedClip, (int) currentTrack()->clips.size())
+                           && currentTrack()->clips[(size_t) selectedClip].id == c && std::abs (beatsAt (state.position) - snapped (from)) < 1e-6,
+                       "a click in a clip's notes selects the clip and puts the insert marker there");
+                canvas.mouseDrag (event ((from + to) / 2, from, 0, true)); canvas.mouseDrag (event (to, from, 0, true)); canvas.mouseUp (event (to, from, 0, true)); refresh();
+                check (std::abs (beatOf (c) - start) < 1e-6 && timeSelection.active() && std::abs (beatsAt (timeSelection.start) - juce::jmin (snapped (from), snapped (to))) < 1e-6
+                           && std::abs (beatsAt (timeSelection.end) - juce::jmax (snapped (from), snapped (to))) < 1e-6,
+                       "and a drag there selects time within it, leaving the clip where it is");
+                const auto pasted = idAt (24);
+                click (pasted, 0);
+                const auto bStart = beatOf (pasted);
+                const auto inside = bodyAt (pasted, 1.5);
+                canvas.mouseDown (event (inside, inside, juce::ModifierKeys::shiftModifier, false)); canvas.mouseUp (event (inside, inside, juce::ModifierKeys::shiftModifier, false)); refresh();
+                check (timeSelection.active() && selectedClipIds.isEmpty() && std::abs (beatsAt (timeSelection.start) - bStart) < 1e-6 && std::abs (beatsAt (timeSelection.end) - snapped (inside)) < 1e-6
+                           && snapped (inside) > bStart, "Shift-clicking inside the selected clip selects part of it as time, from its farther edge, as the reference's Shift-click does");
+                // Shift+Option dragged along a clip's bar selects time within it too, rather than moving it.
+                const auto barFrom = canvas.clipBarPoint (state.tracks[(size_t) t].clips[(size_t) arrangementClipIndex (c).second], t);
+                const auto barTo = barFrom + juce::Point<float> ((float) ((secondsAt (beatOf (c) + 1) - secondsAt (beatOf (c))) * pixelsPerSecond), 0);
+                const int shiftOption = juce::ModifierKeys::shiftModifier | juce::ModifierKeys::altModifier;
+                canvas.mouseDown (event (barFrom, barFrom, shiftOption, false)); canvas.mouseDrag (event (barTo, barFrom, shiftOption, true)); canvas.mouseUp (event (barTo, barFrom, shiftOption, true)); refresh();
+                check (std::abs (beatOf (c) - start) < 1e-6 && timeSelection.active() && timeSelection.end > timeSelection.start,
+                       "Shift+Option dragged along a clip's bar selects time within it, as the reference's key list has it, leaving the clip where it is");
+                timeSelection = {}; refresh();
+            }
             int steps = 0;
             while (state.tracks.size() > tracksBefore && steps < 20) { session.undo(); refresh(); ++steps; }
             check (state.tracks.size() == tracksBefore && steps == 9, "nine undo steps remove it all: one each for the group's move, duplicate, delete, copying drag and paste");
@@ -24157,7 +24251,7 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
     session.setTempo(120);refresh();
     // Drag the same identity through multiple owners within one gesture.
     selectedClip=0;refresh();
-    auto movingClip=state.tracks[0].clips[0];const auto moveFrom=canvas.clipBounds(movingClip,0).getCentre();
+    auto movingClip=state.tracks[0].clips[0];const auto moveFrom=canvas.clipBarPoint(movingClip,0);
     const auto moveTo=moveFrom+juce::Point<float>(40,(float)trackHeight);
     canvas.mouseDown(rangeEvent(moveFrom,moveFrom,false,freeRange));
     canvas.mouseDrag(rangeEvent(moveTo,moveFrom,true,freeRange));
@@ -24165,9 +24259,9 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
     canvas.mouseDrag(rangeEvent(moveFurther,moveFrom,true,freeRange));canvas.mouseUp(rangeEvent(moveFurther,moveFrom,true,freeRange));
     check(state.tracks[0].clips.empty()&&state.tracks[1].clips[0].id==movingClip.id
         &&std::abs(state.tracks[1].clips[0].start-movingClip.start-.02)<1e-8&&selectedTrack==1&&selectedClip==0,
-        "body drag moves audio across tracks and subsequent events keep the same identity selected");
+        "dragging the clip bar moves audio across tracks and subsequent events keep the same identity selected");
     session.undo();refresh();check(state.tracks[1].clips.empty()&&state.tracks[0].clips[0].id==movingClip.id
-        &&std::abs(state.tracks[0].clips[0].start-movingClip.start)<1e-8,"one undo restores cross-track body gesture");
+        &&std::abs(state.tracks[0].clips[0].start-movingClip.start)<1e-8,"one undo restores the cross-track bar gesture");
     selectedTrack=0;selectedClip=0;
     for(int mode=0;mode<3;++mode)
     {
@@ -24346,7 +24440,7 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
     const auto movingMidi=state.tracks[2].clips[0].id;
     check(session.addMidiNote(movingMidi,60,0,1,.7f).wasOk(),"prepare movable MIDI note");refresh();selectArrangementClip(movingMidi);
     const auto movingNote=currentMidiClip()->notes[0].id;
-    const auto midiFrom=canvas.clipBounds(*currentMidiClip(),2).getCentre();
+    const auto midiFrom=canvas.clipBarPoint(*currentMidiClip(),2);
     const auto midiTo=midiFrom+juce::Point<float>(25,(float)trackHeight);
     const auto midiFurther=midiFrom+juce::Point<float>(50,2.0f*trackHeight);
     canvas.mouseDown(rangeEvent(midiFrom,midiFrom,false,freeRange));canvas.mouseDrag(rangeEvent(midiTo,midiFrom,true,freeRange));
