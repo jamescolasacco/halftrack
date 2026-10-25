@@ -43,10 +43,11 @@ The reference's manual: the All label shows "all items from every label of the b
 The reference's manual: devices can be dragged "into tracks or drop areas in the Session and Arrangement Views, or into the Device View", and presets onto a track's title bar or device chain ([Working with Instruments and Effects](https://www.ableton.com/en/live-manual/12/working-with-instruments-and-effects/), sections 23.2 and 23.2.3, consulted 2026-10-24). Halftrack's browser items drag out:
 - **Sounds** land where they are dropped, as files dropped from the desktop do: on an Arrangement track at the time under the pointer, or in a Session slot.
 - **Devices, presets and plug-ins** go onto the Arrangement track or Session column under the pointer, or onto the chain the device view shows, as a double-click would put them on the selected track. Dropped below the Arrangement's tracks, a device gets a new track of its own. Dropped over a device of its type in the device view, it takes that device's place in one undo step, as the manual's presets do ([Hot-Swap](presets-contract.md#hot-swap-2026-10-24)).
+- **Grooves** dropped on a MIDI clip, in the Arrangement or a Session slot, join the Groove Pool and groove the clip, as the reference's manual describes: grooves dragged "directly onto clips in your Set" apply to them ([Using Grooves](https://www.ableton.com/en/live-manual/12/using-grooves/), section 14, consulted 2026-10-24). Dropped anywhere else, they join the pool alone.
 - **Anything with a collection key** dropped on a collection in the sidebar joins it.
 - Dragging a sound over the Arrangement highlights it, as a desktop file does.
 
-Not yet: dragging grooves onto clips, and dragging several browser items at once.
+Not yet: grooves on audio clips, and dragging several browser items at once.
 
 ### Drop areas and several sounds (2026-10-24)
 

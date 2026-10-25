@@ -2741,3 +2741,7 @@ Engine and UI areas. As the reference's manual describes, dragging the top edge 
 ## Session column widths — 2026-10-24
 
 Engine and UI areas. As the reference's manual describes, a Session track's or group's column widens or narrows by dragging its right edge in the title row, its slots and mixer strip with it, the columns after it moving along. Each width is kept with its track or group in the project outside the undo history (`Session::setSessionWidth`, `TrackInfo::sessionWidth`, `GroupInfo::sessionWidth`), as the reference keeps each track's Session width ([contract](research/mixer-sections-contract.md#the-arrangements-mixer-2026-10-24)). Checked in the track order and UI suites.
+
+## Grooves dropped on clips — 2026-10-24
+
+UI area. A groove dragged from the browser onto a MIDI clip, in the Arrangement or a Session slot, joins the Groove Pool and grooves that clip; dropped anywhere else, it joins the pool alone ([contract](research/browser-places-contract.md#dragging-2026-10-24)). Checked in the UI suite.

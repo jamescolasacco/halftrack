@@ -14666,6 +14666,24 @@ private:
         canvas.repaint(); launcher.repaint();
         return true;
     }
+    // The clip under a point of the window in the Session or the Arrangement, selected; false without one.
+    bool selectClipAt (juce::Point<int> at)
+    {
+        if (showSession)
+        {
+            const auto cell = launcher.cellAt (launcher.getLocalPoint (this, at));
+            if (cell.first < 0 || ! state.tracks[(size_t) cell.first].slots[(size_t) cell.second].hasClip) return false;
+            selectLauncherSlot (cell.first, cell.second); refresh(); return true;
+        }
+        if (! viewport.getBounds().contains (at)) return false;
+        const auto p = canvas.getLocalPoint (this, at).toFloat();
+        const int track = trackAtY ((int) p.y);
+        if (track < 0) return false;
+        const auto& clips = state.tracks[(size_t) track].clips;
+        for (int c = 0; c < (int) clips.size(); ++c)
+            if (canvas.clipBounds (clips[(size_t) c], track).contains (p)) { selectTrack (track); selectedClip = c; selectedLauncherClipId.clear(); refresh(); return true; }
+        return false;
+    }
     // The clip the clip view shows: the selected audio clip, or the MIDI clip.
     const Session::ClipInfo* shownClip() const { if (const auto* audio = selectedAudioClip()) return audio; return currentMidiClip(); }
     // The clip title bar's menu, as the reference's: Rename, and the palette.
@@ -17554,6 +17572,14 @@ private:
         }
         const auto row = collectionRow (key);
         if (! row) return;
+        // A groove goes into the Groove Pool, and onto the clip it is dropped on, as the reference's grooves do.
+        if (row->groove >= 0 || row->grooveFile != juce::File())
+        {
+            const bool onClip = selectClipAt (at);
+            if (row->groove >= 0) useGrooveFromUI (Session::grooveLibrary()[(size_t) row->groove], onClip);
+            else useGrooveFileFromUI (row->grooveFile, onClip);
+            return;
+        }
         // A device goes onto the track under it, or the chain the device view shows; below the tracks a new one is made.
         if (deviceChain.isVisible() && deviceChain.getBounds().contains (at))
         {
@@ -21724,6 +21750,28 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         const auto key = "device:" + juce::String ((int) Session::EffectKind::saturator);
         check (collections.contains (key, 3), "dropped on a collection, an item joins it");
         report (collections.toggle (key, 3));
+        {
+            // A groove dropped on a clip joins the Groove Pool and grooves the clip, as the reference's do;
+            // dropped anywhere else, it joins the pool alone.
+            check (session.addMidiTrack ("Grooved").wasOk(), "a MIDI track to groove"); refresh();
+            int g = -1; for (int i = 0; i < (int) state.tracks.size(); ++i) if (state.tracks[(size_t) i].name == "Grooved") g = i;
+            check (g >= 0 && session.addMidiClip (state.tracks[(size_t) g].id, 0, 4).wasOk(), "a clip on it"); refresh(); resized();
+            setBrowserCategory (BrowserCategory::grooves);
+            int grooveRow = -1;
+            for (int r = 0; r < (int) deviceItems.size() && grooveRow < 0; ++r) if (deviceItems[(size_t) r].groove >= 0) grooveRow = r;
+            juce::SparseSet<int> picked; picked.addRange ({ grooveRow, grooveRow + 1 });
+            const auto groove = grooveRow >= 0 ? getDragSourceDescription (picked).toString() : juce::String();
+            const auto pool = state.grooves.size();
+            viewport.setViewPosition (0, juce::jmax (0, laneY (g) - 10)); refresh();
+            const auto onClip = getLocalPoint (&canvas, canvas.clipBounds (state.tracks[(size_t) g].clips[0], g).getCentre().toInt());
+            itemDropped (SourceDetails (groove, &browserList, onClip));
+            check (grooveRow >= 0 && state.grooves.size() == pool + 1 && state.tracks[(size_t) g].clips[0].grooveId == state.grooves.back().id,
+                   "dropped on a clip, a groove joins the Groove Pool and grooves the clip");
+            const auto grooved = state.tracks[(size_t) g].clips[0].grooveId;
+            const auto clipBox = canvas.clipBounds (state.tracks[(size_t) g].clips[0], g).toNearestInt();
+            itemDropped (SourceDetails (groove, &browserList, getLocalPoint (&canvas, juce::Point<int> (clipBox.getRight() + 60, clipBox.getCentreY()))));
+            check (state.grooves.size() == pool + 2 && state.tracks[(size_t) g].clips[0].grooveId == grooved, "dropped beside the clip, it joins the pool and leaves the clip's groove alone");
+        }
         check (session.newProject().wasOk(), "leave the drags"); refresh();
     }
     {
