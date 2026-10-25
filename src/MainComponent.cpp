@@ -1418,7 +1418,7 @@ public:
             if (arrangementArrow (code)) return true;
         }
         if (key.getModifiers().isAltDown() && ! cmd && ! showSession && (code == '=' || code == '+' || code == '-'))
-        { scaleTrackHeight (selectedTrack, code == '-' ? 1 / 1.25 : 1.25); return true; }
+        { scaleSelectedTrackHeights (code == '-' ? 1 / 1.25 : 1.25); return true; }
         // H, W, U, T, R and X also take Shift, as the reference's alternates do.
         if (! cmd && ! key.getModifiers().isAltDown() && ! showSession && ! showPiano && (code == 'H' || code == 'h')) { optimizeHeight(); return true; }
         if (! cmd && ! key.getModifiers().isAltDown() && ! showSession && ! showPiano && (code == 'R' || code == 'r') && clickedArea == Area::arrangement)
@@ -2052,6 +2052,14 @@ private:
     {
         if (! juce::isPositiveAndBelow (track, (int) state.tracks.size())) return;
         setTrackHeights ({ state.tracks[(size_t) track].id }, (int) std::round (laneHeight (track) * factor));
+    }
+    // Option +/- scale every selected track's height, each from its own, as the reference's Adjust Height
+    // of Selected Tracks keys do (its manual, section 42.16).
+    void scaleSelectedTrackHeights (double factor)
+    {
+        std::vector<std::pair<juce::String, int>> heights;
+        for (const auto& id : selectedTrackIds()) if (const auto t = trackIndex (id); t >= 0) heights.push_back ({ id, (int) std::round (laneHeight (t) * factor) });
+        for (const auto& [id, pixels] : heights) setTrackHeights ({ id }, pixels);
     }
     // Optimize Height (H) fits every track into the view, and again restores their heights; Optimize
     // Width (W) fits the Arrangement's length into the view, and again restores the zoom.
@@ -24037,6 +24045,17 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
             const auto before = laneHeight (t);
             check (handleKey (juce::KeyPress ('=', juce::ModifierKeys::altModifier, 0)) && laneHeight (t) == (int) std::round (before * 1.25), "Option/Alt + scales the selected track up");
             check (handleKey (juce::KeyPress ('-', juce::ModifierKeys::altModifier, 0)) && std::abs (laneHeight (t) - before) <= 1, "and Option/Alt - back down");
+            {
+                // With two tracks selected, both scale.
+                const auto other = t == 0 ? 1 : 0;
+                multiSelectedTracks.clear(); multiSelectedTracks.insert (state.tracks[(size_t) other].id); refresh();
+                const auto otherBefore = laneHeight (other);
+                check (handleKey (juce::KeyPress ('=', juce::ModifierKeys::altModifier, 0)) && laneHeight (t) == (int) std::round (before * 1.25) && laneHeight (other) == (int) std::round (otherBefore * 1.25),
+                       "with two tracks selected, Option/Alt + scales both, as the reference's key does");
+                handleKey (juce::KeyPress ('-', juce::ModifierKeys::altModifier, 0));
+                multiSelectedTracks.clear(); refresh();
+                check (std::abs (laneHeight (t) - before) <= 1 && std::abs (laneHeight (other) - otherBefore) <= 1, "and Option/Alt - both back down");
+            }
             check (handleKey (juce::KeyPress ('h', {}, 'h')) && laneY ((int) state.tracks.size() - 1) + laneHeight ((int) state.tracks.size() - 1) <= viewport.getHeight() + (int) state.tracks.size(),
                    "H fits every track into the view");
             check (handleKey (juce::KeyPress ('h', {}, 'h')) && laneHeight (t) == before && laneHeight (1) == trackHeight - 20, "and H again restores their heights");
