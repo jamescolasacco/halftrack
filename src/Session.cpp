@@ -4442,6 +4442,7 @@ struct Session::Impl
             const int startPlayback = number ("startPlaybackWithRecord", 1, 2), locked = number ("lockEnvelopes", 0, 2), tapStart = number ("startPlaybackWithTapTempo", 1, 2);
             const int fullHeight = number ("fullHeightBrowser", 0, 2);
             read.fullHeightBrowser = fullHeight == 1;
+            read.selectOnLaunch = number ("selectOnLaunch", 1, 2) == 1; read.selectNextSceneOnLaunch = number ("selectNextSceneOnLaunch", 1, 2) == 1;
             read.startPlaybackWithRecord = startPlayback == 1;
             read.startPlaybackWithTapTempo = tapStart == 1;
             read.lockEnvelopes = locked == 1;
@@ -4479,6 +4480,7 @@ struct Session::Impl
         xml.setAttribute ("lockEnvelopes", next.lockEnvelopes ? 1 : 0);
         xml.setAttribute ("startPlaybackWithTapTempo", next.startPlaybackWithTapTempo ? 1 : 0);
         xml.setAttribute ("fullHeightBrowser", next.fullHeightBrowser ? 1 : 0);
+        xml.setAttribute ("selectOnLaunch", next.selectOnLaunch ? 1 : 0); xml.setAttribute ("selectNextSceneOnLaunch", next.selectNextSceneOnLaunch ? 1 : 0);
         xml.setAttribute ("preferencesTab", next.preferencesTab);
         for (const auto& folder : next.userFolders) xml.createNewChildElement ("USERFOLDER")->setAttribute ("path", folder);
         for (const auto& project : next.recentProjects) xml.createNewChildElement ("RECENTPROJECT")->setAttribute ("path", project);
@@ -6511,8 +6513,20 @@ struct Session::Impl
             if (parts[2] == "arm") return owner.setTrackArmed (index, ! info.armed);
             if (parts[2] == "stop") return owner.stopLauncherTrack (index);
         }
-        if (parts[0] == "slot") { const int t = trackIndexOf (parts[1]), scene = sceneIndexOf (parts[2]); return t >= 0 && scene >= 0 ? owner.pressSlot (t, scene, velocity) : Result::ok(); }
-        if (parts[0] == "scene") { const int scene = sceneIndexOf (parts[1]); return scene >= 0 ? owner.launchScene (scene) : Result::ok(); }
+        if (parts[0] == "slot")
+        {
+            const int t = trackIndexOf (parts[1]), scene = sceneIndexOf (parts[2]);
+            if (t < 0 || scene < 0) return Result::ok();
+            remoteLaunch = { remoteLaunch.serial + 1, t, scene };
+            return owner.pressSlot (t, scene, velocity);
+        }
+        if (parts[0] == "scene")
+        {
+            const int scene = sceneIndexOf (parts[1]);
+            if (scene < 0) return Result::ok();
+            remoteLaunch = { remoteLaunch.serial + 1, -1, scene };
+            return owner.launchScene (scene);
+        }
         if (parts[0] == "device")
         {
             const auto [t, p] = devicePosition (parts[1]);
@@ -6718,6 +6732,7 @@ struct Session::Impl
     std::array<double,4> tapIntervals {};
     int numTapIntervals=0, nextTapInterval=0;
     int tapsInRun=0; // Taps since the last pause, for Start Playback with Tap Tempo.
+    Session::Snapshot::RemoteLaunch remoteLaunch; // The last launch a mapped control made, for Select on Launch.
     std::optional<double> tapStart;
     File scratch, projectFile;
     juce::ValueTree audioClipboard, midiClipboard;
@@ -7080,7 +7095,7 @@ Session::Snapshot Session::snapshot() const
     s.cueMode = s.cueModeChosen && s.cueAvailable;
     s.soloInPlace = soloInPlace();
     s.loopIsSongStart = loopIsSongStart();
-    s.mixerSections = mixerSections(); s.arrangementMixerSections = arrangementMixerSections(); s.arrangementControls = arrangementControls(); s.arrangementOverview = arrangementOverview(); s.timeRulerFormat = timeRulerFormat(); s.sceneSettingsShown = sceneSettingsShown();
+    s.mixerSections = mixerSections(); s.arrangementMixerSections = arrangementMixerSections(); s.arrangementControls = arrangementControls(); s.remoteLaunch = impl->remoteLaunch; s.arrangementOverview = arrangementOverview(); s.timeRulerFormat = timeRulerFormat(); s.sceneSettingsShown = sceneSettingsShown();
     for (const auto& m : e.state.getChildWithName (midiMapType))
         if (auto mapping = readMidiMapping (m); isMappableTarget (mapping.target) && impl->mappingCurrent (m)) s.midiMappings.push_back (mapping);
     s.midiLearnTarget = impl->midiLearnTarget;

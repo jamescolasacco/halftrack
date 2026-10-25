@@ -2753,3 +2753,7 @@ UI area. As the reference's manual describes, a widened mixer strip whose meter 
 ## Release velocity — 2026-10-24
 
 Engine and UI areas. Notes now expose their note-off velocity (`MidiNoteInfo::releaseVelocity`), which the engine already played and MIDI files kept, and the note editor's Notes tab gains a Release Velocity lane that sets it by dragging or drawing, one undo step (`Session::setMidiNotesReleaseVelocity`), as the reference's editor has one. It is saved, copied, exported and validated on load ([contract](research/note-chance-contract.md#release-velocity-2026-10-24)). Checked in the note chance and UI suites.
+
+## Select on Launch — 2026-10-24
+
+Engine and UI areas. The Record page's Launch section gains the reference's Select on Launch and Select Next Scene on Launch, both on. A clip or scene launched from a mapped control is selected, and a scene launched with Enter or a mapped control moves the selection to the next scene, so repeated launches step through the scenes. The engine reports the last mapped launch in its snapshot (`Snapshot::remoteLaunch`) for the window to follow ([preferences contract](research/preferences-contract.md)). Checked in the preferences and UI suites.

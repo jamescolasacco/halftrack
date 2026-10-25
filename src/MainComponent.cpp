@@ -5962,7 +5962,13 @@ private:
             {
                 if (keyCell.first >= 0) return true; // Key repeat while Enter is held.
                 const auto scene = owner.selectedSceneIndex();
-                if (scene >= 0 && (key.getModifiers().isShiftDown() || owner.clickedArea == Area::scenes)) owner.report (owner.session.launchScene (scene));
+                if (scene >= 0 && (key.getModifiers().isShiftDown() || owner.clickedArea == Area::scenes))
+                {
+                    const auto result = owner.session.launchScene (scene); owner.report (result);
+                    // Select Next Scene on Launch, as the reference's: the next scene is ready for the next Enter.
+                    if (result.wasOk() && owner.session.preferences().selectNextSceneOnLaunch && scene + 1 < (int) owner.state.scenes.size())
+                    { owner.selectedSceneId = owner.state.scenes[(size_t) scene + 1].id; scrollSelectionIntoView(); }
+                }
                 else if (scene >= 0 && owner.currentTrack() != nullptr && ! owner.currentTrack()->isReturn)
                 {
                     keyCell = { owner.selectedTrack, scene }; owner.report (owner.session.pressSlot (owner.selectedTrack, scene));
@@ -13784,6 +13790,7 @@ private:
             it = std::any_of (state.tracks.begin(), state.tracks.end(), [&] (const auto& t) { return t.id == *it; }) ? std::next (it) : multiSelectedTracks.erase (it);
         canvas.syncRows();
         if (selectedSceneIndex() < 0) selectedSceneId = state.scenes.empty() ? juce::String() : state.scenes.front().id;
+        followRemoteLaunch (previous.remoteLaunch);
         launcher.sync();
         if (arrangementMixerLaidOut != (! showSession && state.arrangementMixerSections.shown ? arrangementMixer.preferredHeight() : -1)) resized();
         arrangementMixer.sync();
@@ -14706,6 +14713,21 @@ private:
         }
         canvas.repaint(); launcher.repaint();
         return true;
+    }
+    // A clip or scene a mapped control launched, as the reference's Select on Launch and Select Next
+    // Scene on Launch follow it: the clip's slot or the scene selected, or the scene after it.
+    void followRemoteLaunch (const Session::Snapshot::RemoteLaunch& before)
+    {
+        const auto& launched = state.remoteLaunch;
+        if (launched.serial == before.serial || ! juce::isPositiveAndBelow (launched.scene, (int) state.scenes.size())) return;
+        const auto prefs = session.preferences();
+        if (launched.track < 0)
+        {
+            const int next = prefs.selectNextSceneOnLaunch && launched.scene + 1 < (int) state.scenes.size() ? launched.scene + 1 : prefs.selectOnLaunch ? launched.scene : -1;
+            if (next >= 0) selectedSceneId = state.scenes[(size_t) next].id;
+        }
+        else if (prefs.selectOnLaunch && juce::isPositiveAndBelow (launched.track, (int) state.tracks.size()))
+        { selectedTrack = launched.track; selectedChain.clear(); selectedSceneId = state.scenes[(size_t) launched.scene].id; }
     }
     // The clip under a point of the window in the Session or the Arrangement, selected; false without one.
     bool selectClipAt (juce::Point<int> at)
@@ -16508,6 +16530,11 @@ private:
             for (const auto& [name, value] : Session::clipQuantisations()) grid.addItem (name, (int) value + 1);
             for (auto* b : { &exclusiveArm, &exclusiveSolo, &autoWarp, &edgeFades, &sceneRecord, &startPlayback, &tapStart }) b->onClick = [this] { apply(); };
             warp.onChange = mode.onChange = grid.onChange = countIn.onChange = [this] { apply(); };
+            // Select on Launch and Select Next Scene on Launch, in the Launch section as the reference's.
+            for (auto* b : { &selectOnLaunch, &selectNextScene }) { addAndMakeVisible (*b); b->onClick = [this] { apply(); }; }
+            selectOnLaunch.setName ("Select on launch"); selectNextScene.setName ("Select next scene on launch");
+            selectOnLaunch.setTooltip ("Select on Launch: a clip or scene launched from a mapped control is selected");
+            selectNextScene.setTooltip ("Select Next Scene on Launch: a scene launched from the keys or a mapped control moves the selection to the next scene");
             sync();
         }
         void sync()
@@ -16525,6 +16552,7 @@ private:
             edgeFades.setToggleState (p.createFadesOnClipEdges, juce::dontSendNotification);
             for (int i = 0; i < (int) std::size (warpModes); ++i) if (warpModes[i] == p.defaultWarpMode) warp.setSelectedId (i + 1, juce::dontSendNotification);
             mode.setSelectedId ((int) p.defaultLaunchMode + 1, juce::dontSendNotification); grid.setSelectedId ((int) p.defaultLaunchQuantisation + 1, juce::dontSendNotification);
+            selectOnLaunch.setToggleState (p.selectOnLaunch, juce::dontSendNotification); selectNextScene.setToggleState (p.selectNextSceneOnLaunch, juce::dontSendNotification);
         }
         void apply()
         {
@@ -16539,6 +16567,7 @@ private:
             p.defaultWarpMode = warpModes[(size_t) juce::jlimit (0, (int) std::size (warpModes) - 1, warp.getSelectedId() - 1)];
             p.defaultLaunchMode = (Session::LaunchMode) juce::jlimit (0, 3, mode.getSelectedId() - 1);
             p.defaultLaunchQuantisation = (Session::ClipQuantisation) juce::jlimit (0, (int) Session::clipQuantisations().size() - 1, grid.getSelectedId() - 1);
+            p.selectOnLaunch = selectOnLaunch.getToggleState(); p.selectNextSceneOnLaunch = selectNextScene.getToggleState();
             owner.report (owner.session.setPreferences (p)); sync();
         }
         void resized() override
@@ -16553,6 +16582,7 @@ private:
             edgeFades.setBounds (area.removeFromTop (22)); area.removeFromTop (3);
             preferenceHeading (area, launchHeading);
             preferenceRow (area, modeLabel, mode, 120); preferenceRow (area, gridLabel, grid, 120);
+            for (auto* b : { &selectOnLaunch, &selectNextScene }) { b->setBounds (area.removeFromTop (22)); area.removeFromTop (3); }
             preferenceHeading (area, tapHeading);
             tapStart.setBounds (area.removeFromTop (22));
         }
@@ -16565,6 +16595,7 @@ private:
         juce::ToggleButton exclusiveArm { "Exclusive Arm" }, exclusiveSolo { "Exclusive Solo" }, autoWarp { "Auto-Warp Long Samples" },
                            edgeFades { "Create Fades on Clip Edges" }, sceneRecord { "Start Recording on Scene Launch" }, startPlayback { "Start Playback with Record" },
                            tapStart { "Start Playback with Tap Tempo" };
+        juce::ToggleButton selectOnLaunch { "Select on Launch" }, selectNextScene { "Select Next Scene on Launch" };
     };
     // What this copy of Halftrack is: its version, source commit and platform (selectable, to paste
     // into a report), its license, and where it keeps settings and the User Library.
@@ -20764,6 +20795,33 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
     check (std::all_of (state.tracks.begin(), state.tracks.end(), [] (const auto& track)
            { return std::none_of (track.slots.begin(), track.slots.end(), [] (const auto& slot) { return slot.playing || slot.queued; }); }),
            "Stop All command stops active Session clips through the audio callback");
+    if (state.scenes.size() >= 4)
+    {
+        // Select Next Scene on Launch and Select on Launch, on as in the reference's preferences: a scene
+        // launched from the keys or a mapped control moves the selection on, or selects the scene.
+        const auto prefsBefore = session.preferences();
+        check (prefsBefore.selectOnLaunch && prefsBefore.selectNextSceneOnLaunch, "Select on Launch and Select Next Scene on Launch are on at first");
+        selectedSceneId = state.scenes[0].id; clickedArea = Area::scenes;
+        launcher.keyPressed (juce::KeyPress (juce::KeyPress::returnKey, juce::ModifierKeys (juce::ModifierKeys::shiftModifier), 0)); refresh();
+        check (selectedSceneIndex() == 1, "launching a scene with the keys selects the next, ready for the next press");
+        report (session.stopAllLauncherClips()); session.stop(); refresh();
+        const auto third = state.scenes[2].id;
+        bool used = false;
+        check (session.setKeyLearnTarget ("scene:" + third).wasOk() && session.handleMappedKey ('j', used).wasOk() && used, "map J to the third scene");
+        report (session.setKeyLearnTarget ({}));
+        selectedSceneId = state.scenes[0].id;
+        check (session.handleMappedKey ('j', used).wasOk() && used, "press J"); refresh();
+        check (selectedSceneIndex() == 3, "a mapped scene launch selects the scene after it");
+        auto prefs = prefsBefore; prefs.selectNextSceneOnLaunch = false; check (session.setPreferences (prefs).wasOk(), "Select Next Scene on Launch off");
+        selectedSceneId = state.scenes[0].id; report (session.handleMappedKey ('j', used)); refresh();
+        check (selectedSceneIndex() == 2, "then a mapped launch selects the scene it launches");
+        prefs.selectOnLaunch = false; check (session.setPreferences (prefs).wasOk(), "and Select on Launch off");
+        selectedSceneId = state.scenes[0].id; report (session.handleMappedKey ('j', used)); refresh();
+        check (selectedSceneIndex() == 0, "then the selection stays where it was");
+        check (session.setPreferences (prefsBefore).wasOk(), "restore the preferences");
+        report (session.stopAllLauncherClips()); session.stop(); session.undo(); refresh(); // The key mapping.
+        check (state.keyMappings.empty() || std::none_of (state.keyMappings.begin(), state.keyMappings.end(), [&] (const auto& m) { return m.target == "scene:" + third; }), "one undo removes the key mapping");
+    }
     std::vector<bool> overrides; for (const auto& track : state.tracks) overrides.push_back (track.launcherActive);
     showArrangementView(); refresh();
     bool unchanged = ! showSession;

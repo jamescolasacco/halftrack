@@ -847,6 +847,8 @@ Open Recent Project ([menu contract](research/main-menu-contract.md)). Defaults 
 - **What joins the list.** A project opened, or saved under a new name, joins the top; Save a Copy does not. The list keeps ten, kept with the preferences, and a preferences reset keeps it. The reference's own limit was not read.
 - **Names.** Each entry shows its project's file name, with its folder in brackets when another entry has the same name.
 
+Select on Launch ([preferences contract](research/preferences-contract.md)). It applies to launches from mapped controls, and Select Next Scene on Launch to scenes launched with Enter or a mapped control; that a click on a scene's launch button leaves the selection follows user reports, as the reference's manual does not describe either preference. A mapped control's slot launch selects the slot, its track and scene.
+
 Window layout ([contract](research/window-layout-contract.md)). With Full Height Browser off, the Info View stays under the browser, above the detail view; where the reference puts it then was not read. Full-Size Clip View keeps the browser beside the clip view and lasts while the window is open; the item's name follows the manual's shortcut list, and whether the reference keeps the browser or the setting was not read.
 
 The Clip View and Device View selectors' look and their click on the view already shown, which hides the detail view, are Halftrack's defaults; the reference's were not read. Stacked, the device view runs under the clip view, as the reference's breakout view's name and height suggest, at Halftrack's device view height; the views' open states last while the window is open, where the reference keeps them with the Set for each view.

@@ -101,6 +101,10 @@ int runPreferencesTests (const juce::File& artifacts)
         auto [untapped, untappedProblem] = reopen ("<HALFTRACKPREFERENCES version=\"1\" startPlaybackWithTapTempo=\"0\"/>");
         expected = {}; expected.startPlaybackWithTapTempo = false;
         check (untapped == expected && untappedProblem.isEmpty() && Session::Preferences {}.startPlaybackWithTapTempo, "Start Playback with Tap Tempo, on by default, is read back off");
+        auto [unselected, unselectedProblem] = reopen ("<HALFTRACKPREFERENCES version=\"1\" selectOnLaunch=\"0\" selectNextSceneOnLaunch=\"0\"/>");
+        expected = {}; expected.selectOnLaunch = false; expected.selectNextSceneOnLaunch = false;
+        check (unselected == expected && unselectedProblem.isEmpty() && Session::Preferences {}.selectOnLaunch && Session::Preferences {}.selectNextSceneOnLaunch,
+               "Select on Launch and Select Next Scene on Launch, on by default, are read back off");
         auto [locked, lockedProblem] = reopen ("<HALFTRACKPREFERENCES version=\"1\" lockEnvelopes=\"1\"/>");
         expected = {}; expected.lockEnvelopes = true;
         check (locked == expected && lockedProblem.isEmpty() && ! Session::Preferences {}.lockEnvelopes, "Lock Envelopes, off by default, is read back");

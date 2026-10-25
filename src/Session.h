@@ -693,6 +693,10 @@ public:
         TimeFormat timeRulerFormat = TimeFormat::minutesSeconds;
         bool sceneSettingsShown = false;
         bool automationOverridden = false; // Some lane with points is switched off.
+        // The last clip or scene a mapped control launched: its track (-1 for a scene) and scene, with
+        // a serial that changes with each launch, for Select on Launch.
+        struct RemoteLaunch { int serial = 0, track = -1, scene = -1; bool operator== (const RemoteLaunch&) const = default; };
+        RemoteLaunch remoteLaunch;
         float grooveAmount = 100; // Global Amount, 0-130%: scales every groove's Timing, Random and Velocity.
         LaunchQuantisation launchQuantisation = LaunchQuantisation::bar;
         MetronomeSettings metronome;
@@ -1302,6 +1306,10 @@ public:
         // Start Playback with Tap Tempo, after the reference's (on): a bar of taps while stopped starts
         // playback at the tapped tempo, a beat after the last tap.
         bool startPlaybackWithTapTempo = true;
+        // Select on Launch and Select Next Scene on Launch, after the reference's (both on): a clip or
+        // scene launched from a mapped control is selected, and a scene launched from the keys or a
+        // mapped control moves the selection to the next scene.
+        bool selectOnLaunch = true, selectNextSceneOnLaunch = true;
         juce::String vst3CustomFolder;
         // The Preferences window's tab, by the reference's id ("audio", "midi"...), which opens next time
         // as the reference's window remembers its tab.
