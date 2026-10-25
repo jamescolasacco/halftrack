@@ -810,8 +810,8 @@ public:
         reEnableButton.setTooltip ("Re-Enable Automation: overridden controls follow their automation again");
         reEnableButton.onClick = [this] { report (session.reEnableAutomation()); refresh(); };
         followButton.setName ("Follow"); followButton.setClickingTogglesState (true); followButton.setToggleState (true, juce::dontSendNotification);
-        followButton.setTooltip ("Follow: keep the playhead in view while playing. Scrolling by hand turns it off.  |  Cmd/Ctrl+F");
-        followButton.onClick = [this] { followPlayhead = followButton.getToggleState(); refresh(); };
+        followButton.setTooltip ("Follow: keep the playhead in view while playing. A hand scroll or an edit pauses it until playback stops or starts again, or a click in the Arrangement.  |  Option/Alt+Shift+F");
+        followButton.onClick = [this] { setFollow (followButton.getToggleState()); refresh(); };
         loopButton.setClickingTogglesState (true);
         loopButton.setTooltip ("Loop the marked time range. Shift-drag the ruler to change it.  |  Cmd/Ctrl+L");
         loopButton.onClick = [this] { session.setLoop (loopButton.getToggleState(), state.loopStart, state.loopEnd); refresh(); };
@@ -4426,6 +4426,7 @@ private:
         void mouseDown (const juce::MouseEvent& e) override
         {
             if (e.x >= timelineWidth()) return;
+            owner.beginFollowGesture();
             // Cmd+Option drags the view along, as the reference's Scroll Display does (its key list, sections 42.9 and 42.16);
             // with Shift as well it slides a clip's contents off the grid instead (its manual, section 6.7).
             panFrom.reset();
@@ -4627,6 +4628,7 @@ private:
                 // Measured in the window, so the canvas moving under the pointer does not feed back.
                 const auto [from, start, top] = *panFrom;
                 const auto now = e.getEventRelativeTo (&owner).position;
+                owner.pauseFollow();
                 owner.viewStart = juce::jmax (0.0, start - (now.x - from.x) / owner.pixelsPerSecond);
                 owner.viewport.setViewPosition (owner.viewport.getViewPositionX(), juce::jmax (0, top - juce::roundToInt (now.y - from.y)));
                 owner.updateScroll(); owner.canvas.repaint(); owner.ruler.repaint();
@@ -4804,6 +4806,7 @@ private:
         }
         void mouseUp (const juce::MouseEvent& e) override
         {
+            const juce::ScopeGuard gestureEnds { [this] { owner.endFollowGesture(); } };
             if (std::exchange (panFrom, std::nullopt)) return;
             // A click without a drag on a clip of a group selects it alone, or with Cmd/Ctrl leaves it out.
             if (! e.mouseWasDraggedSinceMouseDown() && dragClipId.isNotEmpty())
@@ -4990,7 +4993,7 @@ private:
             if (event.mods.isShiftDown() || std::abs (wheel.deltaX) > std::abs (wheel.deltaY))
             {
                 const auto delta = event.mods.isShiftDown() ? wheel.deltaY : wheel.deltaX;
-                if (owner.state.playing) owner.setFollow (false);
+                owner.pauseFollow();
                 owner.viewStart = juce::jmax (0.0, owner.viewStart - delta * 300.0 / owner.pixelsPerSecond);
                 owner.updateScroll(); owner.ruler.repaint(); repaint(); return;
             }
@@ -5021,7 +5024,7 @@ private:
                 owner.viewStart = juce::jmax (0.0, owner.viewStart + pixels / owner.pixelsPerSecond);
                 if (owner.viewStart != before)
                 {
-                    if (owner.state.playing) owner.setFollow (false);
+                    owner.pauseFollow();
                     dragStartX -= (owner.viewStart - before) * owner.pixelsPerSecond;
                     owner.updateScroll(); owner.ruler.repaint(); repaint();
                 }
@@ -5300,7 +5303,7 @@ private:
             if (onBarNumbers (event.position))
             {
                 selected.clear();zoomFrom=std::pair { owner.viewStart+event.x/owner.pixelsPerSecond,owner.pixelsPerSecond };
-                if (owner.state.playing) owner.setFollow (false);
+                owner.pauseFollow();
                 owner.refresh();return;
             }
             if (hit.isNotEmpty())
@@ -5310,6 +5313,7 @@ private:
                 owner.report (owner.session.seekLocator (hit));
             }
             else {selected.clear();owner.session.seek (anchor);}
+            owner.resumeFollow(); // A click in the scrub area resumes Follow.
             owner.refresh();
         }
         void mouseDoubleClick (const juce::MouseEvent& event) override
@@ -5553,7 +5557,7 @@ private:
             pressSpan = span(); pressZoom = owner.pixelsPerSecond;
             pressSeconds = e.position.x / (double) stripWidth() * pressSpan;
             pressView = owner.viewStart;
-            if (owner.state.playing) owner.setFollow (false); // As a hand scroll does.
+            owner.pauseFollow(); // As a hand scroll does.
             if (pressSeconds < owner.viewStart || pressSeconds > owner.viewStart + visible())
             { pressView = juce::jmax (0.0, pressSeconds - visible() / 2); owner.setView (pressView, pressZoom); }
         }
@@ -5661,7 +5665,7 @@ private:
         void mouseDown (const juce::MouseEvent& e) override
         {
             pressed = owner.viewStart + e.position.x / owner.pixelsPerSecond;
-            if (owner.state.playing) owner.setFollow (false); // As a hand scroll does.
+            owner.pauseFollow(); // As a hand scroll does.
         }
         void mouseDrag (const juce::MouseEvent& e) override { owner.setView (pressed - e.position.x / owner.pixelsPerSecond, owner.pixelsPerSecond); }
     private:
@@ -8903,6 +8907,7 @@ private:
                 // must not seek unrelated arrangement transport state.
                 if (owner.selectedLauncherClipId.isEmpty())
                     owner.session.seek (owner.secondsAt (clip->startBeat + beatsInAt (*clip, juce::jmax (0.0, beatAt (e.x)))));
+                owner.resumeFollow(); // As a click in the clip's scrub area does.
                 owner.refresh(); return;
             }
             if (! gridBounds().contains (e.getPosition())) return;
@@ -9005,6 +9010,7 @@ private:
             if (panView)
             {
                 const auto [from, beat, row] = *panView;
+                owner.pauseFollow();
                 viewBeat = juce::jmax (0.0, beat - (e.position.x - from.x) / pixelsPerBeat);
                 topPitch = pitchAtRow (row - juce::roundToInt ((e.position.y - from.y) / (float) rowHeight));
                 updateScroll(); repaint();
@@ -9331,7 +9337,7 @@ private:
             if (code == juce::KeyPress::pageUpKey || code == juce::KeyPress::pageDownKey)
             {
                 const auto sign = code == juce::KeyPress::pageUpKey ? -1 : 1;
-                if (mods.isCommandDown()) { viewBeat = juce::jmax (0.0, viewBeat + sign * gridBounds().getWidth() / pixelsPerBeat); if (owner.state.playing) owner.setFollow (false); }
+                if (mods.isCommandDown()) { viewBeat = juce::jmax (0.0, viewBeat + sign * gridBounds().getWidth() / pixelsPerBeat); owner.pauseFollow(); }
                 else topPitch = pitchAtRow (topRow() + sign * (mods.isShiftDown() ? 1 : juce::jmax (1, gridBounds().getHeight() / rowHeight)));
                 updateScroll(); repaint(); return true;
             }
@@ -10489,7 +10495,7 @@ private:
         }
         void scrollBarMoved (juce::ScrollBar* bar, double start) override
         {
-            if (bar == &horizontal) { if (owner.state.playing) owner.setFollow (false); viewBeat = start; } else topPitch = pitchAtRow ((int) std::round (start));
+            if (bar == &horizontal) { owner.pauseFollow(); viewBeat = start; } else topPitch = pitchAtRow ((int) std::round (start));
             repaint();
         }
     public:
@@ -15054,7 +15060,8 @@ private:
             const auto ids = trackDeviceIds();
             for (int i = selectedDevices.size(); --i >= 0;) if (std::find (ids.begin(), ids.end(), selectedDevices[i]) == ids.end()) selectedDevices.remove (i);
         }
-        followButton.setToggleState (followPlayhead, juce::dontSendNotification);
+        if (previous.playing != state.playing) followPause = FollowPause::none; // Stopping or starting playback resumes Follow.
+        updateFollowButton();
         ruler.sync(); deviceChain.sync(); repaint();
         if (mapping()) { mappingList.sync(); mapOverlay.repaint(); }
         updateScroll();
@@ -15299,10 +15306,31 @@ private:
     // Scroll follow keeps the play head in the middle of the view, once it has reached it.
     static double scrolledViewStart (double position, double visible) { return juce::jmax (0.0, position - visible / 2); }
     bool followPlayhead = true;
-    void setFollow (bool on) { followPlayhead = on; followButton.setToggleState (on, juce::dontSendNotification); }
+    void setFollow (bool on) { followPlayhead = on; followPause = FollowPause::none; updateFollowButton(); }
+    // Follow pauses rather than switching off, as the reference's does (its manual, section 6.2): while a mouse
+    // gesture in the Arrangement lasts, and after a hand scroll, an edit made there with the mouse or a press on the
+    // bar numbers, until playback stops or starts again or the next click in the Arrangement, its scrub area or the
+    // clip's. Paused, the switch stays on, dimmed (Halftrack's own look).
+    enum class FollowPause { none, gesture, untilResumed };
+    FollowPause followPause = FollowPause::none;
+    std::pair<juce::StringArray, juce::StringArray> gestureHistory; // The undo and redo steps when the gesture began.
+    void setFollowPause (FollowPause pause) { if (std::exchange (followPause, pause) != pause) updateFollowButton(); }
+    void pauseFollow() { if (state.playing) setFollowPause (FollowPause::untilResumed); }
+    void resumeFollow() { setFollowPause (FollowPause::none); }
+    void beginFollowGesture() { gestureHistory = { session.undoSteps(), session.redoSteps() }; setFollowPause (state.playing ? FollowPause::gesture : FollowPause::none); }
+    void endFollowGesture()
+    {
+        if (followPause == FollowPause::gesture)
+            setFollowPause (std::pair { session.undoSteps(), session.redoSteps() } != gestureHistory ? FollowPause::untilResumed : FollowPause::none);
+    }
+    void updateFollowButton()
+    {
+        followButton.setToggleState (followPlayhead, juce::dontSendNotification);
+        followButton.setAlpha (followPlayhead && followPause != FollowPause::none ? 0.5f : 1.0f);
+    }
     void followView()
     {
-        if (! followPlayhead || ! state.playing) return;
+        if (! followPlayhead || followPause != FollowPause::none || ! state.playing) return;
         if (showPiano) { pianoRoll.followPlayhead(); return; }
         if (showSession) return;
         const auto visible = canvas.timelineWidth() / pixelsPerSecond;
@@ -15346,7 +15374,7 @@ private:
         gridReadout.repaint();
     }
     void scrollBarMoved (juce::ScrollBar*, double start) override
-    { if (state.playing) setFollow (false); viewStart = start; canvas.repaint(); ruler.repaint(); }
+    { pauseFollow(); viewStart = start; canvas.repaint(); ruler.repaint(); }
 
     // The menu bar, in the reference's order (ALiveApp 0x1002b8b34; see the main menu contract). The
     // reference's Live menu is the application menu on a Mac, which holds About Halftrack and
@@ -15728,7 +15756,7 @@ private:
     {
         if (playsSelection()) report (session.playRange (timeSelection.start, timeSelection.end));
         else { if (state.playing) session.stop(); report (session.play()); }
-        refresh();
+        resumeFollow(); refresh();
     }
     // Split Clip From Within (Shift+Cmd+E in the clip view), the reference's hidden-menu command: the
     // Arrangement MIDI clip in the note editor splits at the edges of its selected timespan, or at the
@@ -20934,7 +20962,8 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         selectTrack (previousTrack); refresh();
     }
     {
-        // Follow pages the Arrangement to the playhead and scrolling by hand turns it off; Z and X zoom to and back from the selection.
+        // Follow pages the Arrangement to the playhead, and pauses after a hand scroll, an edit or a press on the bar numbers
+        // until a click in the Arrangement or its scrub area, or a stop; Z and X zoom to and back from the selection.
         showArrangementView(); refresh();
         check (followPlayhead && followButton.getToggleState(), "Follow is on by default");
         check (followedViewStart (5, 0, 10) == 0 && followedViewStart (12, 0, 10) == 12 && followedViewStart (3, 4, 10) == 3,
@@ -20944,12 +20973,42 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         check (session.play().wasOk(), "start the transport"); session.seek (visible * 1.5); refresh();
         check (state.playing && std::abs (viewStart - state.position) < 1e-6 && state.position > visible, "while playing the view turns to the playhead's page");
         scrollBarMoved (&horizontalScroll, 0);
-        check (! followPlayhead && ! followButton.getToggleState(), "scrolling by hand while playing turns Follow off");
+        check (followPlayhead && followButton.getToggleState() && followPause == FollowPause::untilResumed && followButton.getAlpha() < 1.0f,
+               "scrolling by hand while playing pauses Follow, its switch staying on, dimmed");
         session.seek (visible * 3); refresh();
-        check (viewStart == 0, "with Follow off the view stays put");
-        session.stop(); refresh();
+        check (viewStart == 0, "while paused the view stays put");
+        {
+            const auto now = juce::Time::getCurrentTime();
+            const auto mouse = [&] (juce::Component& target, juce::Point<float> at, juce::Point<float> down, bool dragged)
+            { return juce::MouseEvent (juce::Desktop::getInstance().getMainMouseSource(), at, juce::ModifierKeys (juce::ModifierKeys::leftButtonModifier), 1.0f, 0, 0, 0, 0, &target, &target, now, down, now, 1, dragged); };
+            check (session.addMidiTrack ("Follow edits").wasOk(), "a track to click and edit in while playing"); refresh();
+            const int followTrack = (int) state.tracks.size() - 1;
+            const juce::Point<float> lane (20.0f, (float) laneY (followTrack) + 20.0f);
+            canvas.mouseDown (mouse (canvas, lane, lane, false));
+            check (followPause == FollowPause::gesture, "a press in the Arrangement pauses Follow while the gesture lasts");
+            canvas.mouseUp (mouse (canvas, lane, lane, false)); refresh();
+            check (followPause == FollowPause::none && followButton.getAlpha() == 1.0f && std::abs (viewStart - state.position) < 1e-6,
+                   "a click there resumes it, the view turning to the playhead");
+            // A drag moving a clip is an edit, which pauses Follow until it resumes.
+            check (session.addMidiClip (state.tracks[(size_t) followTrack].id, beatsAt (viewStart + 1), 4).wasOk(), "a clip in view"); refresh();
+            const auto from = canvas.clipBarPoint (state.tracks[(size_t) followTrack].clips[0], followTrack), to = from + juce::Point<float> (60.0f, 0.0f);
+            const auto clipStart = state.tracks[(size_t) followTrack].clips[0].start;
+            canvas.mouseDown (mouse (canvas, from, from, false)); canvas.mouseDrag (mouse (canvas, to, from, true)); canvas.mouseUp (mouse (canvas, to, from, true)); refresh();
+            check (state.tracks[(size_t) followTrack].clips[0].start > clipStart && followPause == FollowPause::untilResumed, "moving a clip by dragging pauses Follow until it resumes");
+            // A press on the bar numbers pauses it too, and a click in the scrub area resumes it.
+            const juce::Point<float> scrub (100.0f, (float) ruler.scrubTop() + 10.0f), bars (100.0f, 24.0f);
+            ruler.mouseDown (mouse (ruler, scrub, scrub, false)); ruler.mouseUp (mouse (ruler, scrub, scrub, false)); refresh();
+            check (followPause == FollowPause::none, "a click in the scrub area resumes it");
+            ruler.mouseDown (mouse (ruler, bars, bars, false)); ruler.mouseUp (mouse (ruler, bars, bars, false)); refresh();
+            check (followPause == FollowPause::untilResumed, "a press on the bar numbers pauses it");
+            session.stop(); refresh();
+            check (followPause == FollowPause::none && followButton.getAlpha() == 1.0f, "stopping playback resumes it");
+            check (session.removeTrack (followTrack).wasOk(), "remove the track clicked in"); refresh();
+        }
+        check (handleKey (juce::KeyPress ('F', juce::ModifierKeys (juce::ModifierKeys::altModifier | juce::ModifierKeys::shiftModifier), 0)) && ! followPlayhead && ! followButton.getToggleState(),
+               "Option+Shift+F (the reference's Follow) switches Follow off");
         check (handleKey (juce::KeyPress ('F', juce::ModifierKeys (juce::ModifierKeys::altModifier | juce::ModifierKeys::shiftModifier), 0)) && followPlayhead,
-               "Option+Shift+F (the reference's Follow) turns Follow back on");
+               "and on again");
         const auto previousView = std::pair { viewStart, pixelsPerSecond };
         timeSelection = { 1, 3, { state.tracks[0].id } };
         check (handleKey (juce::KeyPress ('Z')) && std::abs (pixelsPerSecond - juce::jlimit (3.0, 650.0, canvas.timelineWidth() / 2.2)) < 1e-6 && std::abs (viewStart - .9) < 1e-6,

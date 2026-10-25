@@ -439,6 +439,10 @@ The device's patch is encrypted and was not opened, and the manual describes onl
 - **Chord names** come from a table of 20 chord types. They are named from the lowest note when it can be the root, otherwise as a slash chord.
 - **Freeze and Clear** belong to the display; they are not saved or automatable.
 
+### Follow's pause
+
+The reference's manual says when Follow pauses and resumes, but not how its switch looks while paused, nor whether keyboard edits pause it. Halftrack dims the switch to half while paused, and only edits made with the mouse in the Arrangement (a gesture that changed the undo history) pause it. A click in the Arrangement resumes Follow; Play from a playing transport counts as restarting playback.
+
 ### Insert marker display and scrubbing
 
 These are simplest defaults pending a comparison with the reference:

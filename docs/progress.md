@@ -2881,3 +2881,7 @@ UI area. A Cmd+Option drag (Ctrl+Alt elsewhere) now pans the Arrangement's lanes
 ## Beat-time ruler, time ruler and overview navigation — 2026-10-25
 
 UI area. As the reference's manual describes (sections 6.1 and 6.2), the Arrangement's bar numbers now act as its beat-time ruler: dragging scrolls and zooms with the pressed time kept under the pointer, a double-click zooms to the selection or out to the whole Arrangement, and a press stops Follow instead of locating. Dragging the time ruler scrolls, and a double-click inside the overview's outline shows the whole Arrangement ([timeline navigation contract](research/timeline-navigation-contract.md#behaviour)). Checked in the UI suite.
+
+## Follow pauses — 2026-10-25
+
+UI area. As the reference's manual describes (section 6.2), Follow now pauses instead of switching off: for a mouse gesture in the Arrangement, and after a hand scroll, a mouse edit there or a press on the bar numbers until playback stops or restarts, or a click in the Arrangement or a scrub area. The switch stays on, dimmed while paused ([timeline navigation contract](research/timeline-navigation-contract.md#behaviour), [open questions](open-questions.md#follows-pause)). Checked in the UI suite.
