@@ -8572,7 +8572,7 @@ private:
                 if (clip->loop.on)
                 {
                     const auto from = (float) (keysWidth + (clip->loop.start - viewBeat) * pixelsPerBeat), to = (float) (keysWidth + (clip->loop.start + clip->loop.length - viewBeat) * pixelsPerBeat);
-                    g.setColour (themes::colour (0xffb4b4b4)); g.fillRect (from, (float) headerHeight + 1, to - from, 4.0f);
+                    g.setColour (loopBraceSelected ? orange : themes::colour (0xffb4b4b4)); g.fillRect (from, (float) headerHeight + 1, to - from, 4.0f);
                 }
                 const auto startX = (float) (keysWidth + (clip->contentStartBeat - viewBeat) * pixelsPerBeat);
                 juce::Path flag; flag.addTriangle (startX, (float) gridTop - 10, startX + 8, (float) gridTop - 5, startX, (float) gridTop);
@@ -8608,10 +8608,12 @@ private:
                 sound ({ { keyPitch, keyVelocity } });
                 return;
             }
-            // The loop brace and the start marker drag; the rest of the ruler places the insert marker.
+            // The loop brace and the start marker drag; the rest of the ruler places the insert marker. A click
+            // on the brace also selects it for its keys (see braceKey); a click elsewhere lets it go.
+            loopBraceSelected = braceAt (*clip, e.position) == 3 || braceAt (*clip, e.position) == 1 || braceAt (*clip, e.position) == 2;
             if (const int grabbed = braceAt (*clip, e.position); grabbed != 0)
             {
-                grabKeyboardFocus(); endGesture();
+                grabKeyboardFocus(); endGesture(); repaint();
                 braceDrag = grabbed; braceOrigin = clip->loop; startOrigin = clip->contentStartBeat; dragOrigin = e.position; dragClipId = clip->id;
                 return;
             }
@@ -8856,6 +8858,7 @@ private:
             if (code == juce::KeyPress::escapeKey) { clearSelection(); timeRange.reset(); repaint(); return true; }
             if (clip != nullptr && code == '0' && !key.getModifiers().isAnyModifierKeyDown()) { noteCommand (NoteCommand::toggleActive); return true; }
             if (clip != nullptr && timeRangeKey (key)) return true;
+            if (clip != nullptr) { const auto shown = *clip; if (braceKey (shown, key)) return true; }
             if (clip != nullptr && editorKey (key)) return true;
             if ((code == juce::KeyPress::rightKey || code == juce::KeyPress::leftKey) && ! key.getModifiers().isAnyModifierKeyDown() && stepRecord (code == juce::KeyPress::rightKey)) return true;
             if (clip != nullptr && key.getModifiers().isCommandDown())
@@ -8956,6 +8959,8 @@ private:
         }
         int topShownPitch() const { return pitchAtRow (topRow()); }
         double beatWidth() const { return pixelsPerBeat; }
+        // Whether the loop brace was clicked last, so it takes its keys (see braceKey).
+        bool loopBraceSelected = false;
         // The reference's other note editor keys (its shortcut list's MIDI Note Editor section): Cmd with Up
         // and Down nudges the selected notes' velocity, with Shift their velocity range and with Option
         // their chance; Option with Up and Down selects the previous or next note, and with Left and Right
@@ -9109,6 +9114,28 @@ private:
         int braceDrag = 0;
         Session::ClipLoop braceOrigin;
         double startOrigin = 0;
+        // A selected loop brace, as the reference's (its manual, section 42.8): Left and Right move it by the
+        // grid, Up and Down by its length; with Cmd/Ctrl, Left and Right shorten and lengthen it by the grid, and
+        // Up and Down double and halve it. Each is one undo step, the start kept inside the loop.
+        bool braceKey (const Session::ClipInfo& clip, const juce::KeyPress& key)
+        {
+            const auto code = key.getKeyCode();
+            const bool horizontal = code == juce::KeyPress::leftKey || code == juce::KeyPress::rightKey, vertical = code == juce::KeyPress::upKey || code == juce::KeyPress::downKey;
+            if (! loopBraceSelected || ! clip.loop.on || ! (horizontal || vertical) || key.getModifiers().isShiftDown() || key.getModifiers().isAltDown()) return false;
+            auto next = clip.loop;
+            const auto grid = snapBeats();
+            const bool later = code == juce::KeyPress::rightKey || code == juce::KeyPress::downKey;
+            if (key.getModifiers().isCommandDown())
+            {
+                if (horizontal) next.length = juce::jmax (grid, next.length + (later ? grid : -grid));
+                else next.length = code == juce::KeyPress::upKey ? next.length * 2 : juce::jmax (next.length / 2, 1.0 / 64);
+            }
+            else next.start = juce::jmax (0.0, next.start + (later ? 1 : -1) * (horizontal ? grid : next.length));
+            auto from = clip.contentStartBeat;
+            if (from < next.start || from >= next.start + next.length) from = next.start;
+            owner.report (owner.session.setClipLoop (clip.id, next, from)); owner.refresh(); repaint();
+            return true;
+        }
         int braceAt (const Session::ClipInfo& clip, juce::Point<float> p) const
         {
             if (p.y < headerHeight || p.y >= gridTop) return 0;
@@ -23892,6 +23919,21 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
                 for (int step = 0; step < 3; ++step) session.undo();
                 refresh();
                 check (loopClip().loop == Session::ClipLoop { true, 1, 2 } && loopClip().contentStartBeat == 1, "each drag is one undo step");
+                {
+                    // A click on the brace selects it for the reference's brace keys.
+                    const auto mid = (float) (55 + 2.0 * rollBeat);
+                    const auto steps = session.undoSteps().size();
+                    pianoRoll.mouseDown (rollEvent (mid, 40, mid, false)); pianoRoll.mouseUp (rollEvent (mid, 40, mid, false)); refresh();
+                    const auto grid = pianoRoll.snapBeats();
+                    check (pianoRoll.loopBraceSelected && pianoRoll.keyPressed (juce::KeyPress (juce::KeyPress::rightKey)) && std::abs (loopClip().loop.start - (1 + grid)) < 1e-9
+                               && loopClip().loop.length == 2, "a clicked loop brace takes the keys: Right moves it a grid step later");
+                    check (pianoRoll.keyPressed (juce::KeyPress (juce::KeyPress::upKey, juce::ModifierKeys::commandModifier, 0)) && loopClip().loop.length == 4, "Cmd+Up doubles it");
+                    check (pianoRoll.keyPressed (juce::KeyPress (juce::KeyPress::downKey)) && std::abs (loopClip().loop.start - (5 + grid)) < 1e-9 && loopClip().loop.length == 4,
+                           "and Down moves it later by its length");
+                    while (session.undoSteps().size() > steps) session.undo();
+                    refresh(); pianoRoll.loopBraceSelected = false;
+                    check (loopClip().loop == Session::ClipLoop { true, 1, 2 } && loopClip().contentStartBeat == 1, "undo returns the brace");
+                }
                 // Edit > Clip Markers (Cmd+F9 to F12) sets a marker at the note editor's insert marker; the Loop
                 // box's Set buttons wait for the clip to play, then set theirs at the play position.
                 const auto placeInsert = [&] (double beat)

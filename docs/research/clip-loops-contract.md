@@ -57,6 +57,8 @@ Clicking the note editor's ruler seeks to where that beat first plays. Its loop 
 - its middle moves the loop and the start with it;
 - the start marker moves alone, kept in the loop.
 
+A click on the loop brace also selects it, shown in orange, until a click elsewhere in the editor. Then, as the reference's brace keys (manual section 42.8), Left and Right move it by the note grid, Up and Down by its length, Cmd/Ctrl with Left and Right shorten and lengthen it by the grid, and Cmd/Ctrl with Up and Down double and halve it, each one undo step, the start kept inside the loop.
+
 Cmd-click in the ruler moves the start marker to the snapped beat, and Cmd+Shift-click an unlooped clip's end marker, as the reference's keys do (manual section 42.8, Move Start/End Marker to Position; 2026-10-25); each is one undo step.
 
 Drags snap to the note grid unless Alt is held, and each is one undo step. A warped clip's waveform drags the same way:
@@ -95,7 +97,7 @@ It also checks:
   - unlooping, which ends the clip with its audio;
   - Warp off, which ends the loop where it starts.
 
-The main UI suite turns Loop on from the Loop box and sets Length and Position, and checks that a start outside the loop is refused. It drags the loop brace's end, the brace and the start marker in the note editor's ruler, undoing each, and Cmd-clicks the ruler to move the start marker and Cmd+Shift-clicks it to move an unlooped clip's end marker. It also lengthens a warped clip's loop by its brace in the waveform. It sets the loop's end and start at the insert marker from Edit > Clip Markers, greys Set Clip End while looping, sets the start with Cmd+F9, and while the clip plays sets the loop's Position from its Set button. It drags a looped clip's right edge to repeat it and its left edge to trim it, undoing each, and shows the Loop box for a warped audio clip.
+The main UI suite turns Loop on from the Loop box and sets Length and Position, and checks that a start outside the loop is refused. It drags the loop brace's end, the brace and the start marker in the note editor's ruler, undoing each, Cmd-clicks the ruler to move the start marker and Cmd+Shift-clicks it to move an unlooped clip's end marker, and steps a clicked brace with Right, Cmd+Up and Down, undoing them. It also lengthens a warped clip's loop by its brace in the waveform. It sets the loop's end and start at the insert marker from Edit > Clip Markers, greys Set Clip End while looping, sets the start with Cmd+F9, and while the clip plays sets the loop's Position from its Set button. It drags a looped clip's right edge to repeat it and its left edge to trim it, undoing each, and shows the Loop box for a warped audio clip.
 
 ## Not yet covered
 
