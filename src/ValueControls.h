@@ -8,6 +8,40 @@
 
 namespace halftrack
 {
+// Where the parts of a number's text are drawn, the runs of its digits in order, for text fitted into
+// an area as a label draws it.
+inline std::vector<juce::Rectangle<float>> numberParts (const juce::Font& font, const juce::String& text, juce::Rectangle<float> area,
+                                                        juce::Justification justification, float minimumHorizontalScale = 0.7f)
+{
+    juce::GlyphArrangement glyphs;
+    glyphs.addFittedText (font, text, area.getX(), area.getY(), area.getWidth(), area.getHeight(), justification,
+                          juce::jmax (1, (int) (area.getHeight() / font.getHeight())), minimumHorizontalScale);
+    std::vector<juce::Rectangle<float>> parts;
+    bool inPart = false;
+    for (int i = 0; i < glyphs.getNumGlyphs(); ++i)
+    {
+        const auto& glyph = glyphs.getGlyph (i);
+        const bool digit = juce::CharacterFunctions::isDigit (glyph.getCharacter());
+        if (digit && ! inPart) parts.push_back (glyph.getBounds());
+        else if (digit) parts.back() = parts.back().getUnion (glyph.getBounds());
+        inPart = digit;
+    }
+    return parts;
+}
+// The part at a point across a number: the one under it, or the nearest.
+inline int numberPartAt (const std::vector<juce::Rectangle<float>>& parts, float x)
+{
+    int nearest = 0;
+    float distance = std::numeric_limits<float>::max();
+    for (int i = 0; i < (int) parts.size(); ++i)
+    {
+        const auto& r = parts[(size_t) i];
+        const auto d = x < r.getX() ? r.getX() - x : x > r.getRight() ? x - r.getRight() : 0.0f;
+        if (d < distance) { distance = d; nearest = i; }
+    }
+    return nearest;
+}
+
 // A knob or fader that drags as the reference's do: while Shift is held, a drag moves the value at a
 // tenth of its usual rate, for finer resolution (its manual, section 42.6, Adjusting Values). The main
 // window gives the control clicked last the reference's value keys (see MainComponent).
@@ -73,37 +107,11 @@ public:
     // Where each part's digits are drawn, in order.
     std::vector<juce::Rectangle<float>> partBounds()
     {
-        const auto font = getLookAndFeel().getLabelFont (*this);
         const auto area = getLookAndFeel().getLabelBorderSize (*this).subtractedFrom (getLocalBounds()).toFloat();
-        juce::GlyphArrangement glyphs;
-        glyphs.addFittedText (font, getText(), area.getX(), area.getY(), area.getWidth(), area.getHeight(), getJustificationType(),
-                              juce::jmax (1, (int) (area.getHeight() / font.getHeight())), getMinimumHorizontalScale());
-        std::vector<juce::Rectangle<float>> parts;
-        bool inPart = false;
-        for (int i = 0; i < glyphs.getNumGlyphs(); ++i)
-        {
-            const auto& glyph = glyphs.getGlyph (i);
-            const bool digit = juce::CharacterFunctions::isDigit (glyph.getCharacter());
-            if (digit && ! inPart) parts.push_back (glyph.getBounds());
-            else if (digit) parts.back() = parts.back().getUnion (glyph.getBounds());
-            inPart = digit;
-        }
-        return parts;
+        return numberParts (getLookAndFeel().getLabelFont (*this), getText(), area, getJustificationType(), getMinimumHorizontalScale());
     }
     // The part at a point across the field: the one under it, or the nearest.
-    int partAt (float x)
-    {
-        const auto parts = partBounds();
-        int nearest = 0;
-        float distance = std::numeric_limits<float>::max();
-        for (int i = 0; i < (int) parts.size(); ++i)
-        {
-            const auto& r = parts[(size_t) i];
-            const auto d = x < r.getX() ? r.getX() - x : x > r.getRight() ? x - r.getRight() : 0.0f;
-            if (d < distance) { distance = d; nearest = i; }
-        }
-        return nearest;
-    }
+    int partAt (float x) { return numberPartAt (partBounds(), x); }
 
     void mouseDown (const juce::MouseEvent& e) override
     {

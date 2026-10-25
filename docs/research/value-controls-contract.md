@@ -23,6 +23,7 @@ Halftrack's knobs, faders and number fields take the reference's value gestures:
   - Its loop length steps bars, beats or sixteenths, at least a sixteenth.
   - Its song position steps bars, beats or sixteenths and moves the insert marker, as do the arrow keys and a typed position, as the reference's Arrangement Position fields do (manual section 6.3: drag up or down, type a number and press Enter, or use the up and down arrow keys; adjusting them moves the insert marker). While playing, playback goes on and the insert marker moves. Neither is an undo step. During a count-in the field shows the count and does not drag.
   - The clip's Start, End, Loop Position and Loop Length step bars, beats or sixteenths. End stays after the start, and a length at least a 64th of a beat.
+  - A scene's tempo and time signature fields in the Session drag the same way, from the scene's own value or else the song's ([scene tempo](scene-tempo-contract.md)). They do not take the value keys.
   - An audio clip's tempo steps its whole beats or hundredths, from 20 to 999 BPM, a tenth as fast with Shift, as the manual describes its BPM field (section 9.2.4.1: type the BPM, or "hold Shift while dragging" for fine increments).
   - A click without a drag selects the field, a double-click edits its text, and an uneditable field (the tempo while it is automated) does not drag. The clip's fields, edited before on a single click, now take a double-click, as the Control Bar's do.
 - **The control clicked last** takes the value keys until a click elsewhere in the window (`MainComponent`'s `valueKey`):
@@ -35,7 +36,7 @@ Halftrack's knobs, faders and number fields take the reference's value gestures:
   - **On a number field**, Up and Down step the part clicked; with Shift, the last part, for a fine adjustment, except the time signature's, whose numbers do not run from coarse to fine. Typing starts editing its text with what is typed, which Return sets and Escape leaves.
   - Each change from the keys is one undo step, as a drag is.
   - Keys with Cmd, Ctrl or Option, and any other key, go on to the window.
-- **Missing.** The scenes' tempo and signature are not number fields yet. Neither do "." and "," move between a position's fields while typing. Halftrack draws no mark on the control clicked last.
+- **Missing.** The scenes' tempo and signature fields do not take the value keys. Neither do "." and "," move between a position's fields while typing. Halftrack draws no mark on the control clicked last.
 
 ## Evidence in Halftrack
 
@@ -55,4 +56,5 @@ The UI suite checks:
 - that dragging the song position's bars up two steps moves the insert marker to bar 3, Up a bar further, and a typed 2.2.1 moves it there;
 - that dragging the signature's numerator and denominator up makes 5/4 and then 5/8, and Shift+Up steps the denominator clicked;
 - that dragging the clip's Length field's beats up three steps lengthens its loop three beats in one undo step;
-- that dragging an audio clip's tempo's whole beats up two steps adds 2 BPM in one undo step.
+- that dragging an audio clip's tempo's whole beats up two steps adds 2 BPM in one undo step;
+- that dragging a scene's tempo's whole beats up three steps makes it 143 without asking, its hundredths with Shift a tenth as fast, and its signature's denominator down a step makes 7/4, each one undo step.

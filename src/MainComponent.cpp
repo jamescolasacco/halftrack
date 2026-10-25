@@ -749,14 +749,7 @@ public:
         meterLabel.onDragStart = [this] { meterDragFrom = state.timeSignature; session.beginEditGesture ("Time signature"); };
         meterLabel.onDrag = [this] (int part, int steps)
         {
-            auto meter = meterDragFrom;
-            if (part == 0) meter.numerator = juce::jlimit (1, 99, meter.numerator + steps);
-            else
-            {
-                int power = 0;
-                while ((1 << power) < meter.denominator && power < 4) ++power;
-                meter.denominator = 1 << juce::jlimit (0, 4, power + steps);
-            }
+            const auto meter = steppedMeter (meterDragFrom, part, steps);
             report (session.setTimeSignature (meter.numerator, meter.denominator)); refresh();
         };
         loopStartLabel.onDragStart = [this] { fieldDragFrom = beatsAt (state.loopStart); fieldDragLength = state.loopEnd - state.loopStart; session.beginEditGesture ("Loop start"); };
@@ -5828,7 +5821,15 @@ private:
                 owner.selectedSceneId = owner.state.scenes[(size_t) scene].id;
                 if (const auto [tempoField, signatureField] = sceneFields (scene); owner.state.sceneSettingsShown && ! event.mods.isPopupMenu()
                     && (tempoField.contains (event.getPosition()) || signatureField.contains (event.getPosition())))
-                { repaint(); owner.sceneSettingsDialog (scene, tempoField.contains (event.getPosition())); return; }
+                {
+                    const bool tempo = tempoField.contains (event.getPosition());
+                    const auto& info = owner.state.scenes[(size_t) scene];
+                    const auto parts = numberParts (font (9.5f), tempo ? owner.sceneTempoText (info) : owner.sceneSignatureText (info),
+                                                    (tempo ? tempoField : signatureField).toFloat(), juce::Justification::centred);
+                    sceneFieldDrag = SceneFieldDrag { scene, tempo, numberPartAt (parts, event.position.x), info.tempo.value_or (owner.state.tempo),
+                                                      info.timeSignature.value_or (owner.state.timeSignature), 0, event.position.y };
+                    repaint(); return;
+                }
                 if (! event.mods.isPopupMenu() && event.x - masterX() >= 22) scenePressed = owner.state.scenes[(size_t) scene].id;
                 if (event.mods.isPopupMenu())
                 {
@@ -5903,6 +5904,20 @@ private:
         bool titlePressed() const { return headerPressed.isNotEmpty(); }
         bool onScene (juce::Point<int> point) const { return sceneAt (point) >= 0; }
         // A scene's tempo and time signature fields, at the right of its cell while they show.
+        // A drag on a scene's tempo or time signature field, which steps the part pressed as a number field
+        // does (see ValueField), from the scene's own value or the song's; a click without one asks for it.
+        struct SceneFieldDrag
+        {
+            int scene = -1;
+            bool tempo = true;
+            int part = 0;
+            double tempoFrom = 120;
+            Session::TimeSignature meterFrom;
+            int steps = 0;
+            float lastY = 0, travel = 0;
+            bool dragging = false;
+        };
+        std::optional<SceneFieldDrag> sceneFieldDrag;
         std::pair<juce::Rectangle<int>, juce::Rectangle<int>> sceneFields (int scene) const
         {
             auto cell = juce::Rectangle<int> (masterX(), sceneY (scene), sceneWidth, rowHeight).reduced (1, 0).withTrimmedBottom (1).withTrimmedRight (3);
@@ -5930,6 +5945,20 @@ private:
         void mouseExit (const juce::MouseEvent&) override { getProperties().set (infoTextProperty, juce::String()); }
         void mouseDrag (const juce::MouseEvent& event) override
         {
+            if (sceneFieldDrag)
+            {
+                auto& drag = *sceneFieldDrag;
+                drag.travel += (drag.lastY - event.position.y) * (event.mods.isShiftDown() ? 0.1f : 1.0f);
+                drag.lastY = event.position.y;
+                const auto steps = (int) (drag.travel / ValueField::pixelsPerStep);
+                if (steps == drag.steps || ! juce::isPositiveAndBelow (drag.scene, (int) owner.state.scenes.size())) return;
+                if (! std::exchange (drag.dragging, true)) owner.session.beginEditGesture (drag.tempo ? "Scene tempo" : "Scene time signature");
+                drag.steps = steps;
+                const auto id = owner.state.scenes[(size_t) drag.scene].id;
+                if (drag.tempo) owner.report (owner.session.setSceneTempo (id, juce::jlimit (20.0, 999.0, drag.tempoFrom + steps * (drag.part == 0 ? 1.0 : 0.01))));
+                else owner.report (owner.session.setSceneTimeSignature (id, Impl::steppedMeter (drag.meterFrom, drag.part, steps)));
+                owner.refresh(); return;
+            }
             if (widthColumn.isNotEmpty())
             {
                 const auto width = juce::jlimit (Session::minimumSessionWidth, Session::maximumSessionWidth, widthAtDown + event.getDistanceFromDragStartX());
@@ -5982,6 +6011,12 @@ private:
         }
         void mouseUp (const juce::MouseEvent& event) override
         {
+            if (const auto drag = std::exchange (sceneFieldDrag, std::nullopt))
+            {
+                if (drag->dragging) { owner.session.endEditGesture(); owner.refresh(); }
+                else owner.sceneSettingsDialog (drag->scene, drag->tempo);
+                return;
+            }
             if (std::exchange (volumeAtDown, -1) >= 0) return;
             if (std::exchange (widthColumn, {}).isNotEmpty()) return;
             if (const auto scene = std::exchange (scenePressed, {}); scene.isNotEmpty())
@@ -13899,6 +13934,16 @@ private:
     {
         const auto bar = barAt (beats);
         return formatMusicalTime (bar.number * bar.meter.beatsPerBar() + (beats - bar.start), true, bar.meter);
+    }
+    // A time signature with its numerator (part 0, from 1 to 99) or denominator (1, 2, 4, 8 or 16)
+    // stepped, as dragging a part of it steps it.
+    static Session::TimeSignature steppedMeter (Session::TimeSignature meter, int part, int steps)
+    {
+        if (part == 0) { meter.numerator = juce::jlimit (1, 99, meter.numerator + steps); return meter; }
+        int power = 0;
+        while ((1 << power) < meter.denominator && power < 4) ++power;
+        meter.denominator = 1 << juce::jlimit (0, 4, power + steps);
+        return meter;
     }
     // A position some bars, beats or sixteenths on, as dragging a part of it steps it. A bar step keeps
     // the place within the bar, through meter changes.
@@ -25851,8 +25896,10 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         {
             const auto [tempoField, signatureField] = launcher.sceneFields (1);
             const auto now = juce::Time::getCurrentTime();
-            const auto click = [&] (juce::Point<int> at)
-            { launcher.mouseDown (juce::MouseEvent (juce::Desktop::getInstance().getMainMouseSource(), at.toFloat(), juce::ModifierKeys (juce::ModifierKeys::leftButtonModifier), 1.0f, 0, 0, 0, 0, &launcher, &launcher, now, at.toFloat(), now, 1, false)); };
+            const auto event = [&] (juce::Point<float> at, juce::Point<float> from, bool dragged, bool shift)
+            { return juce::MouseEvent (juce::Desktop::getInstance().getMainMouseSource(), at, juce::ModifierKeys (juce::ModifierKeys::leftButtonModifier | (shift ? juce::ModifierKeys::shiftModifier : 0)),
+                                       1.0f, 0, 0, 0, 0, &launcher, &launcher, now, from, now, 1, dragged); };
+            const auto click = [&] (juce::Point<int> at) { launcher.mouseDown (event (at.toFloat(), at.toFloat(), false, false)); launcher.mouseUp (event (at.toFloat(), at.toFloat(), false, false)); };
             check (sceneTempoText (state.scenes[1]) == juce::String (state.tempo, 2), "an unset tempo field shows the song's tempo, dimmed");
             click (tempoField.getCentre());
             check (alerts.size() == sceneAlerts + 1 && alerts.back()->getTextEditor ("value")->getText().isEmpty(), "a click on the tempo field asks for the scene's tempo");
@@ -25860,6 +25907,26 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
             check (state.scenes[1].tempo == 140.0 && sceneTempoText (state.scenes[1]) == "140.00", "the dialog sets the scene's tempo, which its field shows");
             click (signatureField.getCentre()); answer ("7/8");
             check (state.scenes[1].timeSignature == Session::TimeSignature { 7, 8 } && sceneSignatureText (state.scenes[1]) == "7/8", "and a click on the time signature field sets that");
+            // Dragging a part of either field steps it, as the Control Bar's fields drag, one undo step.
+            const auto dragPart = [&] (juce::Rectangle<int> field, const juce::String& text, int part, float up, bool shift)
+            {
+                const auto parts = numberParts (font (9.5f), text, field.toFloat(), juce::Justification::centred);
+                const auto from = juce::isPositiveAndBelow (part, (int) parts.size()) ? parts[(size_t) part].getCentre() : field.getCentre().toFloat();
+                launcher.mouseDown (event (from, from, false, shift)); launcher.mouseDrag (event (from.translated (0, -up), from, true, shift));
+                launcher.mouseUp (event (from.translated (0, -up), from, true, shift)); refresh();
+                return parts.size();
+            };
+            const auto alertsBefore = alerts.size();
+            auto steps = session.undoSteps().size();
+            check (dragPart (tempoField, sceneTempoText (state.scenes[1]), 0, 3 * ValueField::pixelsPerStep, false) == 2 && state.scenes[1].tempo == 143.0
+                       && session.undoSteps().size() == steps + 1 && alerts.size() == alertsBefore,
+                   "dragging the scene tempo's whole beats up three steps makes it 143, one undo step, without asking");
+            dragPart (tempoField, sceneTempoText (state.scenes[1]), 1, 10 * ValueField::pixelsPerStep, true);
+            check (state.scenes[1].tempo.has_value() && std::abs (*state.scenes[1].tempo - 143.01) < 1e-9, "its hundredths, with Shift a tenth as fast");
+            dragPart (signatureField, sceneSignatureText (state.scenes[1]), 1, -ValueField::pixelsPerStep, false);
+            check (state.scenes[1].timeSignature == Session::TimeSignature { 7, 4 }, "and dragging the time signature's denominator down a step makes it 7/4");
+            session.undo(); session.undo(); session.undo(); refresh();
+            check (state.scenes[1].tempo == 140.0 && state.scenes[1].timeSignature == Session::TimeSignature { 7, 8 }, "each drag is one undo step");
         }
         if (const auto* configured = std::getenv ("HALFTRACK_TEST_UI_SNAPSHOT_DIRECTORY"))
             if (const juce::File directory (juce::String::fromUTF8 (configured)); directory.createDirectory().wasOk())

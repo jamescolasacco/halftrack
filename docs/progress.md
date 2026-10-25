@@ -2765,3 +2765,7 @@ UI and root areas. Every knob and fader is now a `ValueSlider` (`src/ValueContro
 ## Number fields — 2026-10-25
 
 UI area. The Control Bar's tempo, time signature, song position, loop start and loop length, and the clip's Start, End, Loop Position, Loop Length and audio tempo, are now `ValueField`s that drag by their parts as the reference's fields do: a tempo's whole beats or hundredths, a signature's numbers, and a position's bars, beats or sixteenths, a tenth as fast with Shift, each drag one undo step; the song position moves the insert marker, as the reference's Arrangement Position does. The field clicked last takes the arrow keys (Shift steps the last part) and typing ([contract](research/value-controls-contract.md)). Checked in the UI suite.
+
+## Scene field drags — 2026-10-25
+
+UI area. A scene's tempo and time signature fields in the Session drag by their parts as the Control Bar's do, from the scene's own value or the song's, each drag one undo step; a click without a drag still opens the dialog, now on release ([scene tempo contract](research/scene-tempo-contract.md)). Checked in the UI suite.
