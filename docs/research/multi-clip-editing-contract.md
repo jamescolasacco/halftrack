@@ -22,6 +22,10 @@ Halftrack's multi-clip editing follows the reference's MIDI editor showing sever
   - The clips loop together from their loop starts. The editor shows the passes they take to come round together again: the least common multiple of their loop lengths, on a 960th of a beat, and at most 64 times the longest loop.
   - The other clips' notes show at each pass round their loops, and the edited clip's later passes show dimmed.
   - Clicking another shown clip's note edits that clip and keeps the selection. Focus works as in the Arrangement.
+- **Loop bars** (2026-10-26), as the manual describes them (section 10.8):
+  - While clips show together, a loop bar for each sits between the ruler and the notes, in its clip's colour. The edited clip's bar is outlined.
+  - In the Session, each clip has a row, ordered by track then scene; its bar is its loop from the shared start. In the Arrangement, each track has a row, its clips side by side by time; each bar spans what its clip plays, with its loop along the top.
+  - A click on a bar edits its clip. Dragging a loop's end changes that clip's loop length, on the note grid unless the grid is bypassed, in one undo step. The edited clip stays the same.
 - **Scope.** Shown clips can be on different tracks.
 
 ## Evidence
@@ -37,9 +41,16 @@ The UI suite:
 - with Focus off, Shift-clicks the other clip's note, both notes then selected, and raises both a semitone with Up, drags both a beat later and deletes both, each one undo step;
 - turns Focus on with N, finds a click on the other clip's note selecting only that note, and turns it off again;
 - checks that a plain click returns to one clip;
-- selects a four-beat and a six-beat Session clip, each with a note at its start, and finds the six-beat clip's note at beats 0 and 6 over a twelve-beat span, the edited clip's own note dimmed at beats 4 and 8, the other clip becoming the edited one with both still shown, and one selected clip editing alone again.
+- selects a four-beat and a six-beat Session clip, each with a note at its start, and finds:
+  - the six-beat clip's note at beats 0 and 6 over a twelve-beat span, and the edited clip's own note dimmed at beats 4 and 8;
+  - a loop bar for each in its own row, pushing the notes down;
+  - dragging the six-beat bar's end two beats on making that loop eight beats long, while the edited clip stays the same;
+  - a click on that bar editing its clip;
+  - the other clip becoming the edited one with both still shown;
+  - and one selected clip editing alone again, without loop bars.
 
 ## Not yet covered
 
-- The reference's per-clip loop bars, its limit of eight Arrangement tracks, and Fold to Notes over every shown clip are missing.
+- Some loop bar features are missing: selecting several bars (Cmd and Shift), duplicating them (Cmd+D and their menu), setting their height, and dragging a loop's start.
+- The reference's limit of eight Arrangement tracks, and Fold to Notes over every shown clip, are missing.
 - Neither the shading of each clip's area outside its loop in Session multi-clip editing nor its loop markers on hover is drawn.

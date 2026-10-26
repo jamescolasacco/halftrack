@@ -9142,6 +9142,8 @@ private:
             scaleRoot.setSelectedId (scale.root + 1, juce::dontSendNotification); scaleMode.setSelectedId (scale.mode + 1, juce::dontSendNotification);
             for (auto* c : std::initializer_list<juce::Component*> { &scaleButton, &scaleRoot, &scaleMode }) c->setEnabled (active);
             reportSelection();
+            // Loop bars, while clips show together, push the notes down.
+            if (const auto top = rulerBottom + loopBarRows() * loopBarHeight; top != gridTop) { gridTop = top; resized(); }
             updateScroll(); repaint(); laneView.repaint();
         }
         // The selection, by clip, told to the Session, whose edits of the selected notes resolve overlaps as one session
@@ -9402,16 +9404,36 @@ private:
                     g.setColour (loopBraceSelected ? orange : themes::colour (0xffb4b4b4)); g.fillRect (from, (float) headerHeight + 1, to - from, 4.0f);
                 }
                 const auto startX = (float) (keysWidth + (clip->contentStartBeat - viewBeat) * pixelsPerBeat);
-                juce::Path flag; flag.addTriangle (startX, (float) gridTop - 10, startX + 8, (float) gridTop - 5, startX, (float) gridTop);
+                juce::Path flag; flag.addTriangle (startX, (float) rulerBottom - 10, startX + 8, (float) rulerBottom - 5, startX, (float) rulerBottom);
                 g.setColour (startMarkerSelected ? orange : ink); g.fillPath (flag);
                 if (clip->follow.enabled && ! clip->follow.linked)
-                    drawFollowMarker (g, (float) (keysWidth + (clip->contentStartBeat + clip->follow.timeBeats - viewBeat) * pixelsPerBeat), (float) gridTop);
+                    drawFollowMarker (g, (float) (keysWidth + (clip->contentStartBeat + clip->follow.timeBeats - viewBeat) * pixelsPerBeat), (float) rulerBottom);
+                g.restoreState();
+            }
+            // Loop bars, while clips show together: each clip's span, its loop along the top with its end's handle.
+            if (gridTop > rulerBottom)
+            {
+                g.setColour (themes::colour (0xff262626)); g.fillRect (0, rulerBottom, getWidth(), gridTop - rulerBottom);
+                g.saveState(); g.reduceClipRegion (keysWidth, rulerBottom, grid.getWidth(), gridTop - rulerBottom);
+                for (const auto& bar : loopBars())
+                {
+                    const auto r = loopBarBounds (bar);
+                    const bool edited = bar.clip == clip;
+                    g.setColour (bar.clip->colour.withAlpha (edited ? 0.55f : 0.3f)); g.fillRect (r);
+                    if (bar.loop)
+                    {
+                        const auto from = (float) (keysWidth + (bar.loop->first - viewBeat) * pixelsPerBeat), to = (float) (keysWidth + (bar.loop->second - viewBeat) * pixelsPerBeat);
+                        g.setColour (bar.clip->colour.withAlpha (edited ? 1.0f : 0.75f));
+                        g.fillRect (from, r.getY(), to - from, 4.0f); g.fillRect (to - 2, r.getY(), 2.0f, r.getHeight());
+                    }
+                    if (edited) { g.setColour (ink); g.drawRect (r, 1.0f); }
+                }
                 g.restoreState();
             }
             if (insertX >= grid.getX() && insertX <= grid.getRight())
             {
                 juce::Path marker;
-                marker.addTriangle (insertX - 5, (float) gridTop - 8, insertX + 5, (float) gridTop - 8, insertX, (float) gridTop);
+                marker.addTriangle (insertX - 5, (float) rulerBottom - 8, insertX + 5, (float) rulerBottom - 8, insertX, (float) rulerBottom);
                 g.setColour (orange); g.fillPath (marker);
             }
             if (splitLine) { g.setColour (orange); g.drawLine ({ splitLine->first, splitLine->second }, 1.5f); } // The line a split drag draws.
@@ -9456,6 +9478,7 @@ private:
                 sound ({ { keyPitch, keyVelocity } });
                 return;
             }
+            if (e.y >= rulerBottom && e.y < gridTop) { pressLoopBar (e.position); return; }
             // The loop brace and the start marker drag; the rest of the ruler places the insert marker. A click
             // on the brace also selects it for its keys (see braceKey); a click elsewhere lets it go.
             loopBraceSelected = braceAt (*clip, e.position) == 3 || braceAt (*clip, e.position) == 1 || braceAt (*clip, e.position) == 2;
@@ -9467,7 +9490,7 @@ private:
                 dragOrigin = e.position; dragClipId = clip->id;
                 return;
             }
-            if (e.y >= headerHeight && e.y < gridTop)
+            if (e.y >= headerHeight && e.y < rulerBottom)
             {
                 grabKeyboardFocus(); endGesture();
                 // Cmd-click moves the start marker there and Cmd+Shift-click the end marker, as the reference's
@@ -9570,6 +9593,7 @@ private:
         }
         void mouseDrag (const juce::MouseEvent& e) override
         {
+            if (loopBarClip.isNotEmpty()) { dragLoopBar (e); return; }
             if (keyPitch >= 0)
             {
                 // Dragging across the keys sets the key tracks' height, taller to the right, as the reference's note
@@ -9732,7 +9756,7 @@ private:
             if (auto line = std::exchange (splitLine, std::nullopt)) { line->second = e.position; splitAlong (*line, e.mods.isCommandDown()); repaint(); return; }
             if (std::exchange (panView, std::nullopt)) return;
             if (std::exchange (chopDrag, std::nullopt)) { if (std::exchange (chopFromMouse, false)) endGesture(); repaint(); return; }
-            endGesture(); drawing = false; erasing = false; drawn.clear(); originalNotes.clear(); braceDrag = 0;
+            endGesture(); drawing = false; erasing = false; drawn.clear(); originalNotes.clear(); braceDrag = 0; loopBarClip.clear();
             updateRows(); updateScroll(); repaint();
             if (marquee)
             {
@@ -9899,12 +9923,100 @@ private:
         }
         int topShownPitch() const { return pitchAtRow (topRow()); }
         double beatWidth() const { return pixelsPerBeat; }
+        // Loop bars, as the reference's multi-clip editing shows them (its manual, section 10.8): with clips shown together,
+        // a row for each Session clip (by track, then scene) or each Arrangement track (its clips side by side, by time),
+        // between the ruler and the notes, in the clip's colour. Each bar spans what its clip plays against the edited clip,
+        // its loop marked; in the Session that is its loop from the shared start. A click edits the bar's clip, and its
+        // loop's end drags that loop's length.
+        struct LoopBar { const Session::ClipInfo* clip; int row; double from, to; std::optional<std::pair<double, double>> loop; };
+        std::vector<LoopBar> loopBars() const
+        {
+            std::vector<LoopBar> bars;
+            const auto* clip = owner.currentMidiClip();
+            auto clips = owner.extraMidiClips();
+            if (clip == nullptr || clips.empty()) return bars;
+            clips.push_back (clip);
+            if (sessionClips())
+            {
+                std::sort (clips.begin(), clips.end(), [this] (const auto* a, const auto* b) { return owner.locateSlotClip (a->id) < owner.locateSlotClip (b->id); });
+                for (int row = 0; row < (int) clips.size(); ++row)
+                {
+                    const auto* c = clips[(size_t) row];
+                    const auto from = clip->loop.start;
+                    bars.push_back ({ c, row, from, from + c->loop.length, std::pair { from, from + c->loop.length } });
+                }
+                return bars;
+            }
+            std::map<int, int> rows; // By track index.
+            for (const auto* c : clips) rows[owner.locateClip (c->id).first] = 0;
+            int next = 0;
+            for (auto& [track, row] : rows) row = next++;
+            for (const auto* c : clips)
+            {
+                const auto from = c->startBeat - clip->startBeat + clip->contentStartBeat;
+                LoopBar bar { c, rows[owner.locateClip (c->id).first], from, from + c->lengthBeats, std::nullopt };
+                if (c->loop.on) { const auto start = from + c->loop.start - c->contentStartBeat; bar.loop = std::pair { start, start + c->loop.length }; }
+                bars.push_back (bar);
+            }
+            return bars;
+        }
+        // Where the notes begin, and the ruler's foot and a loop bar's height, which put it there.
+        int notesTop() const noexcept { return gridTop; }
+        static constexpr int rulerFoot() noexcept { return rulerBottom; }
+        static constexpr int loopBarRowHeight() noexcept { return loopBarHeight; }
+        int loopBarRows() const
+        {
+            int rows = 0;
+            for (const auto& bar : loopBars()) rows = std::max (rows, bar.row + 1);
+            return rows;
+        }
+        juce::Rectangle<float> loopBarBounds (const LoopBar& bar) const
+        {
+            const auto at = [this] (double beat) { return (float) (keysWidth + (beat - viewBeat) * pixelsPerBeat); };
+            return juce::Rectangle<float>::leftTopRightBottom (at (bar.from), (float) (rulerBottom + bar.row * loopBarHeight), at (bar.to),
+                                                               (float) (rulerBottom + (bar.row + 1) * loopBarHeight - 1));
+        }
+        // A press on a loop bar: near its loop's end it takes the loop's length, elsewhere it edits its clip.
+        void pressLoopBar (juce::Point<float> at)
+        {
+            for (const auto& bar : loopBars())
+            {
+                const auto bounds = loopBarBounds (bar);
+                if (at.y < bounds.getY() || at.y > bounds.getBottom() + 1) continue;
+                const auto end = bar.loop ? (float) (keysWidth + (bar.loop->second - viewBeat) * pixelsPerBeat) : -1.0e9f;
+                if (bar.loop && std::abs (at.x - end) <= 4)
+                {
+                    grabKeyboardFocus(); endGesture();
+                    loopBarClip = bar.clip->id; loopBarOrigin = bar.clip->loop; loopBarStart = bar.clip->contentStartBeat; dragOrigin = at;
+                    return;
+                }
+                if (at.x >= bounds.getX() && at.x <= bounds.getRight())
+                {
+                    if (bar.clip != owner.currentMidiClip()) owner.focusMidiClip (bar.clip->id);
+                    return;
+                }
+            }
+        }
+        void dragLoopBar (const juce::MouseEvent& e)
+        {
+            const auto snap = [&] (double beat) { return ! snapsNotes (e.mods) ? beat : std::round (beat / snapBeats()) * snapBeats(); };
+            auto loop = loopBarOrigin;
+            loop.length = std::max (! snapsNotes (e.mods) ? 1.0 / 64 : snapBeats(), snap (loopBarOrigin.length + (e.position.x - dragOrigin.x) / pixelsPerBeat));
+            const auto start = juce::jlimit (loop.start, loop.start + loop.length - 1.0 / 1024, loopBarStart);
+            const auto* shown = shownClip (loopBarClip);
+            if (shown == nullptr || (shown->loop == loop && std::abs (shown->contentStartBeat - start) < 1e-9)) return;
+            if (! gesture) { owner.session.beginEditGesture ("Move clip loop"); gesture = true; }
+            owner.report (owner.session.setClipLoop (loopBarClip, loop, start)); owner.refresh();
+        }
+        juce::String loopBarClip; // The clip whose loop bar's end a drag moves.
+        Session::ClipLoop loopBarOrigin;
+        double loopBarStart = 0;
         // Where the shown clip's Follow Action time marker stands on the ruler: its time after the start marker.
         juce::Point<float> followMarker() const
         {
             const auto* clip = owner.currentMidiClip();
             const auto beat = clip != nullptr ? clip->contentStartBeat + clip->follow.timeBeats : 0.0;
-            return { (float) (keysWidth + (beat - viewBeat) * pixelsPerBeat), (float) gridTop - 5 };
+            return { (float) (keysWidth + (beat - viewBeat) * pixelsPerBeat), (float) rulerBottom - 5 };
         }
         // Whether the loop brace was clicked last, so it takes its keys (see braceKey).
         bool loopBraceSelected = false;
@@ -10031,7 +10143,8 @@ private:
         }
     private:
         Impl& owner;
-        static constexpr int headerHeight = 37, rulerHeight = 23, gridTop = headerHeight + rulerHeight, keysWidth = 55, scrollSize = 11;
+        static constexpr int headerHeight = 37, rulerHeight = 23, rulerBottom = headerHeight + rulerHeight, keysWidth = 55, scrollSize = 11, loopBarHeight = 9;
+        int gridTop = rulerBottom; // Lower while loop bars show between the ruler and the notes (see loopBars).
         // The key tracks' height, which the note ruler, Option-scrolling, H and double-clicking the keys change.
         static constexpr int defaultRowHeight = 15, minimumRowHeight = 4, maximumRowHeight = 48;
         int rowHeight = defaultRowHeight;
@@ -10119,9 +10232,9 @@ private:
         }
         int braceAt (const Session::ClipInfo& clip, juce::Point<float> p) const
         {
-            if (p.y < headerHeight || p.y >= gridTop) return 0;
+            if (p.y < headerHeight || p.y >= rulerBottom) return 0;
             const auto at = [this] (double beat) { return (float) (keysWidth + (beat - viewBeat) * pixelsPerBeat); };
-            if (p.y >= gridTop - 11)
+            if (p.y >= rulerBottom - 11)
             {
                 // The nearer of the start marker and the Follow Action time's.
                 const auto start = std::abs (p.x - at (clip.contentStartBeat));
@@ -14649,6 +14762,14 @@ private:
     std::vector<juce::String> extraMidiClipIds;
     bool isExtraMidiClip (const juce::String& id) const
     { return std::find (extraMidiClipIds.begin(), extraMidiClipIds.end(), id) != extraMidiClipIds.end(); }
+    // A Session clip's track and scene, or -1s.
+    std::pair<int, int> locateSlotClip (const juce::String& id) const
+    {
+        for (int t = 0; t < (int) state.tracks.size(); ++t)
+            for (int sc = 0; sc < (int) state.tracks[(size_t) t].slots.size(); ++sc)
+                if (const auto& slot = state.tracks[(size_t) t].slots[(size_t) sc]; slot.hasClip && slot.clip.id == id) return { t, sc };
+        return { -1, -1 };
+    }
     std::pair<int, int> locateClip (const juce::String& id) const
     {
         for (int t = 0; t < (int) state.tracks.size(); ++t)
@@ -23591,11 +23712,33 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
             beats.clear();
             for (const auto& pass : pianoRoll.loopPasses (*currentMidiClip(), 1)) beats.push_back (pass.beat);
             check (beats == std::vector<double> { 4, 8 }, "and the edited clip's own note at its later passes");
+            {
+                // Loop bars, between the ruler and the notes: a row for each clip, by track then scene.
+                const auto bars = pianoRoll.loopBars();
+                check (bars.size() == 2 && bars[0].clip->id == four.id && bars[1].clip->id == six.id && bars[1].row == 1 && pianoRoll.loopBarRows() == 2
+                           && pianoRoll.notesTop() == PianoRoll::rulerFoot() + 2 * PianoRoll::loopBarRowHeight(),
+                       "each clip has a loop bar, in its own row, pushing the notes down");
+                const auto bar = pianoRoll.loopBarBounds (bars[1]);
+                const auto at = [&] (juce::Point<float> p, bool dragged)
+                {
+                    const auto now = juce::Time::getCurrentTime();
+                    return juce::MouseEvent (juce::Desktop::getInstance().getMainMouseSource(), p, juce::ModifierKeys (juce::ModifierKeys::leftButtonModifier), 1.0f, 0, 0, 0, 0,
+                                             &pianoRoll, &pianoRoll, now, p, now, 1, dragged);
+                };
+                const auto end = juce::Point<float> (bar.getRight() - 1, bar.getCentreY()), longer = end.translated ((float) (2 * pianoRoll.beatWidth()), 0);
+                pianoRoll.mouseDown (at (end, false)); pianoRoll.mouseDrag (at (longer, true)); pianoRoll.mouseUp (at (longer, true)); refresh();
+                const auto lengthened = state.tracks[(size_t) lane].slots[1].clip.loop;
+                check (std::abs (lengthened.length - 8) < 1e-6 && currentMidiClip()->id == four.id, "dragging a loop bar's end lengthens that clip's loop, the edited clip kept");
+                session.undo(); refresh();
+                pianoRoll.mouseDown (at (bar.getCentre().translated (-20, 0), false)); pianoRoll.mouseUp (at (bar.getCentre().translated (-20, 0), false)); refresh();
+                check (currentMidiClip()->id == six.id, "clicking a loop bar edits its clip");
+                focusMidiClip (four.id);
+            }
             focusMidiClip (six.id);
             check (currentMidiClip()->id == six.id && extraMidiClips().size() == 1 && extraMidiClips().front()->id == four.id && selectedSlots.size() == 2,
                    "making the other clip the edited one keeps both shown");
             selectedSlots.clear(); selectLauncherSlot (lane, 0); refresh();
-            check (extraMidiClips().empty(), "one clip selected edits alone again");
+            check (extraMidiClips().empty() && pianoRoll.notesTop() == PianoRoll::rulerFoot(), "one clip selected edits alone again, without loop bars");
             closeClipView(); showArrangementView(); refresh();
         }
         check (session.removeTrack (lane).wasOk(), "remove the multi-clip track"); refresh();
