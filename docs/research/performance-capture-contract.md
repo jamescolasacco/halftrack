@@ -12,6 +12,7 @@ As in the reference, pressing Arrangement Record while Session clips play record
   - the Arrangement material in that range is split out and replaced, where it can be split.
 
   All of it joins the take's single "Record take" undo step.
+- **Clip automation** (2026-10-26). A played Session clip's automation envelopes are written into its track's lanes over the span it played, as the manual says Session clip automation is always recorded to the Arrangement ([clip envelopes](clip-envelopes-contract.md)).
 
 ## Evidence
 

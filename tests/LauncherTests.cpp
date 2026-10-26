@@ -652,6 +652,9 @@ void performanceTests()
         for (const auto& t : snapshot.tracks) if (t.id == track) ok (session.addMidiNote (t.slots[(size_t) scene].clip.id, pitch, 0, .25, 1), "a note in it");
     };
     slotNote (a, 0, 1, 60); slotNote (a, 1, 2, 64); slotNote (b, 0, 1, 67);
+    // Scene 1's clip on A automates A's volume, which the recording writes into A's lane, as the reference's does.
+    ok (session.setClipEnvelope (session.snapshot().tracks[(size_t) ai].slots[0].clip.id, { { {}, 0 }, Session::EnvelopeMode::automation, { { 0, -12 } } }),
+        "A's first Session clip sets its volume to -12 dB");
     ok (session.addMidiClip (a, 0, 8), "an Arrangement clip under the performance");
     ok (session.addMidiNote (session.snapshot().tracks[(size_t) ai].clips[0].id, 50, 0, 8, 1), "with its own note");
     ok (session.setLaunchQuantisation (Session::LaunchQuantisation::beat), "a beat launch grid");
@@ -677,6 +680,14 @@ void performanceTests()
            "A's Arrangement holds each Session clip where it played, replacing the old clip there");
     clips = clipsOf (bi);
     check (clips.size() == 1 && pitch (clips[0]) == 67 && near (clips[0].start, .25) && near (clips[0].length, 1.75), "B holds its clip until it stopped");
+    {
+        const auto lane = session.snapshot().tracks[(size_t) ai].volumeAutomation.points;
+        const auto recorded = clipsOf (ai);
+        check (std::any_of (lane.begin(), lane.end(), [] (const auto& p) { return std::abs (p.beat - .5) < 2e-3 && std::abs (p.value + 12) < .05f; })
+                   && std::any_of (lane.begin(), lane.end(), [] (const auto& p) { return std::abs (p.beat - 2 + 1.0 / 960) < 2e-3 && std::abs (p.value + 12) < .05f; })
+                   && std::none_of (recorded.begin(), recorded.end(), [] (const auto& c) { return std::any_of (c.envelopes.begin(), c.envelopes.end(), [] (const auto& e) { return e.mode == Session::EnvelopeMode::automation; }); }),
+               "the first clip's volume automation is in A's lane where it played, not in the recorded clip");
+    }
     session.undo();
     check (clipsOf (ai).size() == 1 && pitch (clipsOf (ai)[0]) == 50 && clipsOf (bi).empty(), "one undo removes the recorded performance");
     session.redo();

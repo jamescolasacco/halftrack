@@ -3789,7 +3789,7 @@ struct Session::Impl
                 state.setProperty (te::IDs::start, from.inSeconds(), nullptr);
                 state.setProperty (te::IDs::length, (to - from).inSeconds(), nullptr);
                 state.setProperty (te::IDs::offset, (change.offset + (from - change.at)).inSeconds(), nullptr);
-                track->insertClipWithState (state);
+                if (auto* recorded = track->insertClipWithState (state)) automationToTrack (*recorded);
             }
         }
         performance.clear();
@@ -4565,6 +4565,7 @@ struct Session::Impl
             }
             if (live.midi) clipState.setProperty (te::IDs::sync, te::Clip::syncBarsBeats, nullptr);
             inserted = te::insertClipCopy (*t, te::ClipCopy::fromClipboardState (clipState, false));
+            if (inserted != nullptr) automationToTrack (*inserted);
         }
         else
         {
@@ -6534,6 +6535,102 @@ struct Session::Impl
                                 if (auto& curve = modifier->getCurve (type).curve; curve.getNumPoints() > 0) curves.push_back (&curve);
         }
         return curves;
+    }
+    // A Session clip's automation becomes its track's when the clip lands in the Arrangement, as the reference's manual
+    // describes ("Any automation in Session View becomes track-based automation when clips are recorded or copied into
+    // Arrangement View"): over the clip's span each envelope is written into its control's lane as the clip plays it,
+    // round its loop, the lane keeping what it had outside the span (or the control's value, without a lane). The clip
+    // keeps only its modulation. Part of the current undo step.
+    void automationToTrack (te::Clip& clip)
+    {
+        auto* t = dynamic_cast<te::AudioTrack*> (clip.getTrack());
+        if (t == nullptr || clip.getClipSlot() != nullptr || clip.state.getChildWithName (te::IDs::AUTOMATIONCURVES).getNumChildren() == 0) return;
+        std::vector<Session::ClipEnvelope> envelopes;
+        for (const auto& e : clipEnvelopes (clip)) if (e.mode == Session::EnvelopeMode::automation && ! e.points.empty()) envelopes.push_back (e);
+        if (envelopes.empty()) return;
+        constexpr auto mode = Session::EnvelopeMode::automation;
+        constexpr double gap = 1.0 / 960;
+        auto& tempo = edit->tempoSequence;
+        const double from = tempo.toBeats (clip.getPosition().getStart()).inBeats(), to = tempo.toBeats (clip.getPosition().getEnd()).inBeats();
+        const auto loop = clip.getLoopRangeBeats();
+        const bool looped = clip.isLooping() && loop.getLength().inBeats() > 0;
+        const double offset = std::max (0.0, clip.getOffsetInBeats().inBeats());
+        const juce::ScopedValueSetter<bool> internal (internalAutomationWrite, true), one (composite, true);
+        for (const auto& envelope : envelopes)
+        {
+            te::Plugin* device = nullptr;
+            auto* parameter = envelopeParameter (*t, envelope.target, &device);
+            const auto lane = laneFor (envelopeKey (*t, envelope.target));
+            if (! lane || parameter == nullptr) continue;
+            const auto& p = envelope.points;
+            const auto curve = [&] (float v) { return envelopeToCurve (envelope.target, mode, device, v); };
+            const auto [low, high] = envelopeRange (envelope.target, mode, device);
+            const auto valueAt = [&] (double c)
+            {
+                if (c <= p.front().beat) return p.front().value;
+                for (size_t i = 1; i < p.size(); ++i)
+                    if (c <= p[i].beat)
+                    {
+                        const auto k = (c - p[i - 1].beat) / (p[i].beat - p[i - 1].beat);
+                        return juce::jlimit (low, high, curveToEnvelope (envelope.target, mode, device, (float) (curve (p[i - 1].value) + k * (curve (p[i].value) - curve (p[i - 1].value)))));
+                    }
+                return p.back().value;
+            };
+            // Where the envelope reads as the clip plays: a linked one from the clip's content, round its loop; an unlinked
+            // one round its own length from the clip's start.
+            double period = 0, wrapStart = 0, c = offset;
+            if (envelope.unlinked) { period = envelope.loopBeats; c = 0; }
+            else if (looped) { period = loop.getLength().inBeats(); wrapStart = loop.getStart().inBeats(); c = wrapStart + std::fmod (offset, period); }
+            std::vector<AutomationPoint> played;
+            const auto add = [&] (double beat, float value)
+            {
+                if (! played.empty() && beat - played.back().beat < 1e-6) played.back().value = value;
+                else if (played.size() < 4000) played.push_back ({ beat, value });
+            };
+            for (double b = from; b < to - 1e-9 && played.size() < 4000;)
+            {
+                const double end = period > 0 ? std::min (to, b + (wrapStart + period - c)) : to;
+                add (b, valueAt (c));
+                for (const auto& point : p) if (point.beat > c + 1e-9 && b + (point.beat - c) < end - gap) add (b + (point.beat - c), point.value);
+                if (end - gap > b + 1e-6) add (end - gap, valueAt (c + (end - b) - gap));
+                b = end; c = wrapStart;
+            }
+            auto original = lane->read();
+            auto kept = original.points;
+            if (kept.empty()) kept.push_back ({ 0.0, juce::jlimit (low, high, curveToEnvelope (envelope.target, mode, device, parameter->getCurrentExplicitValue())) });
+            const auto originalAt = [&] (double beat)
+            {
+                if (beat <= kept.front().beat) return kept.front().value;
+                for (size_t i = 1; i < kept.size(); ++i)
+                    if (beat <= kept[i].beat)
+                    {
+                        const auto k = (beat - kept[i - 1].beat) / (kept[i].beat - kept[i - 1].beat);
+                        const auto a = lane->proportion (kept[i - 1].value), z = lane->proportion (kept[i].value);
+                        return lane->value ((float) (a + k * (z - a)));
+                    }
+                return kept.back().value;
+            };
+            AutomationLane out;
+            out.enabled = original.enabled;
+            for (const auto& point : kept) if (point.beat < from - gap - 1e-6) out.points.push_back (point);
+            if (from - gap >= 0) out.points.push_back ({ from - gap, originalAt (from - gap) });
+            out.points.insert (out.points.end(), played.begin(), played.end());
+            out.points.push_back ({ to, originalAt (to) });
+            for (const auto& point : kept) if (point.beat > to + 1e-6) out.points.push_back (point);
+            if (out.points.size() > 4096) continue;
+            lane->write (out);
+        }
+        // The clip keeps its modulation only.
+        auto* undo = &edit->getUndoManager();
+        if (auto* list = clip.getAutomationCurveList (false))
+            for (auto modifier : list->getItems())
+            {
+                te::Plugin* d = nullptr;
+                const auto target = envelopeTargetOf (*t, modifier->getDestID(), &d);
+                if (! target) continue;
+                if (auto& curve = modifier->getCurve (envelopeCurveType (*target, mode)).curve; curve.getNumPoints() > 0) curve.clear (undo);
+                if (! te::hasAnyPoints (*modifier)) modifier->remove();
+            }
     }
     // Relaunching a Session clip re-enables the overridden automation envelopes of the controls it automates, as the
     // reference's manual describes. Like the launch, it is no undo step.
@@ -15204,7 +15301,7 @@ Result Session::pasteMidiClip (const String& trackId, double start, String& past
     const auto offset=impl->midiClipboardOffsetBeats/impl->edit->tempoSequence.getBeatsPerSecondAt(te::TimePosition::fromSeconds(start));
     state.setProperty(te::IDs::offset,offset,nullptr);state.setProperty(te::IDs::sync,te::Clip::syncBarsBeats,nullptr);renewMidiNoteIDs(state);
     impl->transaction("Paste MIDI clip");
-    if(auto* clip=te::insertClipCopy(*track,copy)){pastedId=clip->itemID.toString();impl->changed();return Result::ok();}
+    if(auto* clip=te::insertClipCopy(*track,copy)){impl->automationToTrack(*clip);pastedId=clip->itemID.toString();impl->changed();return Result::ok();}
     return Result::fail("The MIDI clip could not be pasted.");
 }
 Result Session::duplicateMidiClip (const String& id, String& duplicateId)
@@ -15288,6 +15385,7 @@ Result Session::pasteAudioClip (const String& trackId, double start, String& pas
     impl->transaction ("Paste audio clip");
     if (auto* clip = te::insertClipCopy (*track, copy))
     {
+        impl->automationToTrack (*clip);
         pastedId = clip->itemID.toString(); impl->changed(); return Result::ok();
     }
     target.deleteFile();

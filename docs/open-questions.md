@@ -321,6 +321,7 @@ These are simplest-default choices pending reference measurement:
 - **Density.** Recorded points are at least 1/64 beat apart.
 - **Persistence.** Automation Arm is saved with the project and is not undoable.
 - **Read switch.** An override and the automation editor's Read switch are the same state.
+- **Session automation in the Arrangement.** Copied or recorded into the Arrangement, a Session clip's automation fills its control's lane over the clip's span only; after it the lane returns to what it had (or the control's value), where the reference may hold the clip's last value.
 - **Session overrides.** Moving a control overrides its envelopes in every Session clip of its track, not only the one playing, as its Arrangement lane is overridden wherever the playhead is. Relaunching a clip re-enables those clips' envelopes but leaves an overridden Arrangement lane off until Re-Enable Automation. The faders' thumb colours show their Arrangement lanes only.
 - **Session clips.** Session automation follows the Arrangement's point rules (1/960 and 1/64 beat). A Session clip without an envelope for the control starts its new one at the control's value before the move. A new take's moves are kept until it ends and become its clip's envelope; meanwhile the control moves itself. The preference's label follows the manual's name, Session Automation Recording, with the choices Armed Tracks and All Tracks, as the reference's own text is in its encrypted language file.
 

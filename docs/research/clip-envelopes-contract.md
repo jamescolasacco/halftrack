@@ -11,6 +11,10 @@ Halftrack's clip envelopes follow the reference's clip envelopes for mixer and d
   - Device modulation adds −1 to +1 halves of the control's range, so −1 takes a centred control to its minimum.
   - The control's own value and its saved project value are unchanged.
 - **Automation**, for Session clips only, sets the control while the clip plays. Values are in the control's own units: decibels, pan, a native control's units, or a plug-in's 0–1. Arrangement clips modulate only.
+- **Into the Arrangement** (2026-10-26). As the manual describes, a Session clip's automation becomes its track's automation when the clip lands in the Arrangement: pasted or dragged there, recorded there by a Session performance, or loaded there from a Live Clip.
+  - Over the clip's span each automation envelope is written into its control's lane as the clip plays it: a linked envelope round the clip's loop from its start marker, an unlinked one round its own length.
+  - Outside the span the lane keeps what it had, 1/960 beat either side, or the control's value when it had no lane. The Arrangement clip keeps only its modulation.
+  - It is part of the paste's, performance's or load's undo step.
 - **Points and timing.**
   - Points are beats from the clip's content start, ordered, at most 4096, with values inside the range above.
   - A single point holds its value.
@@ -45,7 +49,10 @@ Native devices read a modulated control's value even when no curve sets it. See 
 - the EQ's Output modulated down by half its range playing at exactly −12 dB, and a duplicated track's clip modulating its own EQ;
 - the controlled VST3 gain at a half, modulated down by half its range, playing at a quarter;
 - reopening playing the same, and a doubled volume modulation in a saved file refused while keeping the open project;
-- a Session clip automating its track's volume to −12 dB, measured live against the same clip without it.
+- a Session clip automating its track's volume to −12 dB, measured live against the same clip without it;
+- that Session clip's envelope, looping two beats in a four-beat clip, dragged into the Arrangement at beat 5: the track's volume lane plays it on each pass (−12 dB at beats 4 and 6, −6 dB at 5 and 7), is back at the track's −3 dB from beat 8 and just before beat 4, the copy keeps no automation, and one undo removes both.
+
+The launcher suite's performance capture records a Session clip whose automation sets its track to −12 dB, and finds that in the track's lane where the clip played, not in the recorded clip.
 
 The UI suite:
 - picks Track Volume in an audio clip's Envelope chooser, which offers an Arrangement clip modulation only;

@@ -1,4 +1,5 @@
 #include "Session.h"
+#include <algorithm>
 #include <cmath>
 #include <iostream>
 #include <stdexcept>
@@ -230,6 +231,32 @@ int runClipEnvelopeTests (const juce::File& artifacts)
         const auto automated = live();
         const auto twelveDown = juce::Decibels::decibelsToGain (-12.0f);
         check (near (automated, plain * twelveDown), "it plays at " + ratio (automated, plain) + " of its level (expected " + juce::String (twelveDown, 4) + ")");
+        {
+            // Copied into the Arrangement, as the reference's manual describes, the clip's automation becomes the track's:
+            // over the clip's span, round its loop, the lane keeping its value elsewhere; the clip keeps no automation.
+            ok (s.addMidiTrack ("Automated"), "a MIDI track");
+            const int keys = (int) s.snapshot().tracks.size() - 1;
+            const auto keysId = s.snapshot().tracks[(size_t) keys].id;
+            ok (s.setTrackGain (keys, -3), "the track at -3 dB");
+            ok (s.addMidiClipToSlot (keysId, 0, 2), "a Session clip looping two beats");
+            const auto slotId = s.snapshot().tracks[(size_t) keys].slots[0].clip.id;
+            ok (s.setClipEnvelope (slotId, { { {}, 0 }, Mode::automation, { { 0, -12 }, { 1, -6 } } }), "its volume automated from -12 dB to -6 dB");
+            ok (s.setClipBeats (slotId, 0, 4, 0), "four beats long, round its loop twice");
+            juce::String copied;
+            ok (s.copySlotClipToArrangement (keys, 0, keysId, s.secondsAt (4), copied), "drag it into the Arrangement at beat 5");
+            const auto snapshot = s.snapshot();
+            const auto& track = snapshot.tracks[(size_t) keys];
+            const auto clip = std::find_if (track.clips.begin(), track.clips.end(), [&] (const auto& c) { return c.id == copied; });
+            juce::String points;
+            for (const auto& p : track.volumeAutomation.points) points << juce::String (p.beat, 3) << ": " << juce::String (p.value, 1) << "; ";
+            const auto lane = track.volumeAutomation.points;
+            const auto at = [&] (double beat, float value) { return std::any_of (lane.begin(), lane.end(), [&] (const auto& p) { return std::abs (p.beat - beat) < 1e-3 && std::abs (p.value - value) < .05f; }); };
+            check (clip != track.clips.end() && std::none_of (clip->envelopes.begin(), clip->envelopes.end(), [] (const auto& e) { return e.mode == Mode::automation; })
+                       && at (4, -12) && at (5, -6) && at (6, -12) && at (7, -6) && at (8, -3) && at (4 - 1.0 / 960, -3),
+                   "the track's volume lane plays the envelope over each pass, back at -3 dB after the clip, and the clip keeps no automation (" + points + ")");
+            s.undo();
+            check (s.snapshot().tracks[(size_t) keys].volumeAutomation.points.empty() && s.snapshot().tracks[(size_t) keys].clips.empty(), "one undo removes the copy and the lane's points");
+        }
         std::cout << "Clip envelopes passed: " << root.getFullPathName() << std::endl; return 0;
     }
     catch (const std::exception& e) { std::cerr << "FAIL clip envelopes: " << e.what() << std::endl; return 1; }

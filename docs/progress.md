@@ -3011,3 +3011,7 @@ Engine and UI areas. As the reference's manual describes, dragging a clip onto t
 ## Tracks from other projects — 2026-10-26
 
 Engine and UI areas. As the reference's manual describes, a project in the browser unfolds to its tracks, and dragging a track (or the whole project) into the open project brings it with its clips, devices and automation, before the track under the pointer or after the others, in one undo step. The project is read with every check opening it makes. Opening a project now shares that reading step.
+
+## Session automation into the Arrangement — 2026-10-26
+
+Engine area. As the reference's manual describes, a Session clip's automation now becomes its track's automation when the clip lands in the Arrangement, by paste or drag, a recorded Session performance, or a Live Clip: each envelope fills its control's lane over the clip's span, round its loop, and the Arrangement clip keeps only its modulation. Before, the automation curves stayed on the Arrangement clip, where Halftrack allows only modulation.
