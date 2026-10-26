@@ -14794,9 +14794,14 @@ private:
                     result.push_back (&clip);
             return result;
         }
-        for (const auto& id : extraMidiClipIds)
-            if (const auto [t, c] = locateClip (id); t >= 0 && id != focused->id)
-                if (const auto& clip = state.tracks[(size_t) t].clips[(size_t) c]; clip.isMidi) result.push_back (&clip);
+        {
+            // Clips from up to eight tracks, the edited clip's among them, as the reference shows (its manual, section 10.8).
+            std::set<int> tracks { locateClip (focused->id).first };
+            for (const auto& id : extraMidiClipIds)
+                if (const auto [t, c] = locateClip (id); t >= 0 && id != focused->id)
+                    if (const auto& clip = state.tracks[(size_t) t].clips[(size_t) c]; clip.isMidi && (tracks.count (t) != 0 || tracks.size() < 8))
+                    { tracks.insert (t); result.push_back (&clip); }
+        }
         return result;
     }
     // Makes another shown clip the one the editor edits, keeping the one it edited in view.
@@ -23691,6 +23696,27 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
             check (currentMidiClip()->id == otherId && pianoRoll.noteSelected (other.id) && ! pianoRoll.noteSelected (edited.id),
                    "with Focus on, clicking the other clip's note edits that clip with only that note selected");
             check (handleKey (juce::KeyPress ('n')) && ! pianoRoll.focusMode, "N turns Focus off again");
+        }
+        {
+            // Clips from up to eight tracks show together, the edited clip's among them, as the reference's (its manual, section 10.8).
+            std::vector<juce::String> added, others;
+            for (int i = 0; i < 8; ++i)
+            {
+                std::set<juce::String> before; for (const auto& t : state.tracks) before.insert (t.id);
+                check (session.addMidiTrack().wasOk(), "another MIDI track"); refresh();
+                for (const auto& t : state.tracks) if (before.count (t.id) == 0) added.push_back (t.id);
+                check (session.addMidiClip (added.back(), 0, 4).wasOk(), "a clip on it"); refresh();
+                for (const auto& t : state.tracks) if (t.id == added.back()) others.push_back (t.clips[0].id);
+            }
+            const auto kept = extraMidiClipIds;
+            extraMidiClipIds = others;
+            std::set<int> shownTracks { locateClip (currentMidiClip()->id).first };
+            for (const auto* c : extraMidiClips()) shownTracks.insert (locateClip (c->id).first);
+            check (extraMidiClips().size() == 7 && shownTracks.size() == 8, "clips from at most eight tracks show together");
+            extraMidiClipIds = kept;
+            for (const auto& id : added)
+                for (int t = 0; t < (int) state.tracks.size(); ++t)
+                    if (state.tracks[(size_t) t].id == id) { check (session.removeTrack (t).wasOk(), "remove the extra track"); refresh(); break; }
         }
         clipClick (firstId, 0);
         check (currentMidiClip()->id == firstId && extraMidiClipIds.empty() && extraMidiClips().empty(), "a plain click edits one clip again");

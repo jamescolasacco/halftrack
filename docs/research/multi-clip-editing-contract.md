@@ -27,7 +27,7 @@ Halftrack's multi-clip editing follows the reference's MIDI editor showing sever
   - While clips show together, a loop bar for each sits between the ruler and the notes, in its clip's colour. The edited clip's bar is outlined.
   - In the Session, each clip has a row, ordered by track then scene; its bar is its loop from the shared start. In the Arrangement, each track has a row, its clips side by side by time; each bar spans what its clip plays, with its loop along the top.
   - A click on a bar edits its clip. Dragging a loop's end changes that clip's loop length, on the note grid unless the grid is bypassed, in one undo step. The edited clip stays the same.
-- **Scope.** Shown clips can be on different tracks.
+- **Scope.** Shown clips can be on different tracks: in the Arrangement, clips from up to eight tracks, the edited clip's among them, as the manual describes (2026-10-26); a clip from a ninth track is left out.
 
 ## Evidence
 
@@ -41,6 +41,7 @@ The UI suite:
 - fits the view with the shown clip starting four beats before the edited one and finds the view starting there, the earlier clip's note in view;
 - with Focus off, Shift-clicks the other clip's note, both notes then selected, and raises both a semitone with Up, drags both a beat later and deletes both, each one undo step;
 - turns Focus on with N, finds a click on the other clip's note selecting only that note, and turns it off again;
+- shows clips from nine tracks and finds those of only eight;
 - checks that a plain click returns to one clip;
 - selects a four-beat and a six-beat Session clip, each with a note at its start, and finds:
   - the six-beat clip's note at beats 0 and 6 over a twelve-beat span, and the edited clip's own note dimmed at beats 4 and 8;
@@ -54,5 +55,4 @@ The UI suite:
 ## Not yet covered
 
 - Some loop bar features are missing: selecting several bars (Cmd and Shift), duplicating them (Cmd+D and their menu), setting their height, and dragging a loop's start.
-- The reference's limit of eight Arrangement tracks is missing.
 - Neither the shading of each clip's area outside its loop in Session multi-clip editing nor its loop markers on hover is drawn.
