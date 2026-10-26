@@ -9992,7 +9992,9 @@ private:
                 }
                 if (at.x >= bounds.getX() && at.x <= bounds.getRight())
                 {
+                    // The bar's clip becomes the edited one with its loop selected, so Duplicate (Cmd+D) duplicates the loop.
                     if (bar.clip != owner.currentMidiClip()) owner.focusMidiClip (bar.clip->id);
+                    grabKeyboardFocus(); loopBraceSelected = bar.loop.has_value(); startMarkerSelected = false; repaint();
                     return;
                 }
             }
@@ -10215,6 +10217,9 @@ private:
                 owner.report (owner.session.setClipLoop (clip.id, loop, start)); owner.refresh(); repaint();
                 return true;
             }
+            // Duplicate on a selected loop duplicates the loop, as the reference's Duplicate Loop.
+            if (loopBraceSelected && clip.loop.on && key.getKeyCode() == 'D' && key.getModifiers().isCommandDown() && ! key.getModifiers().isShiftDown() && ! key.getModifiers().isAltDown())
+            { owner.report (owner.session.duplicateClipLoop (clip.id)); owner.refresh(); repaint(); return true; }
             if (! loopBraceSelected || ! clip.loop.on || ! (horizontal || vertical) || key.getModifiers().isShiftDown() || key.getModifiers().isAltDown()) return false;
             auto next = clip.loop;
             const auto grid = snapBeats();
@@ -17069,7 +17074,14 @@ private:
         const bool selected = pianoRoll.hasSelectedNote();
         switch (command)
         {
-            case menuCut: case menuCopy: case menuDuplicate: case 22: case 76: return { command, {}, selected };
+            case menuDuplicate:
+            {
+                // On a selected loop, Duplicate duplicates the loop (Duplicate Loop).
+                const auto* clip = currentMidiClip();
+                const bool loop = pianoRoll.loopBraceSelected && clip != nullptr && clip->loop.on;
+                return { command, loop ? juce::String ("Duplicate Loop") : juce::String(), selected || loop };
+            }
+            case menuCut: case menuCopy: case 22: case 76: return { command, {}, selected };
             case menuPaste: return { command, {}, pianoRoll.canPasteNotes() };
             case menuActivate:
                 return { command, juce::String (pianoRoll.selectionInactive() ? "Activate Note" : "Deactivate Note") + (pianoRoll.selectedNoteCount() > 1 ? "s" : ""), selected };
@@ -17109,6 +17121,8 @@ private:
         {
             using Note = PianoRoll::NoteCommand;
             if (command == menuGroove) { extractGrooveFromUI (currentMidiClip()->id); return; }
+            if (const auto* clip = currentMidiClip(); command == menuDuplicate && pianoRoll.loopBraceSelected && clip != nullptr && clip->loop.on)
+            { report (session.duplicateClipLoop (clip->id)); refresh(); return; }
             pianoRoll.noteCommand (command == menuCut ? Note::cut : command == menuCopy ? Note::copy : command == menuPaste ? Note::paste
                                  : command == menuDuplicate ? Note::duplicate : command == 22 ? Note::remove : command == 76 ? Note::split
                                  : command == menuActivate ? Note::toggleActive : command == menuSelectAll ? Note::selectAll
@@ -23760,7 +23774,11 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
                 check (std::abs (lengthened.length - 8) < 1e-6 && currentMidiClip()->id == four.id, "dragging a loop bar's end lengthens that clip's loop, the edited clip kept");
                 session.undo(); refresh();
                 pianoRoll.mouseDown (at (bar.getCentre().translated (-20, 0), false)); pianoRoll.mouseUp (at (bar.getCentre().translated (-20, 0), false)); refresh();
-                check (currentMidiClip()->id == six.id, "clicking a loop bar edits its clip");
+                check (currentMidiClip()->id == six.id && pianoRoll.loopBraceSelected, "clicking a loop bar edits its clip, its loop selected");
+                check (pianoRoll.keyPressed (juce::KeyPress ('D', juce::ModifierKeys (juce::ModifierKeys::commandModifier), 0))
+                           && std::abs (state.tracks[(size_t) lane].slots[1].clip.loop.length - 12) < 1e-6,
+                       "Cmd+D on it duplicates the loop, as Duplicate Loop");
+                session.undo(); refresh();
                 focusMidiClip (four.id);
             }
             focusMidiClip (six.id);

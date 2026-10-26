@@ -1,6 +1,7 @@
 #include "Session.h"
 #include <tracktion_engine/tracktion_engine.h>
 #include <tracktion_engine/testing/tracktion_EnginePlayer.h>
+#include <algorithm>
 #include <cmath>
 #include <iostream>
 #include <stdexcept>
@@ -240,6 +241,37 @@ int runClipLoopTests (const juce::File& artifacts)
         }
         s.undo();
         check (sessionAudio().file == uncropped && sessionAudio().loop == Session::ClipLoop { true, 2, 2 }, "one undo returns the clip to its sample and loop");
+        {
+            // Duplicate Loop, as the reference's Duplicate does on a selected loop: the loop doubles, its notes and controller
+            // points copied into the new half, and what lies after it moved on, keeping its place after the loop's end.
+            ok (s.addMidiTrack ("Duplicated"), "a MIDI track for Duplicate Loop");
+            const auto track = s.snapshot().tracks.back().id;
+            ok (s.addMidiClip (track, 0, 8), "an eight-beat Arrangement clip");
+            const auto arrangementClip = [&] { for (const auto& t : s.snapshot().tracks) if (t.id == track) return t.clips[0]; return Session::ClipInfo {}; };
+            const auto id = arrangementClip().id;
+            ok (s.addMidiNote (id, 60, 1, .5, .8f) , "a note inside the loop to be"); ok (s.addMidiNote (id, 62, 5, .5, .8f), "and one after it");
+            ok (s.setMidiControllerLane (id, 1, { { 2, 64 } }), "a modulation point inside it");
+            ok (s.setClipLoop (id, { true, 0, 4 }, 0), "loop the first four beats");
+            ok (s.duplicateClipLoop (id), "duplicate the loop");
+            auto clip = arrangementClip();
+            std::vector<std::pair<int, double>> notes;
+            for (const auto& n : clip.notes) notes.push_back ({ n.pitch, n.startBeat });
+            std::sort (notes.begin(), notes.end(), [] (const auto& a, const auto& b) { return a.second < b.second; });
+            const auto lane = std::find_if (clip.controllers.begin(), clip.controllers.end(), [] (const auto& l) { return l.controller == 1; });
+            check (clip.loop == Session::ClipLoop { true, 0, 8 } && notes == std::vector<std::pair<int, double>> { { 60, 1 }, { 60, 5 }, { 62, 9 } }
+                       && lane != clip.controllers.end() && lane->points == std::vector<Session::ControllerPoint> { { 2, 64 }, { 6, 64 } }
+                       && std::abs (clip.lengthBeats - 8) < 1e-6 && s.undoDescription().containsIgnoreCase ("duplicate loop"),
+                   "the loop doubles, its note and point copied and the later note moved on, the Arrangement clip as long, one undo step");
+            s.undo();
+            clip = arrangementClip();
+            check (clip.loop == Session::ClipLoop { true, 0, 4 } && clip.notes.size() == 2, "one undo takes it back");
+            ok (s.setClipLoop (id, { false, 0, 4 }, 0), "turn the loop off");
+            check (s.duplicateClipLoop (id).failed(), "an unlooped clip has no loop to duplicate");
+            ok (s.addMidiClipToSlot (track, 0, 4), "a four-beat Session clip");
+            const auto sessionClip = [&] { for (const auto& t : s.snapshot().tracks) if (t.id == track) return t.slots[0].clip; return Session::ClipInfo {}; };
+            ok (s.duplicateClipLoop (sessionClip().id), "duplicate its loop");
+            check (sessionClip().loop.length == 8 && std::abs (sessionClip().lengthBeats - 8) < 1e-6, "a Session clip lengthens with its loop");
+        }
         root.deleteRecursively();
         std::cout << "Clip loops passed" << std::endl;
         return 0;

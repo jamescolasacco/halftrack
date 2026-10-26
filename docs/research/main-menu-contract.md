@@ -27,7 +27,7 @@ The reference finds an Edit command's handler from the focused view. Halftrack k
 - **Slots:** the slot menu's command. Split becomes Add or Remove Stop Button, as the reference's Cmd+E does in the Session.
 - **Headers:** the header menu's command for the selected tracks or group, and Deactivate or Activate Track (0), which switches their activators, all off if any is on, as the reference's Deactivate Selected Track key does (manual section 42.19; 2026-10-25). One undo step.
 - **A scene:** Duplicate, Delete, Rename and Edit Info Text from the scene menu.
-- **Notes:** Cut, Copy, Paste, Duplicate, Delete, Split, Deactivate, Select All and Quantize on the notes, Loop Selection on the note editor's selected timespan, as the clip view's keys do, and Invert Selection, which only the clip view has, as in the reference.
+- **Notes:** Cut, Copy, Paste, Duplicate, Delete, Split, Deactivate, Select All and Quantize on the notes (with the loop brace or a loop bar selected, Duplicate reads Duplicate Loop and doubles the loop; see the [clip loops contract](clip-loops-contract.md#duplicate-loop-2026-10-26)), Loop Selection on the note editor's selected timespan, as the clip view's keys do, and Invert Selection, which only the clip view has, as in the reference.
 - **Devices:** Delete, and Group and Ungroup making and breaking racks.
 - **Text:** Cut, Copy, Paste, Delete and Select All on the text.
 

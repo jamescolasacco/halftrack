@@ -101,6 +101,17 @@ It also checks:
 
 The main UI suite turns Loop on from the Loop box and sets Length and Position, and checks that a start outside the loop is refused. It drags the loop brace's end, the brace and the start marker in the note editor's ruler, undoing each, Cmd-clicks the ruler to move the start marker and Cmd+Shift-clicks it to move an unlooped clip's end marker, and steps a clicked brace with Right, Cmd+Up and Down, undoing them; it moves a clicked start marker with Right and its region with Option+Right, undoing both. It also lengthens a warped clip's loop by its brace in the waveform. It sets the loop's end and start at the insert marker from Edit > Clip Markers, greys Set Clip End while looping, sets the start with Cmd+F9, and while the clip plays sets the loop's Position from its Set button. It drags a looped clip's right edge to repeat it and its left edge to trim it, undoing each, and shows the Loop box for a warped audio clip.
 
+## Duplicate Loop (2026-10-26)
+
+As the reference's manual describes in its Clip View chapter (read 2026-10-26), Duplicate Loop doubles a MIDI clip's loop and copies what it holds. In the reference's 12.2 menus the command is Edit > Duplicate (Cmd+D) acting on a selected loop: its Edit menu has no separate item (static reading of its menu tables), and a loop bar duplicates the same way.
+- **What it does** (`Session::duplicateClipLoop`): the loop's length doubles. The notes starting in the loop, whole, under fresh identities, and its controller points are copied a loop's length later. Notes and points after the loop move on by its length, keeping their place after its end.
+- **Clip length.** A Session clip lengthens with its loop; an Arrangement clip keeps its length.
+- **Undo.** One undo step.
+- **How it is reached.** With the note editor's loop brace selected, or a loop bar clicked, Cmd+D and Edit > Duplicate (which then reads "Duplicate Loop") duplicate the loop rather than the notes.
+- **Audio.** Warped audio clips have no Duplicate Loop in Halftrack.
+
+The clip-loops suite checks an Arrangement clip (its note and modulation point copied, the later note moved on, the clip as long, undo, and refusal without a loop) and a Session clip lengthening. The UI suite duplicates a loop bar's loop with Cmd+D.
+
 ## Not yet covered
 
 - A start marker before the loop.

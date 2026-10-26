@@ -1338,6 +1338,10 @@ public:
     // clip unlooped plays once, from its start to where its loop ended. The clip keeps its place.
     // One undo step.
     juce::Result setClipLoop (const juce::String& clipId, const ClipLoop&, double contentStartBeat);
+    // Duplicate Loop, as the reference's Duplicate does on a MIDI clip's selected loop (its manual's Clip View chapter): the
+    // loop doubles, its notes and controller points copied into the new half, and what lies after the loop moves on by
+    // its length, keeping its place after the loop's end. A Session clip lengthens with its loop. One undo step.
+    juce::Result duplicateClipLoop (const juce::String& clipId);
     // Places an Arrangement MIDI or warped audio clip's edges in project beats (a Session clip's at 0,
     // setting its length), with the content beat
     // heard at its start: moving the start edge and that beat together trims the clip without

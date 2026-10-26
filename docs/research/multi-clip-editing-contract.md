@@ -26,7 +26,7 @@ Halftrack's multi-clip editing follows the reference's MIDI editor showing sever
 - **Loop bars** (2026-10-26), as the manual describes them (section 10.8):
   - While clips show together, a loop bar for each sits between the ruler and the notes, in its clip's colour. The edited clip's bar is outlined.
   - In the Session, each clip has a row, ordered by track then scene; its bar is its loop from the shared start. In the Arrangement, each track has a row, its clips side by side by time; each bar spans what its clip plays, with its loop along the top.
-  - A click on a bar edits its clip. Dragging a loop's end changes that clip's loop length, on the note grid unless the grid is bypassed, in one undo step. The edited clip stays the same.
+  - A click on a bar edits its clip and selects its loop, so Cmd+D duplicates the loop ([Duplicate Loop](clip-loops-contract.md#duplicate-loop-2026-10-26)). Dragging a loop's end changes that clip's loop length, on the note grid unless the grid is bypassed, in one undo step; the edited clip stays the same.
 - **Scope.** Shown clips can be on different tracks: in the Arrangement, clips from up to eight tracks, the edited clip's among them, as the manual describes (2026-10-26); a clip from a ninth track is left out.
 
 ## Evidence
@@ -47,12 +47,12 @@ The UI suite:
   - the six-beat clip's note at beats 0 and 6 over a twelve-beat span, and the edited clip's own note dimmed at beats 4 and 8;
   - a loop bar for each in its own row, pushing the notes down;
   - dragging the six-beat bar's end two beats on making that loop eight beats long, while the edited clip stays the same;
-  - a click on that bar editing its clip;
+  - a click on that bar editing its clip with its loop selected, and Cmd+D then doubling that loop to twelve beats;
   - the other clip becoming the edited one with both still shown;
   - Fold to Notes keeping the two clips' rows;
   - and one selected clip editing alone again, without loop bars.
 
 ## Not yet covered
 
-- Some loop bar features are missing: selecting several bars (Cmd and Shift), duplicating them (Cmd+D and their menu), setting their height, and dragging a loop's start.
+- Some loop bar features are missing: selecting several bars (Cmd and Shift), their menu, setting their height, and dragging a loop's start.
 - Neither the shading of each clip's area outside its loop in Session multi-clip editing nor its loop markers on hover is drawn.

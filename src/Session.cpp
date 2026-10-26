@@ -12969,6 +12969,51 @@ Result Session::setClipLoop (const String& id, const ClipLoop& loop, double star
     clip->setPosition (position);
     impl->changed(); return Result::ok();
 }
+Result Session::duplicateClipLoop (const String& id)
+{
+    if (auto frozen = impl->unfrozen (impl->trackOfClip (id)); frozen.failed()) return frozen;
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    if (impl->edit->getTransport().isRecording()) return Result::fail ("Stop recording before editing clip loops.");
+    auto* clip = impl->midiClip (id);
+    if (clip == nullptr) return Result::fail ("Duplicate Loop works on MIDI clips.");
+    const auto before = describeClip (*clip);
+    if (! before.loop.on) return Result::fail ("Turn the clip's loop on to duplicate it.");
+    const auto start = before.loop.start, length = before.loop.length, end = start + length;
+    if (end + length > 1000000) return Result::fail ("The loop would be too long.");
+    auto& sequence = clip->getSequence();
+    if (sequence.getNumNotes() * 2 > 100000) return Result::fail ("The clip would have too many notes.");
+    impl->transaction ("Duplicate loop");
+    auto* undo = &impl->edit->getUndoManager();
+    const auto shift = te::BeatDuration::fromBeats (length);
+    // What lies after the loop moves on first, then the loop's own notes and points are copied after it, whole.
+    const auto notes = sequence.getNotes();
+    for (auto* note : notes)
+        if (note->getStartBeat().inBeats() >= end - 1e-9) note->setStartAndLength (note->getStartBeat() + shift, note->getLengthBeats(), undo);
+    const auto events = sequence.getControllerEvents();
+    for (auto* event : events)
+        if (event->getBeatPosition().inBeats() >= end - 1e-9) event->setBeatPosition (event->getBeatPosition() + shift, undo);
+    for (auto* note : notes)
+        if (const auto at = note->getStartBeat().inBeats(); at >= start - 1e-9 && at < end - 1e-9)
+        {
+            auto copy = note->state.createCopy();
+            copy.setProperty (te::IDs::b, at + length, nullptr);
+            copy.setProperty (midiNoteIDProperty, juce::Uuid().toString(), nullptr);
+            sequence.state.addChild (copy, -1, undo);
+        }
+    for (auto* event : events)
+        if (const auto at = event->getBeatPosition().inBeats(); at >= start - 1e-9 && at < end - 1e-9)
+            sequence.addControllerEvent (event->getBeatPosition() + shift, event->getType(), event->getControllerValue(), event->getMetadata(), undo);
+    clip->setLoopRangeBeats ({ te::BeatPosition::fromBeats (start), te::BeatPosition::fromBeats (end + length) });
+    if (clip->getClipSlot() != nullptr)
+    {
+        // A Session clip plays its loop, so it lengthens with it.
+        auto position = clip->getPosition();
+        const auto bps = impl->edit->tempoSequence.getBeatsPerSecondAt (position.getStart());
+        position.time = position.time.withLength (position.time.getLength() + te::TimeDuration::fromSeconds (length / bps));
+        clip->setPosition (position);
+    }
+    impl->changed(); return Result::ok();
+}
 Result Session::setClipBeats (const String& id, double startBeat, double lengthBeats, double contentStart)
 {
     if (auto frozen = impl->unfrozen (impl->trackOfClip (id)); frozen.failed()) return frozen;
