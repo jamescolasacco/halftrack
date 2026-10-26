@@ -2475,6 +2475,11 @@ private:
     {
         auto* control = valueControl.getComponent();
         const auto mods = key.getModifiers();
+        // Cmd+Backspace deletes the control's automation, as the reference's key does.
+        if (control != nullptr && shownHere (control) && mods.isCommandDown() && ! mods.isShiftDown() && ! mods.isAltDown()
+            && (key.getKeyCode() == juce::KeyPress::backspaceKey || key.getKeyCode() == juce::KeyPress::deleteKey))
+            if (const auto target = control->getProperties()["midiMapTarget"].toString(); target.isNotEmpty() && session.hasAutomation (target))
+            { report (session.deleteAutomation (target)); refresh(); return true; }
         if (control == nullptr || ! control->isEnabled() || ! shownHere (control) || mods.isCommandDown() || mods.isCtrlDown() || mods.isAltDown()) return false;
         if (auto* field = dynamic_cast<ValueField*> (control)) return fieldKey (*field, key);
         auto* slider = dynamic_cast<juce::Slider*> (control);
@@ -14875,12 +14880,14 @@ private:
     juce::PopupMenu controlMenu (const juce::String& laneKey) const
     {
         juce::PopupMenu menu;
+        if (session.hasAutomation (laneKey)) menu.addItem (2, "Delete Automation");
         if (session.overriddenAutomation().contains (laneKey)) menu.addItem (1, "Re-Enable Automation");
         return menu;
     }
     void chooseControlItem (const juce::String& laneKey, int chosen)
     {
         if (chosen == 1) { report (session.reEnableAutomation (laneKey)); refresh(); }
+        if (chosen == 2) { report (session.deleteAutomation (laneKey)); refresh(); }
     }
     void showControlMenu (const juce::String& laneKey)
     {
@@ -30116,12 +30123,23 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         const auto menu = controlMenu (key);
         juce::StringArray items;
         for (juce::PopupMenu::MenuItemIterator i (menu); i.next();) items.add (i.getItem().text);
-        check (items == juce::StringArray { "Re-Enable Automation" } && controlMenu ("mixer:" + state.tracks[0].id + ":pan").getNumItems() == 0,
-               "the fader's menu offers Re-Enable Automation, and the pan without an override shows none");
+        check (items == juce::StringArray { "Delete Automation", "Re-Enable Automation" } && controlMenu ("mixer:" + state.tracks[0].id + ":pan").getNumItems() == 0,
+               "the fader's menu offers Delete and Re-Enable Automation, and the pan without automation shows none");
         chooseControlItem (key, 1);
-        check (state.tracks[0].volumeAutomation.enabled && ! state.automationOverridden, "choosing it plays the lane again");
+        check (state.tracks[0].volumeAutomation.enabled && ! state.automationOverridden, "choosing Re-Enable plays the lane again");
         session.undo(); refresh();
         check (! state.tracks[0].volumeAutomation.enabled && state.automationOverridden, "and undo switches it off again");
+        // Cmd+Backspace on the control clicked last deletes its automation, as the reference's key does.
+        showArrangementView(); refresh(); resized();
+        auto* shownGain = findNamed (*canvas.getChildComponent (0), "Track volume");
+        valueClicked (shownGain);
+        const auto diagnosis = juce::String ("shown ") + juce::String ((int) shownHere (shownGain)) + ", automation " + juce::String ((int) session.hasAutomation (key));
+        const bool handled = handleKey (juce::KeyPress (juce::KeyPress::backspaceKey, juce::ModifierKeys (juce::ModifierKeys::commandModifier), 0));
+        check (handled && state.tracks[0].volumeAutomation.points.empty() && session.undoDescription().containsIgnoreCase ("delete automation"),
+               "Cmd+Backspace on the volume fader deletes its automation, one undo step (" + diagnosis + ", handled " + juce::String ((int) handled) + ")");
+        session.undo(); refresh();
+        check (state.tracks[0].volumeAutomation.points.size() >= 2, "undo brings it back");
+        valueClicked (nullptr);
     }
     reEnableButton.onClick(); refresh();
     check (state.tracks[0].volumeAutomation.enabled && ! state.automationOverridden && ! reEnableButton.isEnabled() && automatedGain->findColour (juce::Slider::thumbColourId) == red,

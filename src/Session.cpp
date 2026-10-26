@@ -15939,6 +15939,58 @@ Result Session::reEnableAutomation (const String& laneKey)
     impl->refreshParameterValues();
     impl->changed(); return Result::ok();
 }
+namespace
+{
+// A control's automation envelopes in its track's clips: a track's mixer volume or pan ("mixer:<track>:volume"), or a
+// control of a device directly on the track ("device:<plugin>:<parameter>"), as clip envelopes name them.
+std::vector<std::pair<String, Session::ClipEnvelope>> clipAutomation (const Session::Snapshot& snapshot, const String& laneKey)
+{
+    std::vector<std::pair<String, Session::ClipEnvelope>> found;
+    const auto parts = juce::StringArray::fromTokens (laneKey, ":", "");
+    if (parts.size() != 3) return found;
+    for (const auto& t : snapshot.tracks)
+    {
+        std::optional<Session::EnvelopeTarget> target;
+        if (parts[0] == "mixer" && t.id == parts[1] && (parts[2] == "volume" || parts[2] == "pan")) target = Session::EnvelopeTarget { {}, parts[2] == "volume" ? 0 : 1 };
+        if (parts[0] == "device" && std::any_of (t.plugins.begin(), t.plugins.end(), [&] (const auto& p) { return p.id == parts[1]; }))
+            target = Session::EnvelopeTarget { parts[1], parts[2].getIntValue() };
+        if (! target) continue;
+        const auto take = [&] (const Session::ClipInfo& clip)
+        {
+            for (const auto& envelope : clip.envelopes)
+                if (envelope.mode == Session::EnvelopeMode::automation && envelope.target == *target && ! envelope.points.empty()) found.push_back ({ clip.id, envelope });
+        };
+        for (const auto& clip : t.clips) take (clip);
+        for (const auto& slot : t.slots) if (slot.hasClip) take (slot.clip);
+    }
+    return found;
+}
+}
+bool Session::hasAutomation (const String& laneKey) const
+{
+    const auto lane = impl->laneFor (laneKey);
+    return (lane && ! lane->read().points.empty()) || ! clipAutomation (snapshot(), laneKey).empty();
+}
+Result Session::deleteAutomation (const String& laneKey)
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    if (impl->edit->getTransport().isRecording()) return Result::fail ("Stop recording before deleting automation.");
+    const auto lane = impl->laneFor (laneKey);
+    if (! lane) return Result::fail ("Automation lane not found.");
+    const auto envelopes = clipAutomation (snapshot(), laneKey);
+    const bool points = ! lane->read().points.empty();
+    if (! points && envelopes.empty()) return Result::ok();
+    impl->transaction ("Delete automation");
+    const juce::ScopedValueSetter<bool> one (impl->composite, true);
+    if (points) { AutomationLane none; impl->writeLane (*lane, none); } // No points restores the control's own value.
+    for (auto [clipId, envelope] : envelopes)
+    {
+        envelope.points.clear();
+        if (auto result = setClipEnvelope (clipId, envelope); result.failed()) return result;
+    }
+    impl->refreshParameterValues();
+    impl->changed(); return Result::ok();
+}
 Result Session::setMasterVolumeAutomation (const AutomationLane& lane)
 {
     return impl->setMixerAutomation (*impl->edit->getMasterVolumePlugin(), AutomationTarget::volume, lane);

@@ -352,6 +352,7 @@ public:
                 juce::PopupMenu menu; menu.addItem (1, "Show Automation for " + juce::String (effectParameters (kind)[i].label));
                 // Re-Enable Automation while a move has switched the control's lane off, as the reference's menu offers it.
                 const auto laneKey = "device:" + pluginId + ":" + juce::String ((int) i);
+                if (session.hasAutomation (laneKey)) menu.addItem (4, "Delete Automation");
                 if (session.overriddenAutomation().contains (laneKey)) menu.addItem (3, "Re-Enable Automation");
                 // Inside a rack, a control can be mapped to one of the rack's macros, or unmapped.
                 juce::String rackId; int mappedTo = -1;
@@ -372,6 +373,7 @@ public:
                     if (safe == nullptr) return;
                     if (choice == 1) safe->requestAutomation ((int) i);
                     else if (choice == 3) { safe->finishGesture(); safe->session.reEnableAutomation (laneKey); }
+                    else if (choice == 4) { safe->finishGesture(); safe->session.deleteAutomation (laneKey); }
                     else if (choice == 2) safe->mapToMacro ((int) i, rackId, -1, mappedTo);
                     else if (choice >= 100) safe->mapToMacro ((int) i, rackId, choice - 100, mappedTo);
                 });

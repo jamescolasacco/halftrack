@@ -1676,6 +1676,11 @@ public:
     // One control's Re-Enable Automation, as its context menu offers it: that lane plays again, one undo step. A lane
     // that is not switched off is left alone.
     juce::Result reEnableAutomation (const juce::String& laneKey);
+    // Delete Automation, as a control's menu and Cmd+Backspace offer it in the reference: the control's Arrangement lane and
+    // its clips' automation envelopes go, so it holds its value. One undo step; with nothing to delete, nothing changes.
+    juce::Result deleteAutomation (const juce::String& laneKey);
+    // Whether a control has automation to delete: points in its lane or in a clip's automation envelope.
+    bool hasAutomation (const juce::String& laneKey) const;
     // Punch-In and Punch-Out, after the reference: the loop brace marks the punch range whether or not
     // the loop plays. With Punch-In on, Arrangement recording keeps only what arrives from the loop
     // start; with Punch-Out on, only what arrives before the loop end. Recorded clips are trimmed to

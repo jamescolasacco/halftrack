@@ -114,6 +114,23 @@ int runAutomationCaptureTests (const juce::File& artifacts)
                 s.undo(); check (! s.snapshot().tracks[0].volumeAutomation.enabled, "undo switches it off again");
                 s.undo(); s.undo();
                 check (s.overriddenAutomation() == juce::StringArray { deviceKey }, "undoing the volume lane leaves the device's overridden");
+                // Delete Automation: the control's lane and its clips' automation envelopes go, in one undo step.
+                ok (s.setTrackAutomation (trackId, Target::volume, { true, { { 0, -12 }, { 16, -12 } } }), "volume automation again");
+                ok (s.importAudioToSlot (source, 0, 0), "a Session clip on the track");
+                const auto slotClip = s.snapshot().tracks[0].slots[0].clip.id;
+                Session::ClipEnvelope envelope; envelope.target = { {}, 0 }; envelope.mode = Session::EnvelopeMode::automation; envelope.points = { { 0, -6 } };
+                ok (s.setClipEnvelope (slotClip, envelope), "and a volume automation envelope in it");
+                check (s.hasAutomation (volumeKey) && ! s.hasAutomation ("mixer:" + trackId + ":pan"), "the volume has automation to delete, the pan none");
+                ok (s.deleteAutomation (volumeKey), "Delete Automation");
+                check (s.snapshot().tracks[0].volumeAutomation.points.empty() && s.snapshot().tracks[0].slots[0].clip.envelopes.empty() && ! s.hasAutomation (volumeKey)
+                           && s.undoDescription().containsIgnoreCase ("delete automation"), "the lane and the clip's envelope go, one undo step");
+                const auto before = s.undoSteps().size();
+                ok (s.deleteAutomation (volumeKey), "Delete Automation with nothing left");
+                check (s.undoSteps().size() == before, "changes nothing");
+                s.undo();
+                check (s.snapshot().tracks[0].volumeAutomation.points.size() == 2 && s.snapshot().tracks[0].slots[0].clip.envelopes.size() == 1, "one undo brings both back");
+                s.undo(); s.undo(); s.undo();
+                check (s.snapshot().tracks[0].volumeAutomation.points.empty() && ! s.snapshot().tracks[0].slots[0].hasClip, "three more undos leave the track as before");
             }
             ok (s.reEnableAutomation(), "Re-Enable Automation for the device");
             check (s.snapshot().tracks[0].plugins.back().automation[0].lane.enabled && std::abs (level (s, file) + 12) < .1, "the device follows its lane again");
