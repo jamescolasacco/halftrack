@@ -3491,6 +3491,7 @@ struct Session::Impl
     {
         // A launch replaces the Follow Action planned on its track, and the follow watch sees what it starts.
         followTrack (track).plan.reset();
+        if (selected != nullptr) reEnableLaunchedAutomation (*selected);
         if (selected != nullptr) launchMoments[selected->itemID] = boundary ? boundary->v.inBeats() : monotonicNow().value_or (0.0);
         watchFollow();
         if (selected) track.launcherSilence.stop (boundary);
@@ -6281,15 +6282,79 @@ struct Session::Impl
             for (auto* p : list->getPlugins())
                 if (auto* external = dynamic_cast<te::ExternalPlugin*> (p))
                     for (const auto& a : externalAutomation (*external)) if (off (a.lane)) keys.add (deviceKey (external->itemID.toString(), a.parameter));
+        // Session clips' automation envelopes overridden by a move.
+        for (auto* t : te::getAudioTracks (*edit))
+            for (auto* slot : t->getClipSlotList().getClipSlots())
+                if (auto* clip = slot->getClip(); clip != nullptr && clip->state.getChildWithName (te::IDs::AUTOMATIONCURVES).getNumChildren() > 0)
+                    if (auto* list = clip->getAutomationCurveList (false))
+                        for (auto modifier : list->getItems())
+                        {
+                            te::Plugin* device = nullptr;
+                            const auto target = envelopeTargetOf (*t, modifier->getDestID(), &device);
+                            if (! target) continue;
+                            const auto& curve = modifier->getCurve (envelopeCurveType (*target, Session::EnvelopeMode::automation)).curve;
+                            if (curve.getNumPoints() > 0 && curve.bypass.get()) keys.addIfNotAlreadyThere (envelopeKey (*t, *target));
+                        }
         return keys;
     }
-    // Moving a control whose lane plays automation switches the lane off until Re-Enable Automation.
+    // Moving a control with automation overrides it until Re-Enable Automation: its Arrangement lane is switched off,
+    // and its Session clips' automation envelopes are bypassed, as the reference's override stops a control's automation.
     void overrideLane (const String& key)
     {
-        const auto lane = laneFor (key); if (! lane) return;
-        auto current = lane->read();
-        if (current.points.empty() || ! current.enabled) return;
-        current.enabled = false; writeLane (*lane, current);
+        if (const auto lane = laneFor (key))
+            if (auto current = lane->read(); ! current.points.empty() && current.enabled) { current.enabled = false; writeLane (*lane, current); }
+        for (auto* curve : clipAutomationCurves (key))
+            if (! curve->bypass.get()) curve->state.setProperty (te::IDs::bypass, true, &edit->getUndoManager());
+    }
+    // Re-enables a control's overridden automation, its lane and its clips' envelopes, in the current undo step.
+    void reEnableControl (const String& key)
+    {
+        if (const auto lane = laneFor (key))
+            if (auto current = lane->read(); ! current.points.empty() && ! current.enabled) { current.enabled = true; writeLane (*lane, current); }
+        for (auto* curve : clipAutomationCurves (key))
+            if (curve->bypass.get()) curve->state.setProperty (te::IDs::bypass, false, &edit->getUndoManager());
+    }
+    // The key of the control a clip envelope names on its track.
+    static String envelopeKey (const te::Track& t, const Session::EnvelopeTarget& target)
+    {
+        return target.pluginId.isEmpty() ? mixerKey (t, mixerTargets[(size_t) juce::jlimit (0, 1, target.parameter)]) : deviceKey (target.pluginId, target.parameter);
+    }
+    // The automation envelopes with points of a control's Session clips, as engine curves: a track's volume or pan, or a
+    // control of a device directly on the track.
+    std::vector<te::AutomationCurve*> clipAutomationCurves (const String& key) const
+    {
+        std::vector<te::AutomationCurve*> curves;
+        const auto parts = juce::StringArray::fromTokens (key, ":", "");
+        if (parts.size() != 3 || (parts[0] != "mixer" && parts[0] != "device")) return curves;
+        for (auto* t : te::getAudioTracks (*edit))
+        {
+            std::optional<Session::EnvelopeTarget> target;
+            if (parts[0] == "mixer" && t->itemID.toString() == parts[1] && (parts[2] == "volume" || parts[2] == "pan")) target = Session::EnvelopeTarget { {}, parts[2] == "volume" ? 0 : 1 };
+            if (parts[0] == "device")
+                for (auto* p : t->pluginList.getPlugins()) if (p->itemID.toString() == parts[1]) target = Session::EnvelopeTarget { parts[1], parts[2].getIntValue() };
+            auto* parameter = target ? envelopeParameter (*t, *target) : nullptr;
+            if (parameter == nullptr) continue;
+            const te::AutomatableParameterID id { parameter->automatableEditElement.itemID, parameter->paramID };
+            const auto type = envelopeCurveType (*target, Session::EnvelopeMode::automation);
+            for (auto* slot : t->getClipSlotList().getClipSlots())
+                if (auto* clip = slot->getClip(); clip != nullptr && clip->state.getChildWithName (te::IDs::AUTOMATIONCURVES).getNumChildren() > 0)
+                    if (auto* list = clip->getAutomationCurveList (false))
+                        for (auto modifier : list->getItems())
+                            if (modifier->getDestID() == id)
+                                if (auto& curve = modifier->getCurve (type).curve; curve.getNumPoints() > 0) curves.push_back (&curve);
+        }
+        return curves;
+    }
+    // Relaunching a Session clip re-enables the overridden automation envelopes of the controls it automates, as the
+    // reference's manual describes. Like the launch, it is no undo step.
+    void reEnableLaunchedAutomation (te::Clip& clip)
+    {
+        auto* t = dynamic_cast<te::AudioTrack*> (clip.getTrack());
+        if (t == nullptr || clip.getClipSlot() == nullptr || clip.state.getChildWithName (te::IDs::AUTOMATIONCURVES).getNumChildren() == 0) return;
+        for (const auto& envelope : clipEnvelopes (clip))
+            if (envelope.mode == Session::EnvelopeMode::automation)
+                for (auto* curve : clipAutomationCurves (envelopeKey (*t, envelope.target)))
+                    if (curve->bypass.get()) curve->state.setProperty (te::IDs::bypass, false, nullptr);
     }
     double playheadBeat() const { return std::max (0.0, edit->tempoSequence.toBeats (edit->getTransport().getPosition()).inBeats()); }
     // Punch-In and Punch-Out bound recording by the loop brace.
@@ -6519,6 +6584,8 @@ struct Session::Impl
         if (parameter == nullptr) return;
         const auto [low, high] = envelopeRange (found->second, Session::EnvelopeMode::automation, device);
         value = juce::jlimit (low, high, value);
+        // Moves inside an edit gesture join its transaction; others share one per stretch of recording.
+        if (! gesture && ! captureTransaction) { transaction ("Record automation"); captureTransaction = true; }
         auto pass = sessionPasses.find (key);
         if (pass != sessionPasses.end() && (pass->second.clip != clip->itemID || beat < pass->second.recorded.back().beat - 1e-9))
         { writeSessionPass (pass->second, true); sessionPasses.erase (pass); pass = sessionPasses.end(); }
@@ -6530,9 +6597,9 @@ struct Session::Impl
             if (fresh.original.empty())
                 fresh.original.push_back ({ 0.0, juce::jlimit (low, high, curveToEnvelope (found->second, Session::EnvelopeMode::automation, device, parameter->getCurrentValue())) });
             pass = sessionPasses.emplace (key, fresh).first;
+            // Recording re-enables the control's overridden clip envelopes.
+            for (auto* curve : clipAutomationCurves (key)) if (curve->bypass.get()) curve->state.setProperty (te::IDs::bypass, false, &edit->getUndoManager());
         }
-        // Moves inside an edit gesture join its transaction; others share one per stretch of recording.
-        if (! gesture && ! captureTransaction) { transaction ("Record automation"); captureTransaction = true; }
         auto& recorded = pass->second.recorded;
         if (! recorded.empty() && beat - recorded.back().beat < 1.0 / 64) recorded.back().value = value;
         else if (recorded.size() < 4000) recorded.push_back ({ beat, value });
@@ -16139,8 +16206,7 @@ Result Session::reEnableAutomation()
     const auto keys = impl->overriddenLanes();
     if (keys.isEmpty()) return Result::ok();
     impl->transaction ("Re-enable automation");
-    for (const auto& key : keys)
-        if (const auto lane = impl->laneFor (key)) { auto points = lane->read(); points.enabled = true; impl->writeLane (*lane, points); }
+    for (const auto& key : keys) impl->reEnableControl (key);
     impl->refreshParameterValues();
     impl->changed(); return Result::ok();
 }
@@ -16149,10 +16215,8 @@ Result Session::reEnableAutomation (const String& laneKey)
 {
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
     if (! impl->overriddenLanes().contains (laneKey)) return Result::ok();
-    const auto lane = impl->laneFor (laneKey);
-    if (! lane) return Result::fail ("Automation lane not found.");
     impl->transaction ("Re-enable automation");
-    auto points = lane->read(); points.enabled = true; impl->writeLane (*lane, points);
+    impl->reEnableControl (laneKey);
     impl->refreshParameterValues();
     impl->changed(); return Result::ok();
 }

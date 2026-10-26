@@ -15,6 +15,14 @@ Moving a control whose lane plays automation overrides that lane. This covers a 
 
 Previously an automated fader was locked until its points were cleared. The Read switch in the automation editor shows the same state as an override.
 
+**Session clips (2026-10-26).** The override also covers the control's automation envelopes in its track's Session clips, as the manual describes (read 2026-10-26):
+
+- Moving the control bypasses them in the move's undo step, so the clip playing stops setting it.
+- Re-Enable Automation, and the control's own Re-Enable Automation, switch them back on.
+- Launching a clip again re-enables the envelopes of the controls it automates, as the manual's relaunch does. Like the launch, this is no undo step.
+- Recording a Session pass into a control re-enables its envelopes.
+- An engine patch makes a bypassed clip curve leave its parameter alone ([dependencies](../dependencies.md#tracktion-clip-automation-bypass-patch)).
+
 ## Capture
 
 `setAutomationArm(true)` turns on Automation Arm. It is a transport setting saved with the project, outside the undo history. While it is on and the transport records, moving one of those controls writes its lane at the playhead instead of overriding it. Recording may run for automation alone, without an armed track.
@@ -89,12 +97,18 @@ The session-record suite overdubs a MIDI clip with Automation Arm on and checks:
 
 The preferences suite reads All Tracks back, and the UI suite finds Session Automation Recording on the Record page, at Armed Tracks, and switches it.
 
+With the synthetic device, a Session clip whose automation sets its track to −12 dB plays there. The suite then checks:
+
+- moving the fader to −3 dB overrides the clip's automation, listed by its key, and the clip plays at −3 dB;
+- Re-Enable Automation brings back −12 dB;
+- after another override, launching the clip again brings back −12 dB;
+- the control's own Re-Enable Automation is one undo step, and undo overrides it again.
+
 The capture suite also re-enables an overridden volume lane alone while a device lane stays overridden, leaves a playing lane alone without an undo step, and undoes both. It deletes a volume lane together with a Session clip's volume automation envelope in one undo step, checks that deleting again changes nothing, and undoes it. The UI suite checks the live faders, their thumb colours, the override, Re-Enable Automation, the fader's menu offering Delete and Re-Enable Automation and re-enabling its lane (and no menu on the pan without automation), Cmd+Backspace deleting the fader's automation, undo and the Automation Arm button. The automation suite's earlier "locked fader" checks now assert overrides.
 
 ## Not implemented
 
 - Recording automation into the new clips Session Record makes. Only clips that already exist (overdubbing, or playing with All Tracks) take Session automation.
-- Relaunching a Session clip with automation re-enabling its overridden automation, as the manual describes.
 - Session automation of sends and of controls inside racks, which clip envelopes do not take yet.
 - A hosted plug-in's own editor reports its move after the parameter has changed, so a Session clip without an envelope for it starts at the moved value.
 - Utility controls. (Third-party plug-ins' parameters are captured and overridden from their own editors as well as Halftrack's controls; see the [plug-in automation contract](plugin-automation-contract.md).)

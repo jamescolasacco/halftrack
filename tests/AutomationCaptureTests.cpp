@@ -12,6 +12,7 @@ namespace halftrack
 {
 std::unique_ptr<juce::AudioIODeviceType> makeSyntheticTestDeviceType();
 float pumpSyntheticTestDevice (Session&, int blocks);
+juce::AudioBuffer<float> captureSyntheticTestDevice (Session&, int blocks);
 namespace
 {
 constexpr double pi = 3.14159265358979323846;
@@ -219,6 +220,52 @@ int runAutomationCaptureTests (const juce::File& artifacts)
             const auto& groupSend = grouped.groups.at (0).sends.at (0).automation;
             check (groupSend.points.size() == 2 && std::abs (groupSend.points[0].value + 12) < 1e-3, "and turning its send records the send's lane");
             ok (live.setAutomationArm (false), "Automation Arm off");
+        }
+
+        // A Session clip's automation, as the reference's manual describes: moving its control overrides it until
+        // Re-Enable Automation, or until the clip is launched again.
+        {
+            Session s (false, makeSyntheticTestDeviceType());
+            ok (s.importAudioToSlot (source, 0, 0), "a tone in a Session slot");
+            const auto clipId = s.snapshot().tracks[0].slots[0].clip.id;
+            const auto key = "mixer:" + s.snapshot().tracks[0].id + ":volume";
+            const auto launch = [&]
+            {
+                ok (s.launchSlot (0, 0), "launch it");
+                const auto started = [&] { const auto slot = s.snapshot().tracks[0].slots[0]; return slot.playing && ! slot.queued; };
+                for (int i = 0; i < 2000 && ! started(); ++i) pumpSyntheticTestDevice (s, 1);
+                check (started(), "it plays");
+            };
+            // The level heard, as a mean of the samples' magnitudes.
+            const auto heard = [&]
+            {
+                pumpSyntheticTestDevice (s, 40);
+                const auto played = captureSyntheticTestDevice (s, 100);
+                double sum = 0; for (int n = 0; n < played.getNumSamples(); ++n) sum += std::abs (played.getSample (0, n));
+                return sum / played.getNumSamples();
+            };
+            const auto at = [] (double level, double plain, float decibels) { return std::abs (level / plain - juce::Decibels::decibelsToGain (decibels)) < .02; };
+            pumpSyntheticTestDevice (s, 8);
+            launch();
+            const auto plain = heard();
+            check (plain > .1, "the clip plays at its own level");
+            ok (s.setClipEnvelope (clipId, { { {}, 0 }, Session::EnvelopeMode::automation, { { 0, -12 } } }), "its automation sets the volume to -12 dB");
+            check (at (heard(), plain, -12), "the clip plays at -12 dB");
+            ok (s.setTrackGain (0, -3), "move the fader");
+            check (s.overriddenAutomation().contains (key) && s.snapshot().automationOverridden, "the clip's automation is overridden");
+            check (at (heard(), plain, -3), "the clip plays at the fader's -3 dB");
+            ok (s.reEnableAutomation(), "Re-Enable Automation");
+            check (! s.snapshot().automationOverridden && at (heard(), plain, -12), "its automation plays again");
+            ok (s.setTrackGain (0, -6), "override it again");
+            check (s.overriddenAutomation().contains (key) && at (heard(), plain, -6), "the clip plays at -6 dB");
+            launch();
+            check (! s.snapshot().automationOverridden && at (heard(), plain, -12), "launching the clip again re-enables its automation");
+            ok (s.setTrackGain (0, -1), "and a move overrides it once more");
+            ok (s.reEnableAutomation (key), "re-enable that control alone, as its menu offers");
+            check (! s.snapshot().automationOverridden && s.undoDescription().containsIgnoreCase ("re-enable") && at (heard(), plain, -12), "it plays again, one undo step");
+            s.undo();
+            check (s.overriddenAutomation().contains (key) && at (heard(), plain, -1), "undo overrides it again");
+            s.stop();
         }
         std::cout << "Automation capture passed: " << root.getFullPathName() << std::endl; return 0;
     }

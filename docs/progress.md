@@ -2995,3 +2995,7 @@ Engine and UI areas. As the reference's manual describes, Automation Arm now rec
 ## Capture MIDI tempo detection — 2026-10-26
 
 Engine and UI areas. Capture MIDI now follows the reference's capture code (static reading). Notes played with the transport stopped are analysed as the reference does, ported from the research model and checked against its outputs (`src/CaptureTempo.cpp`). The tempo played becomes the project's, found freely from 78 to 164 BPM when no other track has clips at 120 BPM, and weighed against the project's tempo otherwise, in an undo step of its own. The clip loops the last phrase, one to eight bars, unquantised, from the insert marker. In Session View it goes into the reference's scene and plays. Capture takes the tracks played last, each history after its last silence of over 20 seconds, starting anew when the transport starts or stops.
+
+## Session clip automation overrides — 2026-10-26
+
+Engine area. As the reference's manual describes, moving a control now overrides its Session clips' automation as well as its Arrangement lane: the clip stops setting it, and Re-Enable Automation lights. Re-Enable Automation (or the control's own), launching the clip again, or recording into it brings the clip's automation back. A new Tracktion patch makes a bypassed clip curve leave its parameter alone.

@@ -148,9 +148,10 @@ function(halftrack_patch_clip_envelopes source_dir)
                 return nullptr;
 
             as = new AutomationCurveModifierSource (*assignedParam,]=])
+    set(downstream0 "d2a1876cc068b09b26def43b0dce3cb3585afdafd2aa313920d74b2c20cf3164") # The later clip automation bypass patch.
     foreach(index RANGE 0 0)
         file(SHA256 "${source${index}}" hash)
-        if(hash STREQUAL "${patched${index}}")
+        if(hash STREQUAL "${patched${index}}" OR (DEFINED downstream${index} AND hash IN_LIST downstream${index}))
             set(write${index} FALSE)
             continue()
         endif()
