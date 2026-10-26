@@ -16537,6 +16537,8 @@ private:
         state = session.snapshot(); editGrid = session.editGrid();
         if (overview.isVisible() != (! showSession && state.arrangementOverview)) resized(); else if (overview.isVisible()) overview.sync();
         session.setSelectedTracks (selectedTrackIds());
+        // The clip in the foreground gives new MIDI clips their scale, as the reference's manual describes.
+        if (showPiano) if (const auto* shown = currentMidiClip()) session.setCurrentScale (shown->scale);
         std::erase_if (selectedSlots, [this] (const Session::SlotRef& ref)
         { return ! juce::isPositiveAndBelow (ref.track, (int) state.tracks.size()) || ! juce::isPositiveAndBelow (ref.scene, (int) state.scenes.size()); });
         if (selectedSlots.size() < 2) selectedSlots.clear();
@@ -21851,6 +21853,8 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         root->setSelectedId (3, juce::sendNotificationSync); mode->setSelectedId (2, juce::sendNotificationSync);
         scale->setToggleState (true, juce::dontSendNotification); scale->onClick(); refresh();
         check (currentMidiClip()->scale == Session::ScaleSettings { true, 2, 1 }, "the controls give the clip D minor");
+        refresh();
+        check (session.currentScale() == Session::ScaleSettings { true, 2, 1 }, "the clip in the foreground makes D minor the scale new clips take");
         if (const auto* configured = std::getenv ("HALFTRACK_TEST_UI_SNAPSHOT_DIRECTORY"))
             if (const juce::File directory (juce::String::fromUTF8 (configured)); directory.createDirectory().wasOk())
             {

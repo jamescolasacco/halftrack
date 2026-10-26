@@ -1906,6 +1906,16 @@ Session::ScaleSettings clipScale (const juce::ValueTree& state)
     scale.mode = juce::jlimit (0, Session::scaleModeCount - 1, static_cast<int> (state.getProperty (scaleModeProperty, 0)));
     return scale;
 }
+// The project's current scale, as the reference's Set keeps one: the foreground clip's, which new MIDI clips take.
+const juce::Identifier currentScaleProperty { "halftrackCurrentScale" }, currentScaleRootProperty { "halftrackCurrentScaleRoot" }, currentScaleModeProperty { "halftrackCurrentScaleMode" };
+Result validateCurrentScale (const juce::ValueTree& edit)
+{
+    const auto whole = [] (const juce::var& v, double low, double high) { return finiteProperty (v, low, high) && static_cast<double> (v) == std::floor (static_cast<double> (v)); };
+    if (! whole (edit.getProperty (currentScaleProperty, 0), 0, 1) || ! whole (edit.getProperty (currentScaleRootProperty, 0), 0, 11)
+        || ! whole (edit.getProperty (currentScaleModeProperty, 0), 0, Session::scaleModeCount - 1))
+        return Result::fail ("The project's current scale is invalid.");
+    return Result::ok();
+}
 Result validateClipScales (const juce::ValueTree& state)
 {
     if (state.hasProperty (scaleEnabledProperty) || state.hasProperty (scaleRootProperty) || state.hasProperty (scaleModeProperty))
@@ -3865,7 +3875,7 @@ struct Session::Impl
         if (clip == nullptr) { writeTakeAutomation (slotId, nullptr); changed(); return; }
         auto* undo = &edit->getUndoManager();
         giveDefaultFades (*clip, undo); // Kept for when it reaches the Arrangement.
-        colourNewClip (*clip, true);
+        colourNewClip (*clip, true); scaleNewClip (*clip);
         clip->setPosition ({ { te::TimePosition(), edit->tempoSequence.toTime (beats.getEnd()) }, te::TimeDuration() });
         if (auto* midi = dynamic_cast<te::MidiClip*> (clip))
         {
@@ -4381,6 +4391,25 @@ struct Session::Impl
         recentClipColours.push_back (chosen);
         if (recentClipColours.size() > 2) recentClipColours.pop_front();
         return paletteColour (chosen);
+    }
+    // The project's current scale (see Session::setCurrentScale), which new MIDI clips take.
+    Session::ScaleSettings currentScale;
+    // The current scale in a saved copy of the Edit's state.
+    void saveCurrentScale (juce::ValueTree& state) const
+    {
+        for (const auto& property : { currentScaleProperty, currentScaleRootProperty, currentScaleModeProperty }) state.removeProperty (property, nullptr);
+        if (currentScale == Session::ScaleSettings {}) return;
+        state.setProperty (currentScaleProperty, currentScale.enabled ? 1 : 0, nullptr);
+        state.setProperty (currentScaleRootProperty, currentScale.root, nullptr);
+        state.setProperty (currentScaleModeProperty, currentScale.mode, nullptr);
+    }
+    void scaleNewClip (te::Clip& clip)
+    {
+        if (dynamic_cast<te::MidiClip*> (&clip) == nullptr || currentScale == Session::ScaleSettings {}) return;
+        auto* undo = &edit->getUndoManager();
+        clip.state.setProperty (scaleEnabledProperty, currentScale.enabled ? 1 : 0, undo);
+        clip.state.setProperty (scaleRootProperty, currentScale.root, undo);
+        clip.state.setProperty (scaleModeProperty, currentScale.mode, undo);
     }
     void colourNewClip (te::Clip& clip, bool recorded = false)
     {
@@ -8509,6 +8538,7 @@ Result Session::startProject (bool builtInDefaultSet)
     impl->previewing.clear();
     impl->edit = std::make_unique<te::Edit> (std::move (options));
     ++impl->projectGeneration; impl->recentClipColours.clear(); impl->recordingClipColour.reset(); // The clip picker belongs to the project.
+    impl->currentScale = {};
     impl->edit->getMasterVolumePlugin()->setVolumeDb (0);
     impl->edit->tempoSequence.getTempo (0)->setBpm (120);
     impl->edit->clickTrackGain = .6f; impl->edit->clickTrackEmphasiseBars = true;
@@ -8615,6 +8645,7 @@ Result readProjectCandidate (te::Engine& engine, const File& file, std::unique_p
     if (auto result = validateMidiPortOutputs (state); result.failed()) return result;
     if (auto result = validateMidiInputChannels (state); result.failed()) return result;
     if (auto result = validateClipScales (state); result.failed()) return result;
+    if (auto result = validateCurrentScale (state); result.failed()) return result;
     if (auto result = validateGroovePool (state); result.failed()) return result;
     if (auto result = validateMidiMappings (state); result.failed()) return result;
     if (auto result = validateConfigurations (state); result.failed()) return result;
@@ -8676,6 +8707,8 @@ Result Session::loadProject (const File& file)
     stopNotePreviews();
     impl->edit = std::move (candidate);
     ++impl->projectGeneration; impl->recentClipColours.clear(); impl->recordingClipColour.reset(); // The clip picker belongs to the project.
+    impl->currentScale = { static_cast<bool> (impl->edit->state.getProperty (currentScaleProperty, false)), static_cast<int> (impl->edit->state.getProperty (currentScaleRootProperty, 0)),
+                           static_cast<int> (impl->edit->state.getProperty (currentScaleModeProperty, 0)) };
     for (auto* t : te::getAudioTracks (*impl->edit))
     {
         t->getClipSlotList().ensureNumberOfSlots (impl->edit->getSceneList().getNumScenes());
@@ -8776,7 +8809,9 @@ Result Session::writeRecovery (const File& destination)
     juce::XmlElement document ("HALFTRACK");
     document.setAttribute ("version", 1);
     if (impl->projectFile != File()) document.setAttribute ("halftrackRecoveryOf", impl->projectFile.getFullPathName());
-    document.addChildElement (impl->edit->state.createCopy().createXml().release());
+    auto recovered = impl->edit->state.createCopy();
+    impl->saveCurrentScale (recovered);
+    document.addChildElement (recovered.createXml().release());
     juce::TemporaryFile temp (destination);
     if (! document.writeTo (temp.getFile()) || ! temp.overwriteTargetFileWithTemporary()) return Result::fail ("Could not write the recovery copy.");
     return Result::ok();
@@ -9581,6 +9616,7 @@ Result Session::writeProject (const File& destination, bool copy)
     if (directoryResult.failed()) return directoryResult;
     impl->edit->flushState();
     auto state = impl->edit->state.createCopy();
+    impl->saveCurrentScale (state);
     std::map<String, File> copied;
     std::vector<std::pair<te::Clip*, File>> sources;
     for (auto* t : te::getAudioTracks (*impl->edit))
@@ -10670,7 +10706,7 @@ Result Session::addMidiClip (const String& trackId, double start, double length)
     auto clip = track->insertMIDIClip ("MIDI clip", time, nullptr);
     if (! clip) return Result::fail ("Could not create the MIDI clip.");
     clip->setSyncType (te::Clip::syncBarsBeats);
-    impl->colourNewClip (*clip);
+    impl->colourNewClip (*clip); impl->scaleNewClip (*clip);
     impl->changed(); return Result::ok();
 }
 Result Session::addScene (String name)
@@ -11041,7 +11077,7 @@ Result Session::addMidiClipToSlot (const String& trackId, int sceneIndex, double
     if (! clip) return Result::fail ("Could not create the MIDI clip.");
     clip->setSyncType (te::Clip::syncBarsBeats); clip->setLoopRangeBeats (beats);
     impl->applyLaunchDefaults (*clip);
-    impl->colourNewClip (*clip);
+    impl->colourNewClip (*clip); impl->scaleNewClip (*clip);
     impl->changed(); return Result::ok();
 }
 Result Session::clearSlot (int trackIndex, int sceneIndex)
@@ -12392,6 +12428,12 @@ Result Session::commitClipGroove (const String& clipId)
     }
     clip->state.removeProperty (clipGrooveProperty, undo);
     impl->changed(); return Result::ok();
+}
+Session::ScaleSettings Session::currentScale() const { return impl->currentScale; }
+void Session::setCurrentScale (const ScaleSettings& scale)
+{
+    if (scale.root < 0 || scale.root > 11 || scale.mode < 0 || scale.mode >= scaleModeCount) return;
+    impl->currentScale = scale;
 }
 Result Session::setClipScale (const String& clipId, const ScaleSettings& scale)
 {
@@ -17060,6 +17102,8 @@ void Session::finishRecording (bool stopTransport)
         for (auto* track : te::getAudioTracks (*impl->edit)) for (auto* clip : allTrackClips (*track))
             if (auto* midi = dynamic_cast<te::MidiClip*> (clip))
             {
+                // A new take has the project's current scale.
+                if (! impl->clipsBeforeRecording.count (midi->itemID.toString()) && ! midi->state.hasProperty (scaleEnabledProperty)) impl->scaleNewClip (*midi);
                 const auto range=impl->edit->tempoSequence.toBeats(midi->getPosition().time);
                 const auto notes=midi->getSequence().getNotes(); // Timing changes may reorder native notes.
                 for (auto* note : notes)

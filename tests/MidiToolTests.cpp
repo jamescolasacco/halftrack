@@ -374,6 +374,33 @@ int runMidiToolTests (const juce::File& artifacts)
         const auto loaded = s.loadProject (broken);
         check (loaded.failed() && loaded.getErrorMessage().contains ("clip scale") && scaleNow() == aMinor, "an unknown scale rejects the load and keeps the open project");
         {
+            // The project's current scale, as the reference's Set has one: the foreground clip's, taken by new MIDI clips.
+            check (s.currentScale() == Session::ScaleSettings {}, "a project starts with no current scale");
+            const Session::ScaleSettings dMinor { true, 2, 1 };
+            s.setCurrentScale (dMinor);
+            ok (s.addMidiTrack ("New clips"), "a MIDI track");
+            const auto trackId = s.snapshot().tracks.back().id;
+            ok (s.addMidiClip (trackId, 0, 4), "draw a clip");
+            ok (s.addMidiClipToSlot (trackId, 0, 4), "and one in a slot");
+            auto snapshot = s.snapshot();
+            check (snapshot.tracks.back().clips[0].scale == dMinor && snapshot.tracks.back().slots[0].clip.scale == dMinor && ! s.canRedo(),
+                   "new clips, drawn and in a slot, take D minor");
+            s.undo();
+            check (s.currentScale() == dMinor, "undo leaves the current scale");
+            ok (s.saveProject (project), "save"); ok (s.loadProject (project), "reopen");
+            check (s.currentScale() == dMinor, "the current scale reopens with the project");
+            auto saved = juce::XmlDocument::parse (project);
+            auto* edit = saved != nullptr ? saved->getChildByName ("EDIT") : nullptr;
+            check (edit != nullptr, "parse the saved project");
+            edit->setAttribute ("halftrackCurrentScaleRoot", 12);
+            const auto badScale = root.getChildFile ("Bad Scale.halftrack"); check (saved->writeTo (badScale), "write a root past B");
+            check (s.loadProject (badScale).failed() && s.currentScale() == dMinor, "an invalid current scale rejects the load and keeps the open project");
+            s.setCurrentScale ({ true, 12, 0 });
+            check (s.currentScale() == dMinor, "an invalid current scale is ignored");
+            ok (s.newProject(), "a new project");
+            check (s.currentScale() == Session::ScaleSettings {}, "starts without one again");
+        }
+        {
             // Rhythm, Shape, Stacks and Time Warp in a clip: the time range, Rhythm's clearing, the clip's scale and a
             // Drum Rack's pads.
             ok (s.addMidiTrack ("Tools"), "add another MIDI track");

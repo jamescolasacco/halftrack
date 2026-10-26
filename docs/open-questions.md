@@ -529,6 +529,10 @@ Only launches and stops made through Halftrack's launch commands are captured. T
 
 Replaced Arrangement material is split at the recorded range when it can be. A clip that cannot be split stays underneath.
 
+### Current scale
+
+New MIDI clips take the foreground clip's whole scale setting, its switch included, and clips made by import, paste or duplication keep their own; the manual names only "newly-created MIDI clips". The scale follows the clip shown in the clip view.
+
 ### Live Clips
 
 The manual describes saving and loading Live Clips ([contract](research/live-clips-contract.md)). Defaults where it is silent:

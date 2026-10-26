@@ -1146,6 +1146,11 @@ public:
     juce::Result removeMidiNote (const juce::String& clipId, const juce::String& noteId);
     // Replaces one controller lane of a MIDI clip in one undo step; no points removes the lane.
     juce::Result setMidiControllerLane (const juce::String& clipId, int controller, const std::vector<ControllerPoint>& points);
+    // The project's current scale, as the reference's Set has one: the foreground clip's (the clip view sets it), which new
+    // MIDI clips take, drawn or recorded, as the reference's manual describes. Kept with the project, outside the undo
+    // history.
+    ScaleSettings currentScale() const;
+    void setCurrentScale (const ScaleSettings&);
     juce::Result setClipScale (const juce::String& clipId, const ScaleSettings&);
     // Groove pool edits, one undo step each. addGroove copies a groove (from grooveLibrary or a file) into
     // the pool; extractGroove makes one from a MIDI clip's notes; setGroove replaces a pool groove's name,

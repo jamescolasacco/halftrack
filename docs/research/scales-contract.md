@@ -29,6 +29,14 @@ Options > Scale Highlighting (K), off at first, applies to every clip, as in the
 - root rows are tinted, and the root's keys more strongly marked;
 - rows outside the scale are darker.
 
+## The current scale (2026-10-26)
+
+As the reference's manual describes, the clip in the foreground gives newly created MIDI clips their scale: "newly-created MIDI clips will inherit the most recently selected clip's scale setting". The reference keeps this as its Set's current scale.
+
+- `Session::currentScale` and `setCurrentScale` hold it. The clip view sets it to the shown MIDI clip's scale (its switch, root and scale) whenever it refreshes.
+- MIDI clips drawn in the Arrangement or a slot, captured, and recorded (Arrangement and Session takes) take it. Pasted, duplicated and imported clips keep their own.
+- It is kept with the project (`halftrackCurrentScale`, `halftrackCurrentScaleRoot`, `halftrackCurrentScaleMode` on the Edit), outside the undo history. A new project starts without one, and invalid values reject a load, keeping the open project.
+
 ## Folding
 
 View's Fold to Notes (F) and Fold to Scale (G), after the reference's, apply to every MIDI clip; the reference's menu builder puts them after Fold Selected Track, between separators (see the [menu bar contract](main-menu-contract.md)).
@@ -57,11 +65,12 @@ The scale is stored on the MIDI clip (`halftrackScale`, `halftrackScaleRoot`, `h
 - reopening;
 - rejection of an unknown saved mode.
 
-The UI suite sets D minor from the header controls, opens Fit to Scale with that scale, undoes the change, and captures a snapshot. It also checks F and G folding the rows to the notes and to the scale, a note dragged a row moving to the scale's next pitch, and K dimming the rows outside the scale.
+The same suite gives a project D minor as its current scale and finds a drawn clip and a slot clip taking it, undo leaving it, the project reopening with it, an invalid saved root rejecting the load, an invalid scale ignored, and a new project starting without one.
+
+The UI suite sets D minor from the header controls, finds it become the current scale, opens Fit to Scale with that scale, undoes the change, and captures a snapshot. It also checks F and G folding the rows to the notes and to the scale, a note dragged a row moving to the scale's next pitch, and K dimming the rows outside the scale.
 
 ## Not implemented
 
-- A project-wide current scale.
 - Scale-aware devices.
 - Microtonal tunings.
 - The reference's complete scale list.

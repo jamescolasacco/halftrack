@@ -3015,3 +3015,7 @@ Engine and UI areas. As the reference's manual describes, a project in the brows
 ## Session automation into the Arrangement — 2026-10-26
 
 Engine area. As the reference's manual describes, a Session clip's automation now becomes its track's automation when the clip lands in the Arrangement, by paste or drag, a recorded Session performance, or a Live Clip: each envelope fills its control's lane over the clip's span, round its loop, and the Arrangement clip keeps only its modulation. Before, the automation curves stayed on the Arrangement clip, where Halftrack allows only modulation.
+
+## The current scale — 2026-10-26
+
+Engine and UI areas. As the reference's manual describes, new MIDI clips (drawn, captured or recorded) now take the scale of the clip last in the foreground, kept as the project's current scale with the project and outside the undo history.
