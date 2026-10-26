@@ -1670,6 +1670,12 @@ public:
     // reading until reEnableAutomation, which re-enables every overridden lane in one undo step.
     juce::Result setAutomationArm (bool);
     juce::Result reEnableAutomation();
+    // The lanes a move has switched off, by key: "master", "mixer:<track>:<control>" (volume, pan, leftsplit or rightsplit),
+    // "send:<track>:<return>" or "device:<plugin>:<parameter>".
+    juce::StringArray overriddenAutomation() const;
+    // One control's Re-Enable Automation, as its context menu offers it: that lane plays again, one undo step. A lane
+    // that is not switched off is left alone.
+    juce::Result reEnableAutomation (const juce::String& laneKey);
     // Punch-In and Punch-Out, after the reference: the loop brace marks the punch range whether or not
     // the loop plays. With Punch-In on, Arrangement recording keeps only what arrives from the loop
     // start; with Punch-Out on, only what arrives before the loop end. Recorded clips are trimmed to

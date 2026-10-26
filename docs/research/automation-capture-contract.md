@@ -36,6 +36,7 @@ The playhead is the transport position on the message thread.
 ## Interface
 
 - `setAutomationArm(bool)` and `reEnableAutomation()`.
+- `overriddenAutomation()` lists the overridden lanes by key ("master", "mixer:<track>:<control>", "send:<track>:<return>", "device:<plugin>:<parameter>"), and `reEnableAutomation(key)` re-enables one, in one undo step (2026-10-26). A lane that is still playing is left alone, with no undo step.
 - `Snapshot::automationArm`, and `Snapshot::automationOverridden` (some lane with points is switched off).
 - `record()` accepts Automation Arm in place of an armed track.
 
@@ -44,6 +45,7 @@ The playhead is the transport position on the message thread.
 - **Control bar.** Automation Arm (an envelope icon, red when on) and Re-Enable Automation (a returning arrow, orange when anything is overridden) sit after Record.
 - **Faders.** Mixer and master faders stay live with automation. Their thumb is red while following a lane and grey while overridden, and the tooltip says which.
 - **Device controls.** A native device's knobs and sliders show their lanes the same way: red while following, grey while overridden, with the same tooltips. The effects suite checks a Channel EQ control through following, overridden and cleared.
+- **Control menus.** While a control's lane is overridden, its context menu offers Re-Enable Automation for that lane alone, as the reference's control menus do. This covers the track header's volume and pan and a native device's controls; without an override, the header's sliders show no menu.
 
 ## Evidence
 
@@ -62,11 +64,10 @@ With the synthetic audio device and Automation Arm on, it checks:
 - **No take.** No clip is created.
 - **Undo.** Undo restores every lane.
 
-The UI suite checks the live faders, their thumb colours, the override, Re-Enable Automation, undo and the Automation Arm button. The automation suite's earlier "locked fader" checks now assert overrides.
+The capture suite also re-enables an overridden volume lane alone while a device lane stays overridden, leaves a playing lane alone without an undo step, and undoes both. The UI suite checks the live faders, their thumb colours, the override, Re-Enable Automation, the fader's menu re-enabling its lane (and none on the pan without an override), undo and the Automation Arm button. The automation suite's earlier "locked fader" checks now assert overrides.
 
 ## Not implemented
 
 - Recording into Session clips (the reference records Session automation as clip envelopes).
 - Utility controls. (Third-party plug-ins' parameters are captured and overridden from their own editors as well as Halftrack's controls; see the [plug-in automation contract](plugin-automation-contract.md).)
-- Per-control Re-Enable Automation from a context menu.
 - Measured comparison with the reference's recorded point density.

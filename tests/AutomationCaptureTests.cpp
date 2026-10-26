@@ -99,6 +99,22 @@ int runAutomationCaptureTests (const juce::File& artifacts)
             const auto overridden = s.snapshot().tracks[0].plugins.back().automation;
             check (overridden.size() == 1 && ! overridden[0].lane.enabled && s.snapshot().automationOverridden && std::abs (level (s, file) + 2) < .1,
                    "the device lane is overridden and the render follows the knob");
+            {
+                // One control's Re-Enable Automation, as its context menu offers it, leaves the other overridden lanes.
+                ok (s.setTrackAutomation (trackId, Target::volume, { true, { { 0, 0 }, { 16, 0 } } }), "a volume lane too");
+                ok (s.setTrackGain (0, -1), "and override it");
+                const auto volumeKey = "mixer:" + trackId + ":volume", deviceKey = "device:" + eq.id + ":" + juce::String (output);
+                check (s.overriddenAutomation().contains (volumeKey) && s.overriddenAutomation().contains (deviceKey), "both lanes are listed as overridden");
+                ok (s.reEnableAutomation (volumeKey), "re-enable the volume lane alone");
+                check (s.snapshot().tracks[0].volumeAutomation.enabled && ! s.overriddenAutomation().contains (volumeKey) && s.overriddenAutomation().contains (deviceKey)
+                           && s.undoDescription().containsIgnoreCase ("re-enable"), "only that lane plays again, one undo step");
+                const auto steps = s.undoSteps().size();
+                ok (s.reEnableAutomation (volumeKey), "a lane already playing");
+                check (s.undoSteps().size() == steps, "is left alone, adding no undo step");
+                s.undo(); check (! s.snapshot().tracks[0].volumeAutomation.enabled, "undo switches it off again");
+                s.undo(); s.undo();
+                check (s.overriddenAutomation() == juce::StringArray { deviceKey }, "undoing the volume lane leaves the device's overridden");
+            }
             ok (s.reEnableAutomation(), "Re-Enable Automation for the device");
             check (s.snapshot().tracks[0].plugins.back().automation[0].lane.enabled && std::abs (level (s, file) + 12) < .1, "the device follows its lane again");
             ok (s.setDeviceAutomation (eq.id, output, {}), "clear the device lane");

@@ -15927,6 +15927,18 @@ Result Session::reEnableAutomation()
     impl->refreshParameterValues();
     impl->changed(); return Result::ok();
 }
+juce::StringArray Session::overriddenAutomation() const { return impl->overriddenLanes(); }
+Result Session::reEnableAutomation (const String& laneKey)
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    if (! impl->overriddenLanes().contains (laneKey)) return Result::ok();
+    const auto lane = impl->laneFor (laneKey);
+    if (! lane) return Result::fail ("Automation lane not found.");
+    impl->transaction ("Re-enable automation");
+    auto points = lane->read(); points.enabled = true; impl->writeLane (*lane, points);
+    impl->refreshParameterValues();
+    impl->changed(); return Result::ok();
+}
 Result Session::setMasterVolumeAutomation (const AutomationLane& lane)
 {
     return impl->setMixerAutomation (*impl->edit->getMasterVolumePlugin(), AutomationTarget::volume, lane);

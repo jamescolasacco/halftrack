@@ -2983,3 +2983,7 @@ Engine and UI areas. As the reference's command does (static reading), Create Fo
 ## Duplicate Loop and the multi-clip limit — 2026-10-26
 
 Engine and UI areas. Duplicate Loop doubles a MIDI clip's loop: its notes, whole, and its controller points are copied into the new half, and what lies after the loop moves on (`Session::duplicateClipLoop`, one undo step; a Session clip lengthens with it). As in the reference's 12.2 menus, it is Edit > Duplicate (Cmd+D) on a selected loop brace or loop bar. Arrangement multi-clip editing now shows clips from up to eight tracks, as the manual describes.
+
+## Per-control Re-Enable Automation — 2026-10-26
+
+Engine and UI areas. While a control's automation is overridden, its context menu offers Re-Enable Automation for that lane alone, as the reference's control menus do: the track header's volume and pan, and native device controls. `Session::overriddenAutomation` lists the overridden lanes by key and `reEnableAutomation (key)` re-enables one, one undo step.

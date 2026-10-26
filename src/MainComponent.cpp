@@ -3044,6 +3044,8 @@ private:
             pan.onValueChange = [this] { owner.report (owner.session.setTrackPan (index, (float) pan.getValue())); };
             gain.onReset = [this] { resetControl ("volume"); };
             pan.onReset = [this] { resetControl ("pan"); };
+            gain.onContextMenu = [this] { if (juce::isPositiveAndBelow (index, (int) owner.state.tracks.size())) owner.showControlMenu ("mixer:" + owner.state.tracks[(size_t) index].id + ":volume"); };
+            pan.onContextMenu = [this] { if (juce::isPositiveAndBelow (index, (int) owner.state.tracks.size())) owner.showControlMenu ("mixer:" + owner.state.tracks[(size_t) index].id + ":pan"); };
             // In Split Stereo pan mode two sliders pan the left and right channels in place of the pan.
             for (auto* split : { &leftSplit, &rightSplit })
             {
@@ -14867,6 +14869,25 @@ private:
         std::erase (extraMidiClipIds, id);
         selectTrack (t); selectedClip = c; selectedLauncherClipId.clear();
         refresh();
+    }
+    // A control's context menu, as the reference's: Re-Enable Automation while a move has switched its lane off (see
+    // Session::overriddenAutomation). Nothing shows without it.
+    juce::PopupMenu controlMenu (const juce::String& laneKey) const
+    {
+        juce::PopupMenu menu;
+        if (session.overriddenAutomation().contains (laneKey)) menu.addItem (1, "Re-Enable Automation");
+        return menu;
+    }
+    void chooseControlItem (const juce::String& laneKey, int chosen)
+    {
+        if (chosen == 1) { report (session.reEnableAutomation (laneKey)); refresh(); }
+    }
+    void showControlMenu (const juce::String& laneKey)
+    {
+        auto menu = controlMenu (laneKey);
+        if (menu.getNumItems() == 0) return;
+        menu.showMenuAsync (juce::PopupMenu::Options(), [safe = juce::Component::SafePointer<Impl> (this), laneKey] (int chosen)
+                            { if (safe != nullptr && chosen != 0) safe->chooseControlItem (laneKey, chosen); });
     }
     // With HALFTRACK_TEST_UI_SNAPSHOT_DIRECTORY set, a picture of part of the window kept for review under a name.
     void keepSnapshot (const juce::String& name, juce::Rectangle<int> area)
@@ -30089,6 +30110,19 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
     automatedGain->setValue (-6, juce::sendNotificationSync); refresh();
     check (! state.tracks[0].volumeAutomation.enabled && state.tracks[0].volumeAutomation.points.size() == 2 && automatedGain->findColour (juce::Slider::thumbColourId) == muted
            && state.automationOverridden && reEnableButton.isEnabled() && reEnableButton.getToggleState(), "moving it overrides the lane, greys its thumb and lights Re-Enable Automation");
+    {
+        // Its context menu offers Re-Enable Automation for that lane alone, as the reference's control menus do.
+        const auto key = "mixer:" + state.tracks[0].id + ":volume";
+        const auto menu = controlMenu (key);
+        juce::StringArray items;
+        for (juce::PopupMenu::MenuItemIterator i (menu); i.next();) items.add (i.getItem().text);
+        check (items == juce::StringArray { "Re-Enable Automation" } && controlMenu ("mixer:" + state.tracks[0].id + ":pan").getNumItems() == 0,
+               "the fader's menu offers Re-Enable Automation, and the pan without an override shows none");
+        chooseControlItem (key, 1);
+        check (state.tracks[0].volumeAutomation.enabled && ! state.automationOverridden, "choosing it plays the lane again");
+        session.undo(); refresh();
+        check (! state.tracks[0].volumeAutomation.enabled && state.automationOverridden, "and undo switches it off again");
+    }
     reEnableButton.onClick(); refresh();
     check (state.tracks[0].volumeAutomation.enabled && ! state.automationOverridden && ! reEnableButton.isEnabled() && automatedGain->findColour (juce::Slider::thumbColourId) == red,
            "Re-Enable Automation lets the fader follow its lane again");
