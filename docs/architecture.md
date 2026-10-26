@@ -765,16 +765,25 @@ All containers use the same render guard, cancellation, latency correction, owne
 Generated tests decode every frame for all seven format/depth combinations against independently calculated source × master gain, with quantization bounds at 16-bit and an exact silent tail. Resampled 24-bit AIFF/FLAC are compared against decoded WAV, alongside real container signatures, metadata, invalid-input rejection, cancellation and reentrant edit/export rejection. Native UI tests exercise supported choices and both cancellation and acceptance of a corrected-extension overwrite. Physical listening and arbitrary third-party writer/plugin behavior remain separate checks.
 
 
-## Beat-timed Session follow actions
+## Session follow actions
 
-`FollowSettings` contains a deterministic action and duration in project beats. `setClipFollowAction(stableClipId, settings)` supports Off, Stop, Play Again, Previous, Next, First, Last and Cycle to Next for native Session audio/MIDI clips. Off requires zero beats and clears actions; active choices accept 1/960 through 4096 beats. `FollowSettings::actionB` and `chanceA` add a second action: the native container holds action A weighted by its chance and action B (or no action) weighted by the rest. Loading accepts one unit-weight action or two weights summing to one. Any and Other choose a random populated slot (Other never the playing one). Previous/Next stop at the ends of the track's populated slots; Cycle wraps. Empty slots are skipped. These are documented native-engine semantics, not measured reference parity.
+`FollowSettings` holds a Session clip's or scene's Follow Action as the reference's model does (static reading; see the [contract](research/follow-actions-contract.md)). `setClipFollowAction` and `setSceneFollowAction` validate it through `followactions::valid` and write a `HALFTRACKFOLLOWACTION` child, which is left out at the defaults, in one undo step. `setFollowActionsEnabled` is the transient global switch. The snapshot reports `ClipInfo::follow`, `SceneInfo::follow` and `hasClips`, `followActionsEnabled` and `followActionsInUse`.
 
-The native slot controller schedules transitions from the actual launch beat, independently of the global launch grid, without a UI timer. Actions use the native `FOLLOWACTIONS/ACTION` state and beat-duration properties. An empty native container remains after undo because the engine caches its object; action/timing changes themselves undo in one transaction. This prevents a later edit after undo from targeting detached cached state. The facade validates all input before changing state, rejects Arrangement/missing/ambiguous/frozen targets and recording/export, and makes equal settings a no-op. Snapshot reads never create native state. Native clip/scene copies retain settings, while relative targets are resolved in their owning track when the graph is prepared.
+`src/FollowActions.*` holds the pure parts, built without floating-point contraction so that only its explicit `std::fma` calls fuse, as the reference's do:
+- the draws;
+- the A/B choice;
+- groups and targets;
+- chance coupling and load normalisation;
+- tick rounding and validation.
 
-The facade rebuilds the native graph after follow edits; undo/redo compares captured follow settings and requests the same update when necessary. No owned callback is added. The dependency's existing callback limitations remain. Version-1 project loading accepts missing settings as Off and validates finite beat timing, known single-action enums, unit weight and supported beat mode before replacing the current project or history. Weighted/random, loop-count and scene-level actions are not exposed.
+The engine's own follow actions are no longer used: loading converts their old `FOLLOWACTIONS` form (`migrateFollowActions`) and removes it, so the graph runs none of them. `Session::Impl` plans Follow Actions on the message thread:
+- `followWatch` reads each track's playing launch handle. It is a timer that launches, Play and Continue start, running every 5 ms while the transport plays and every 100 ms while it is stopped. A new played-range start, or a new clip, is a start, and `planFollow` draws from the track's `FollowTrack::state` then.
+- The plan's time comes from the launch moment recorded by `queueTrack` (unlinked) or from the played range and the clip's loop (linked). It is put on the target clip's own launch grid.
+- A plan is queued through `queueTrack` once it is within a quarter second. `queueTrack` clears the track's plan, so a launch by hand or by a scene replaces it.
+- A scene launch sets `sceneEvent`, whose start is its boundary, or for an immediate launch its first clip's played start. `runSceneEvent` draws from `sceneFollowState`. `launchSceneFollow` queues the picked scene on every track without quantization and arms the next `sceneEvent`.
+- Stopping the transport drops every plan.
 
-The clip view's Launch box opens a stable-ID editor; a timing badge marks configured slots. Off disables the beat input. Numeric text is parsed completely, cancellation makes no edit, and a stale dialog cannot modify a replacement clip. Tests use generated sources and synchronous native readers, with separate checks for actual output, launch handles, replay phase, MIDI voice release, history, copied/loaded state, invalid-state preservation and UI handlers.
-
+No owned audio callback is added: the engine's launch handles carry the queued launches.
 
 The generated monitoring fixture now records native route enablement, instance survival, note delivery and actual output separately from the restored track model. Its observer only counts source-free test MIDI and is removed through weak references; it does not change production audio code. The existing signal assertions remain. Three pending playback-graph replacements before a fresh key are also exercised. This provides narrower CI failure evidence without treating a passing local schedule as proof of the intermittent Mac failure's cause.
 

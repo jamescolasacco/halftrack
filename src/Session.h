@@ -43,7 +43,8 @@ public:
         // existing movie there is kept unless replaceVideo says to replace it.
         bool video = false, replaceVideo = false;
     };
-    enum class FollowAction { off, stop, replay, previous, next, first, last, cycle, any, other };
+    // A Follow Action's choices, in the reference's chooser order (static reading of its code; see the follow actions contract).
+    enum class FollowAction { noAction, stop, again, previous, next, first, last, any, other, jump };
     // A track's side of the crossfader; unassigned tracks ignore it.
     enum class CrossfadeAssign { none, a, b };
     // The crossfader's curves, the reference's seven in its context menu's order (its manual, section
@@ -68,13 +69,20 @@ public:
         float velocityAmount = 0;
         bool operator== (const LaunchSettings&) const = default;
     };
+    // A clip's or scene's Follow Action, as the reference's, with its defaults (static reading; see the follow actions
+    // contract). When it starts, a clip or scene draws action A or B by their chances and, at its time, plays what that
+    // action picks in its group (followactions::target).
     struct FollowSettings
     {
-        FollowAction action = FollowAction::off;
-        double afterBeats = 0;
-        // Action B plays when action A is not chosen; chanceA is A's probability (0-1). Off as B does nothing.
-        FollowAction actionB = FollowAction::off;
-        double chanceA = 1;
+        bool enabled = false;  // The Follow Action switch; off, a clip or scene plays on.
+        double timeBeats = 4;  // Follow Action Time, from where it started: a quarter beat to followactions::maximumTime.
+        // Linked, a clip's time is its end, or the end of its multiplier's passes round its loop, and a scene's is its
+        // longest clip's; unlinked, both use the time.
+        bool linked = true;
+        int multiplier = 1;
+        FollowAction actionA = FollowAction::next, actionB = FollowAction::noAction;
+        float chanceA = 100, chanceB = 0; // Percentages, used as weights; editing one sets the other (followactions::coupled).
+        int jumpA = 1, jumpB = 1;         // Jump's scene: a row from 0, or -1 for none, which stops.
         bool operator== (const FollowSettings&) const = default;
     };
     struct SynthSettings
@@ -479,6 +487,8 @@ public:
         std::optional<TimeSignature> timeSignature;
         juce::String infoText; // Its own info text, from Edit Info Text; empty for none.
         juce::Colour colour;   // Its own colour, or transparent for none.
+        FollowSettings follow; // Its Follow Action; it launches the scene its action picks.
+        bool hasClips = false; // A clip in some track's slot on its row; only such scenes are in a Follow Action group.
     };
     struct SlotInfo
     {
@@ -732,6 +742,9 @@ public:
         juce::Colour mainColour;
         std::vector<GroupInfo> groups;
         std::vector<SceneInfo> scenes;
+        // Enable Follow Actions Globally, on at first, not saved or undone; followActionsInUse says whether a clip, or a
+        // scene with clips, has an active Follow Action (followactions::active), as the reference greys the switch without.
+        bool followActionsEnabled = true, followActionsInUse = false;
         std::vector<LocatorInfo> locators;
         std::vector<GrooveInfo> grooves; // The groove pool, in pool order.
         bool automationArm = false, punchIn = false, punchOut = false;
@@ -1520,7 +1533,14 @@ public:
     // leaves; a MIDI clip keeps its beats, as a move does. One undo step.
     juce::Result copyClipTo (const juce::String& clipId, const juce::String& destinationTrackId, double startSeconds, juce::String& copyId);
     juce::Result removeClip (int trackIndex, int clipIndex);
+    // A Session clip's or scene's Follow Action, one undo step each (see FollowSettings).
     juce::Result setClipFollowAction (const juce::String& clipId, const FollowSettings&);
+    juce::Result setSceneFollowAction (const juce::String& sceneId, const FollowSettings&);
+    // Enable Follow Actions Globally. Off, starting clips and scenes plan no Follow Action; one already planned still plays.
+    void setFollowActionsEnabled (bool);
+    // For tests: every track's and the scenes' Follow Action draws start from this state, as the reference's do from
+    // seeds it chooses.
+    void seedFollowActions (std::uint32_t);
     juce::Result setClipActive (const juce::String& clipId, bool active);
     juce::Result renameClip (const juce::String& clipId, const juce::String& name);
     // Track names, as the reference's (static reading of its code). A track without a name of its

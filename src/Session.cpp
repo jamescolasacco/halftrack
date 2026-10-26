@@ -5,6 +5,7 @@
 #include "LevelScale.h"
 #include "NativeEffects.h"
 #include "Racks.h"
+#include "FollowActions.h"
 #include "NoteTools.h"
 #include "Grooves.h"
 #include "Tuner.h"
@@ -1439,79 +1440,145 @@ Result validateProjectTempo (const juce::ValueTree& state)
     if (meters == 0) return Result::fail ("The project needs a time signature.");
     return Result::ok();
 }
-constexpr std::array<te::FollowAction, 10> nativeFollowActions {
-    te::FollowAction::none, te::FollowAction::globalStop, te::FollowAction::globalPlayAgain,
-    te::FollowAction::trackPrevious, te::FollowAction::trackNext, te::FollowAction::trackFirst,
-    te::FollowAction::trackLast, te::FollowAction::trackRoundRobin, te::FollowAction::trackAny, te::FollowAction::trackOther
-};
-bool validFollowSettings (const Session::FollowSettings& settings)
+// Follow Actions (see Session::FollowSettings): a HALFTRACKFOLLOWACTION child of a Session clip or a scene, absent for the
+// defaults. Projects saved before 2026-10-26 kept a clip's in the engine's own form instead, which loading converts.
+const juce::Identifier followActionType { "HALFTRACKFOLLOWACTION" }, followEnabledProperty { "enabled" }, followTimeProperty { "time" },
+    followLinkedProperty { "linked" }, followMultiplierProperty { "multiplier" }, followActionAProperty { "actionA" },
+    followActionBProperty { "actionB" }, followChanceAProperty { "chanceA" }, followChanceBProperty { "chanceB" },
+    followJumpAProperty { "jumpA" }, followJumpBProperty { "jumpB" };
+Session::FollowSettings readFollow (const juce::ValueTree& owner)
 {
-    const auto action = static_cast<int> (settings.action), second = static_cast<int> (settings.actionB);
-    if (action < 0 || action >= (int) nativeFollowActions.size() || second < 0 || second >= (int) nativeFollowActions.size()
-        || ! std::isfinite (settings.afterBeats) || ! std::isfinite (settings.chanceA) || settings.chanceA < 0 || settings.chanceA > 1) return false;
-    if (settings.action == Session::FollowAction::off)
-        return settings.afterBeats == 0 && settings.actionB == Session::FollowAction::off && settings.chanceA == 1;
-    return settings.afterBeats >= 1.0 / 960 && settings.afterBeats <= 4096;
+    Session::FollowSettings s;
+    const auto f = owner.getChildWithName (followActionType);
+    if (! f.isValid()) return s;
+    s.enabled = f.getProperty (followEnabledProperty, s.enabled);
+    s.timeBeats = f.getProperty (followTimeProperty, s.timeBeats);
+    s.linked = f.getProperty (followLinkedProperty, s.linked);
+    s.multiplier = f.getProperty (followMultiplierProperty, s.multiplier);
+    s.actionA = static_cast<Session::FollowAction> ((int) f.getProperty (followActionAProperty, (int) s.actionA));
+    s.actionB = static_cast<Session::FollowAction> ((int) f.getProperty (followActionBProperty, (int) s.actionB));
+    s.chanceA = f.getProperty (followChanceAProperty, s.chanceA);
+    s.chanceB = f.getProperty (followChanceBProperty, s.chanceB);
+    s.jumpA = f.getProperty (followJumpAProperty, s.jumpA);
+    s.jumpB = f.getProperty (followJumpBProperty, s.jumpB);
+    return s;
 }
-Session::FollowSettings clipFollowSettings (const juce::ValueTree& state)
+void writeFollow (juce::ValueTree owner, const Session::FollowSettings& s, juce::UndoManager* undo)
 {
+    auto f = owner.getChildWithName (followActionType);
+    if (s == Session::FollowSettings {}) { if (f.isValid()) owner.removeChild (f, undo); return; }
+    if (! f.isValid()) { f = juce::ValueTree (followActionType); owner.appendChild (f, undo); }
+    f.setProperty (followEnabledProperty, s.enabled, undo);
+    f.setProperty (followTimeProperty, s.timeBeats, undo);
+    f.setProperty (followLinkedProperty, s.linked, undo);
+    f.setProperty (followMultiplierProperty, s.multiplier, undo);
+    f.setProperty (followActionAProperty, (int) s.actionA, undo);
+    f.setProperty (followActionBProperty, (int) s.actionB, undo);
+    f.setProperty (followChanceAProperty, s.chanceA, undo);
+    f.setProperty (followChanceBProperty, s.chanceB, undo);
+    f.setProperty (followJumpAProperty, s.jumpA, undo);
+    f.setProperty (followJumpBProperty, s.jumpB, undo);
+}
+// A clip's follow actions in the engine's form, as projects before 2026-10-26 kept them, converted: on, after their beats,
+// unlinked, their weights as chances (Next and Previous now wrap, and Cycle is Next). Nothing when it has none.
+Result legacyFollow (const juce::ValueTree& state, std::optional<Session::FollowSettings>& converted)
+{
+    converted.reset();
+    int containers = 0;
+    for (const auto& child : state) if (child.hasType (te::IDs::FOLLOWACTIONS)) ++containers;
     const auto actions = state.getChildWithName (te::IDs::FOLLOWACTIONS);
-    const int count = actions.getNumChildren();
-    if (count < 1 || count > 2) return {};
-    const auto parse = [] (const juce::ValueTree& action) -> std::optional<Session::FollowAction>
+    const auto unsupported = Result::fail ("The project contains unsupported clip follow actions.");
+    if (! state.hasProperty (te::IDs::followActionBeats) && ! actions.isValid()) return Result::ok();
+    if (containers > 1 || actions.getNumChildren() > 2 || ! finiteProperty (state.getProperty (te::IDs::followActionBeats, 0.0), 0, 4096)
+        || state.getProperty (te::IDs::followActionDurationType, "beats").toString() != "beats")
+        return Result::fail ("The project contains unsupported clip follow timing.");
+    const double beats = state.getProperty (te::IDs::followActionBeats, 0.0);
+    if (actions.getNumChildren() == 0) return beats == 0 ? Result::ok() : Result::fail ("Clip follow timing has no action.");
+    const auto kind = [] (const juce::ValueTree& action) -> std::optional<Session::FollowAction>
     {
-        if (const auto native = te::followActionFromString (action[te::IDs::type].toString()))
-            for (size_t i = 0; i < nativeFollowActions.size(); ++i) if (*native == nativeFollowActions[i]) return static_cast<Session::FollowAction> (i);
-        return {};
+        using A = Session::FollowAction;
+        const auto native = te::followActionFromString (action[te::IDs::type].toString());
+        if (! native) return std::nullopt;
+        switch (*native)
+        {
+            case te::FollowAction::none:            return A::noAction;
+            case te::FollowAction::globalStop:      return A::stop;
+            case te::FollowAction::globalPlayAgain: return A::again;
+            case te::FollowAction::trackPrevious:   return A::previous;
+            case te::FollowAction::trackNext:       [[fallthrough]];
+            case te::FollowAction::trackRoundRobin: return A::next;
+            case te::FollowAction::trackFirst:      return A::first;
+            case te::FollowAction::trackLast:       return A::last;
+            case te::FollowAction::trackAny:        return A::any;
+            case te::FollowAction::trackOther:      return A::other;
+            default:                                return std::nullopt;
+        }
     };
-    const auto first = parse (actions.getChild (0));
-    if (! first || *first == Session::FollowAction::off) return {};
-    Session::FollowSettings settings { *first, static_cast<double> (state.getProperty (te::IDs::followActionBeats, 0.0)) };
-    if (count == 2)
+    Session::FollowSettings settings;
+    settings.enabled = true; settings.linked = false; settings.timeBeats = std::max (0.25, beats);
+    settings.actionB = Session::FollowAction::noAction; settings.chanceA = 100; settings.chanceB = 0;
+    double total = 0;
+    for (int i = 0; i < actions.getNumChildren(); ++i)
     {
-        const auto second = parse (actions.getChild (1)); if (! second) return {};
-        // A's chance is its share of the two weights; B, or nothing, takes the rest.
-        const double a = actions.getChild (0).getProperty (te::IDs::weight, 1.0), b = actions.getChild (1).getProperty (te::IDs::weight, 1.0);
-        settings.actionB = *second; settings.chanceA = a + b > 0 ? a / (a + b) : 1.0;
+        const auto action = actions.getChild (i);
+        const auto chosen = kind (action);
+        if (! action.hasType (te::IDs::ACTION) || ! chosen || ! finiteProperty (action.getProperty (te::IDs::weight, 1.0), 0, 1)) return unsupported;
+        const auto weight = (double) action.getProperty (te::IDs::weight, 1.0);
+        total += weight;
+        (i == 0 ? settings.actionA : settings.actionB) = *chosen;
+        (i == 0 ? settings.chanceA : settings.chanceB) = (float) (weight * 100);
     }
-    return settings;
+    if (settings.actionA == Session::FollowAction::noAction || beats < 1.0 / 960 || std::abs (total - 1) > 1e-9) return unsupported;
+    converted = settings;
+    return Result::ok();
+}
+// A Follow Action child's values, each within its range.
+Result validateFollowChild (const juce::ValueTree& f)
+{
+    const auto number = [&] (const juce::Identifier& id, double low, double high, bool whole)
+    {
+        if (! f.hasProperty (id)) return true;
+        const auto text = f[id].toString().trim();
+        if (whole && (text == "true" || text == "false")) return low <= 0 && high >= 1;
+        return finiteProperty (f[id], low, high) && (! whole || std::floor ((double) f[id]) == (double) f[id]);
+    };
+    return number (followEnabledProperty, 0, 1, true) && number (followTimeProperty, .25, followactions::maximumTime, false)
+        && number (followLinkedProperty, 0, 1, true) && number (followMultiplierProperty, 1, followactions::maximumMultiplier, true)
+        && number (followActionAProperty, 0, (int) Session::FollowAction::jump, true) && number (followActionBProperty, 0, (int) Session::FollowAction::jump, true)
+        && number (followChanceAProperty, 0, 100, false) && number (followChanceBProperty, 0, 100, false)
+        && number (followJumpAProperty, -1, 1 << 23, true) && number (followJumpBProperty, -1, 1 << 23, true)
+        ? Result::ok() : Result::fail ("The project contains an invalid Follow Action.");
 }
 Result validateFollowActions (const juce::ValueTree& state)
 {
     if (state.hasType (te::IDs::AUDIOCLIP) || state.hasType (te::IDs::MIDICLIP))
     {
-        int containers = 0;
-        for (const auto& child : state) if (child.hasType (te::IDs::FOLLOWACTIONS)) ++containers;
-        const auto actions = state.getChildWithName (te::IDs::FOLLOWACTIONS);
-        const auto text = state.getProperty (te::IDs::followActionBeats, 0.0).toString().trim().toStdString();
-        char* end = nullptr; const auto beats = std::strtod (text.c_str(), &end);
-        if (containers > 1 || actions.getNumChildren() > 2 || text.empty() || end != text.c_str() + text.size()
-            || ! std::isfinite (beats) || beats < 0 || beats > 4096
-            || state.getProperty (te::IDs::followActionDurationType, "beats").toString() != "beats")
-            return Result::fail ("The project contains unsupported clip follow timing.");
-        if (actions.getNumChildren() == 0)
-        {
-            if (beats != 0) return Result::fail ("Clip follow timing has no action.");
-        }
-        else
-        {
-            // One action at unit weight, or actions A and B whose weights are their chances.
-            const auto settings = clipFollowSettings (state);
-            double total = 0; bool shaped = actions.getNumChildren() <= 2;
-            for (const auto& action : actions)
-            {
-                const auto weight = action.getProperty (te::IDs::weight, 1.0).toString().trim().toStdString();
-                char* weightEnd = nullptr; const auto value = std::strtod (weight.c_str(), &weightEnd);
-                shaped = shaped && action.hasType (te::IDs::ACTION) && ! weight.empty() && weightEnd == weight.c_str() + weight.size()
-                       && std::isfinite (value) && value >= 0 && value <= 1;
-                total += value;
-            }
-            if (! shaped || settings.action == Session::FollowAction::off || ! validFollowSettings (settings) || std::abs (total - 1) > 1e-9)
-                return Result::fail ("The project contains unsupported clip follow actions.");
-        }
+        std::optional<Session::FollowSettings> converted;
+        if (auto result = legacyFollow (state, converted); result.failed()) return result;
     }
+    int children = 0;
+    for (const auto& child : state)
+        if (child.hasType (followActionType))
+        {
+            if (++children > 1) return Result::fail ("The project contains an invalid Follow Action.");
+            if (auto result = validateFollowChild (child); result.failed()) return result;
+        }
     for (const auto& child : state) if (auto result = validateFollowActions (child); result.failed()) return result;
     return Result::ok();
+}
+// After validation: older clips' follow actions in Halftrack's form, the engine's left out so it runs none of its own, and
+// every Follow Action's chances as the reference leaves them after a load (followactions::normalised).
+void migrateFollowActions (juce::ValueTree state)
+{
+    if (state.hasType (te::IDs::AUDIOCLIP) || state.hasType (te::IDs::MIDICLIP))
+    {
+        std::optional<Session::FollowSettings> converted;
+        if (legacyFollow (state, converted).wasOk() && converted) writeFollow (state, *converted, nullptr);
+        if (auto actions = state.getChildWithName (te::IDs::FOLLOWACTIONS); actions.isValid()) state.removeChild (actions, nullptr);
+        state.removeProperty (te::IDs::followActionBeats, nullptr); state.removeProperty (te::IDs::followActionDurationType, nullptr);
+    }
+    if (state.getChildWithName (followActionType).isValid()) writeFollow (state, followactions::normalised (readFollow (state)), nullptr);
+    for (auto child : state) migrateFollowActions (child);
 }
 
 // Clip envelope curves name the device they control by its ID and a parameter; the engine
@@ -2130,7 +2197,7 @@ Session::ClipInfo describeClip (te::Clip& clip)
     result.sourceOffset = position.offset.inSeconds();
     const auto beats = clip.edit.tempoSequence.toBeats (position.time);
     result.startBeat = beats.getStart().inBeats(); result.lengthBeats = beats.getLength().inBeats();
-    result.follow = clipFollowSettings (clip.state);
+    result.follow = readFollow (clip.state);
     result.launch = clipLaunchSettings (clip.state);
     result.scale = clipScale (clip.state);
     result.grooveId = clip.state[clipGrooveProperty].toString();
@@ -3264,7 +3331,7 @@ struct Session::Impl
     {
         std::function<void()> tick;
         void timerCallback() override { tick(); }
-    } sceneWatch, rangeWatch, tapWatch, scrubWatch;
+    } sceneWatch, rangeWatch, tapWatch, scrubWatch, followWatch;
     std::optional<double> rangeEnd; // Where Play Arrangement Selection stops.
     // The user's stops counted toward the third within 3.5 seconds of each other (Session::stopPressed).
     int userStops = 0;
@@ -3420,6 +3487,10 @@ struct Session::Impl
     }
     void queueTrack (te::AudioTrack& track, te::Clip* selected, std::optional<te::MonotonicBeat> boundary)
     {
+        // A launch replaces the Follow Action planned on its track, and the follow watch sees what it starts.
+        followTrack (track).plan.reset();
+        if (selected != nullptr) launchMoments[selected->itemID] = boundary ? boundary->v.inBeats() : monotonicNow().value_or (0.0);
+        watchFollow();
         if (selected) track.launcherSilence.stop (boundary);
         else track.launcherSilence.play (boundary);
         // A legato clip starts in phase with the clip already playing on its track.
@@ -3446,6 +3517,206 @@ struct Session::Impl
                     else h->stop (boundary);
                 }
         if (performanceStart) performance[track.itemID].push_back ({ unloopedTime (boundary), selected != nullptr ? selected->itemID : te::EditItemID(), {} });
+    }
+    // Follow Actions (see Session::FollowSettings), planned as the reference plans them (static reading; see the follow
+    // actions contract). The follow watch sees each track's clip start and draws its action then, as a scene's launch draws
+    // the scene's. The launch picked waits here until shortly before its time, when it is queued on the engine's launch
+    // handles, so a later launch on the track still replaces it.
+    struct FollowPlan { double at = 0; int target = 0; }; // Monotonic beats; a row, or followactions::stopTarget.
+    struct FollowTrack
+    {
+        std::uint32_t state = 0;  // The track's draws.
+        te::EditItemID clip;      // The clip whose start was seen last,
+        double start = 0;         // and its played range's start.
+        std::optional<FollowPlan> plan;
+    };
+    std::map<te::EditItemID, FollowTrack> followTracks;
+    std::map<te::EditItemID, double> launchMoments; // Where each clip's last launch was asked to start, in monotonic beats.
+    std::optional<std::uint32_t> followSeed;        // Session::seedFollowActions.
+    std::uint32_t sceneFollowState = (std::uint32_t) juce::Random::getSystemRandom().nextInt();
+    // A scene launched, whose Follow Action runs at its launch (at is NaN until one of its clips shows where that was),
+    // and the scene a scene's Follow Action picked.
+    std::optional<FollowPlan> sceneEvent, sceneLaunch;
+    bool followActionsEnabled = true;
+    FollowTrack& followTrack (const te::AudioTrack& track)
+    {
+        auto [entry, added] = followTracks.try_emplace (track.itemID);
+        if (added) entry->second.state = followSeed ? *followSeed : (std::uint32_t) (track.itemID.getRawID() * 2654435761u);
+        return entry->second;
+    }
+    std::optional<double> monotonicNow() const
+    {
+        if (auto* context = edit->getTransport().getCurrentPlaybackContext()) if (auto sync = context->getSyncPoint()) return sync->monotonicBeat.v.inBeats();
+        return std::nullopt;
+    }
+    // The follow watch looks every 5 ms while the transport plays and every 100 ms while it is stopped, so playback
+    // started any way is watched within a moment; launches and Play wake it at once.
+    void watchFollow()
+    {
+        if (followWatch.isTimerRunning() && followWatch.getTimerInterval() == 5) return;
+        followWatch.tick = [this] { watchFollowActions(); };
+        followWatch.startTimer (5);
+    }
+    bool sceneHasClips (int row) const
+    {
+        for (auto* track : te::getAudioTracks (*edit))
+            if (auto* slot = track->getClipSlotList().getClipSlots()[row]; slot != nullptr && slot->getClip() != nullptr) return true;
+        return false;
+    }
+    // A time on a clip's own launch grid, at or after it; Global and None leave it.
+    double onClipGrid (te::Clip& clip, double at, const te::SyncPoint& sync) const
+    {
+        const auto grid = clipLaunchSettings (clip.state).quantisation;
+        if (grid == Session::ClipQuantisation::global || grid == Session::ClipQuantisation::none) return at;
+        const auto beat = sync.beat + te::BeatDuration::fromBeats (at - sync.monotonicBeat.v.inBeats());
+        return at + (te::getNext (clipLaunchGrids[static_cast<size_t> (grid)], edit->tempoSequence, beat) - beat).inBeats();
+    }
+    // A clip's Follow Action, drawn as it starts: its track's groups, then when the launch it picks plays. played is
+    // where the engine counts the clip's play from (a legato launch's is its partner's), launched where it was launched.
+    std::optional<FollowPlan> planFollow (te::AudioTrack& track, int row, te::Clip& clip, double played, double launched, const te::SyncPoint& sync)
+    {
+        if (! followActionsEnabled) return std::nullopt;
+        auto settings = readFollow (clip.state);
+        if (! settings.enabled) settings.actionA = settings.actionB = Session::FollowAction::noAction;
+        const int scenes = edit->getSceneList().getNumScenes();
+        settings.jumpA = std::clamp (settings.jumpA, -1, scenes - 1); settings.jumpB = std::clamp (settings.jumpB, -1, scenes - 1);
+        const auto slots = track.getClipSlotList().getClipSlots();
+        std::vector<bool> held, plays;
+        std::vector<int> excluded; // Slots that can neither play nor stop the track.
+        for (int i = 0; i < slots.size(); ++i)
+        {
+            const auto* c = slots[i]->getClip();
+            held.push_back (c != nullptr); plays.push_back (c != nullptr && ! c->isMuted());
+            if (! plays.back() && static_cast<bool> (slots[i]->state.getProperty (noStopButtonProperty, false))) excluded.push_back (i);
+        }
+        const auto groups = followactions::groups (held, plays);
+        const auto picked = followactions::evaluate (followTrack (track).state, row, settings, followactions::groupOf (groups, row), excluded);
+        if (! picked) return std::nullopt;
+        // Unlinked, the time from the launch. Linked, the end of an unlooped clip, or of the multiplier's passes round
+        // its loop, the first ending at the first loop end after the launch.
+        double at = launched + settings.timeBeats;
+        if (settings.linked)
+        {
+            const auto loop = clip.getLoopLengthBeats().inBeats();
+            if (clip.isLooping() && loop > 0)
+            {
+                const auto offset = clip.getOffsetInBeats().inBeats();
+                const auto first = std::max (1.0, std::floor ((launched - played + offset) / loop) + 1);
+                at = played + (first + settings.multiplier - 1) * loop - offset;
+            }
+            else at = std::max (launched, played + clip.getLengthInBeats().inBeats());
+        }
+        at = followactions::tick (at);
+        // The launch skips the project's grid but keeps its clip's own (the current clip's, to stop).
+        auto* targetClip = *picked >= 0 && *picked < slots.size() ? slots[*picked]->getClip() : nullptr;
+        return FollowPlan { onClipGrid (targetClip != nullptr ? *targetClip : clip, at, sync), *picked };
+    }
+    // A scene's Follow Action time: linked, its longest clip's, else (or without clips) its own.
+    double sceneFollowTime (int row, const Session::FollowSettings& settings) const
+    {
+        if (! settings.linked) return settings.timeBeats;
+        double longest = 0;
+        for (auto* track : te::getAudioTracks (*edit))
+            if (auto* slot = track->getClipSlotList().getClipSlots()[row]; slot != nullptr)
+                if (auto* clip = slot->getClip())
+                {
+                    const auto loop = clip->getLoopLengthBeats().inBeats();
+                    // A start inside the loop is not taken off, as the reference's isn't.
+                    longest = std::max (longest, clip->isLooping() && loop > 0 ? settings.multiplier * loop + std::max (0.0, -clip->getOffsetInBeats().inBeats())
+                                                                                : clip->getLengthInBeats().inBeats());
+                }
+        return longest > 0 ? longest : settings.timeBeats;
+    }
+    // A scene's launch: its Follow Action draws now, and the scene it picks waits to launch on every track, unquantized.
+    void runSceneEvent (double at)
+    {
+        const int row = sceneEvent->target;
+        sceneEvent.reset();
+        const auto scenes = edit->getSceneList().getScenes();
+        if (! followActionsEnabled || row < 0 || row >= scenes.size()) return;
+        auto settings = readFollow (scenes[row]->state);
+        if (! settings.enabled) settings.actionA = settings.actionB = Session::FollowAction::noAction;
+        settings.jumpA = std::clamp (settings.jumpA, -1, scenes.size() - 1); settings.jumpB = std::clamp (settings.jumpB, -1, scenes.size() - 1);
+        std::vector<bool> held;
+        for (int i = 0; i < scenes.size(); ++i) held.push_back (sceneHasClips (i));
+        const auto groups = followactions::groups (held, held);
+        if (const auto picked = followactions::evaluate (sceneFollowState, row, settings, followactions::groupOf (groups, row)))
+            sceneLaunch = FollowPlan { followactions::tick (at + sceneFollowTime (row, settings)), *picked };
+    }
+    void launchSceneFollow (double now)
+    {
+        const auto plan = *sceneLaunch;
+        sceneLaunch.reset();
+        const auto at = plan.at > now ? std::optional (te::MonotonicBeat { te::BeatPosition::fromBeats (plan.at) }) : std::nullopt;
+        for (auto* track : te::getAudioTracks (*edit))
+        {
+            if (isReturn (*track)) continue;
+            if (plan.target == followactions::stopTarget) { queueTrack (*track, nullptr, at); continue; }
+            if (auto* slot = track->getClipSlotList().getClipSlots()[plan.target]; slot != nullptr)
+                if (slot->getClip() != nullptr || ! static_cast<bool> (slot->state.getProperty (noStopButtonProperty, false))) queueTrack (*track, slot->getClip(), at);
+        }
+        if (plan.target == followactions::stopTarget) return;
+        if (auto* scene = edit->getSceneList().getScenes()[plan.target]) scheduleSceneChange (*scene, at);
+        sceneEvent = FollowPlan { plan.at, plan.target }; // The scene launched plans its own Follow Action as it starts.
+    }
+    void watchFollowActions()
+    {
+        auto& transport = edit->getTransport();
+        auto* context = transport.getCurrentPlaybackContext();
+        const auto sync = context != nullptr && transport.isPlaying() ? context->getSyncPoint() : std::nullopt;
+        if (! sync)
+        {
+            // Stopped: nothing planned survives, and the clips' next starts are new.
+            for (auto& [id, track] : followTracks) { track.plan.reset(); track.clip = {}; }
+            sceneEvent.reset(); sceneLaunch.reset(); launchMoments.clear();
+            if (followWatch.getTimerInterval() != 100) followWatch.startTimer (100);
+            return;
+        }
+        if (followWatch.getTimerInterval() != 5) followWatch.startTimer (5);
+        const double now = sync->monotonicBeat.v.inBeats();
+        // Plans are queued a quarter second ahead, so the watch need not run exactly on time.
+        const double ahead = 0.25 * edit->tempoSequence.getBpmAt (sync->time) / 60.0;
+        for (auto* track : te::getAudioTracks (*edit))
+        {
+            if (isReturn (*track)) continue;
+            auto& follow = followTrack (*track);
+            const auto slots = track->getClipSlotList().getClipSlots();
+            bool seen = false;
+            for (int row = 0; row < slots.size() && ! seen; ++row)
+                if (auto* clip = slots[row]->getClip())
+                    if (auto handle = clip->getLaunchHandle(); handle && handle->getPlayingStatus() == te::LaunchHandle::PlayState::playing)
+                        if (const auto played = handle->getPlayedMonotonicRange())
+                        {
+                            seen = true;
+                            const auto start = played->v.getStart().inBeats();
+                            if (sceneEvent && std::isnan (sceneEvent->at) && row == sceneEvent->target) sceneEvent->at = start;
+                            if (clip->itemID == follow.clip && std::abs (start - follow.start) < 1e-6) continue;
+                            follow.clip = clip->itemID; follow.start = start;
+                            auto launched = start;
+                            if (const auto moment = launchMoments.find (clip->itemID); moment != launchMoments.end())
+                            {
+                                if (moment->second > start && moment->second <= now) launched = moment->second;
+                                launchMoments.erase (moment);
+                            }
+                            follow.plan = planFollow (*track, row, *clip, start, launched, *sync);
+                        }
+            if (! seen) follow.clip = {};
+        }
+        if (sceneEvent && std::isnan (sceneEvent->at) && ! sceneHasClips (sceneEvent->target)) sceneEvent->at = now;
+        if (sceneEvent && sceneEvent->at <= now) runSceneEvent (sceneEvent->at);
+        for (auto* track : te::getAudioTracks (*edit))
+        {
+            if (isReturn (*track)) continue;
+            const auto& follow = followTrack (*track);
+            if (! follow.plan || follow.plan->at - now > ahead) continue;
+            const auto plan = *follow.plan;
+            const auto slots = track->getClipSlotList().getClipSlots();
+            auto* target = plan.target >= 0 && plan.target < slots.size() ? slots[plan.target]->getClip() : nullptr;
+            // A row that cannot play stops the track, as launching its slot does.
+            if (target != nullptr && target->isMuted()) target = nullptr;
+            queueTrack (*track, target, plan.at > now ? std::optional (te::MonotonicBeat { te::BeatPosition::fromBeats (plan.at) }) : std::nullopt);
+        }
+        if (sceneLaunch && sceneLaunch->at - now <= ahead) launchSceneFollow (now);
     }
     float launchVelocity = 1.0f; // A pressing note's velocity over 127 while pressSlot launches; otherwise 1.
     // Arrangement recording of the Session: each track's clip changes between Record and Stop, as
@@ -4006,16 +4277,9 @@ struct Session::Impl
         if (looping) clip->setLoopRangeBeats ({ te::BeatPosition(), te::BeatPosition::fromBeats (beats) });
         clip->setFadeIn (te::TimeDuration::fromSeconds (0)); clip->setFadeOut (te::TimeDuration::fromSeconds (0));
         giveDefaultFades (*clip, undo);
-        for (const auto& id : { launchModeProperty, launchQuantisationProperty, launchLegatoProperty, launchVelocityProperty, clipColourProperty,
-                                te::IDs::followActionBeats, te::IDs::followActionDurationType })
+        for (const auto& id : { launchModeProperty, launchQuantisationProperty, launchLegatoProperty, launchVelocityProperty, clipColourProperty })
             if (original.hasProperty (id)) clip->state.setProperty (id, original[id], undo);
-        if (const auto actions = original.getChildWithName (te::IDs::FOLLOWACTIONS); actions.isValid())
-        {
-            if (auto existing = clip->state.getChildWithName (te::IDs::FOLLOWACTIONS); existing.isValid()) clip->state.removeChild (existing, undo);
-            auto copied = actions.createCopy();
-            te::EditItemID::remapIDs (copied, nullptr, *edit);
-            clip->state.addChild (copied, -1, undo);
-        }
+        writeFollow (clip->state, readFollow (original), undo);
         return clip.get();
     }
     // Clips show their track's colour until they have one of their own. As the reference's clips take
@@ -5252,24 +5516,6 @@ struct Session::Impl
             const auto previous=std::find_if(before.begin(),before.end(),[&](const auto& old){return old.first==state.first;});
             if(previous!=before.end() && previous->second!=state.second)
             {edit->restartPlayback();return;}
-        }
-    }
-    using FollowStates = std::vector<std::pair<juce::String, Session::FollowSettings>>;
-    FollowStates followStates() const
-    {
-        FollowStates states;
-        for (auto* track : te::getAudioTracks (*edit))
-            for (auto* clip : allTrackClips (*track))
-                if (clip->getClipSlot()) states.emplace_back (clip->itemID.toString(), clipFollowSettings (clip->state));
-        return states;
-    }
-    void refreshFollowActions (const FollowStates& before)
-    {
-        for (const auto& current : followStates())
-        {
-            const auto previous = std::find_if (before.begin(), before.end(), [&] (const auto& old) { return old.first == current.first; });
-            if (previous != before.end() && previous->second != current.second)
-            { edit->restartPlayback(); return; }
         }
     }
     Result setMixerAutomation (te::VolumeAndPanPlugin& plugin, AutomationTarget target, const AutomationLane& lane)
@@ -7490,8 +7736,15 @@ Session::Snapshot Session::snapshot() const
             info.timeSignature = TimeSignature { (int) scene->state[sceneNumeratorProperty], (int) scene->state[sceneDenominatorProperty] };
         info.infoText = scene->state[infoTextProperty].toString();
         if (scene->state.hasProperty (te::IDs::colour)) info.colour = scene->colour.get();
+        info.follow = readFollow (scene->state);
+        info.hasClips = impl->sceneHasClips ((int) s.scenes.size());
+        s.followActionsInUse = s.followActionsInUse || (info.hasClips && followactions::active (info.follow));
         s.scenes.push_back (std::move (info));
     }
+    s.followActionsEnabled = impl->followActionsEnabled;
+    for (auto* track : te::getAudioTracks (e))
+        for (auto* slot : track->getClipSlotList().getClipSlots())
+            if (auto* clip = slot->getClip(); clip != nullptr && followactions::active (readFollow (clip->state))) s.followActionsInUse = true;
     for (const auto& groove : e.state.getChildWithName (groovePoolType)) s.grooves.push_back (readGroove (groove));
     s.grooveAmount = grooveAmount (e.state);
     s.automationArm = impl->automationArmed();
@@ -7828,6 +8081,7 @@ Result Session::loadProject (const File& file)
             return Result::fail ("The project's punch settings are invalid.");
     if (legacyFaders) migrateFaderLaw (state);
     restoreManualMixerState (state);
+    migrateFollowActions (state);
     auto id = te::ProjectItemID::fromProperty (state, te::IDs::projectID);
     if (! id.isValid()) id = te::ProjectItemID::createNewID (te::ProjectID{});
     auto options = te::Edit::Options { impl->engine, state, id };
@@ -10666,6 +10920,9 @@ Result Session::launchScene (int sceneIndex)
             if (auto* slot = tracks[i]->getClipSlotList().getClipSlots()[sceneIndex]; slot->getClip() != nullptr || ! static_cast<bool> (slot->state.getProperty (noStopButtonProperty, false)))
                 impl->queueTrack (*tracks[i], slot->getClip(), boundary);
     impl->scheduleSceneChange (*impl->edit->getSceneList().getScenes()[sceneIndex], boundary);
+    // The scene's Follow Action runs at its launch, in place of one planned or waiting.
+    impl->sceneLaunch.reset();
+    impl->sceneEvent = Impl::FollowPlan { boundary ? boundary->v.inBeats() : std::numeric_limits<double>::quiet_NaN(), sceneIndex };
     {
         auto& transport = impl->edit->getTransport();
         const juce::ScopedValueSetter together (impl->takesStart, transport.isPlaying() ? std::nullopt : std::optional (transport.getPosition()));
@@ -10719,6 +10976,7 @@ Result Session::stopAllLauncherClips()
     const auto boundary = impl->launchBoundary();
     for (auto* track : te::getAudioTracks (*impl->edit))
         if (! isReturn (*track)) impl->queueTrack (*track, nullptr, boundary);
+    impl->sceneEvent.reset(); impl->sceneLaunch.reset(); // Stop All ends a scene's Follow Action too.
     sendChangeMessage(); return Result::ok();
 }
 Result Session::returnToArrangement()
@@ -14497,7 +14755,7 @@ Result Session::removeClip (int t, int c)
 Result Session::setClipFollowAction (const String& id, const FollowSettings& settings)
 {
     if (impl->exporting || impl->edit->getTransport().isRecording()) return Result::fail ("Stop recording or finish exporting before changing clip follow actions.");
-    if (! validFollowSettings (settings)) return Result::fail ("Choose a follow action and a duration from 1/960 to 4096 beats, or Off with zero beats.");
+    if (! followactions::valid (settings)) return Result::fail ("A Follow Action needs a time from a quarter beat, a multiplier from 1, chances from 0 to 100 % and Jump scenes from 0.");
     te::Clip* found = nullptr;
     for (auto* track : te::getAudioTracks (*impl->edit))
         for (auto* clip : allTrackClips (*track))
@@ -14509,30 +14767,33 @@ Result Session::setClipFollowAction (const String& id, const FollowSettings& set
     if (! found || ! found->getClipSlot() || (! dynamic_cast<te::MidiClip*> (found) && ! dynamic_cast<te::WaveAudioClip*> (found)))
         return Result::fail ("Select an audio or MIDI clip in Session.");
     if (found->getClipTrack()->isFrozen (te::Track::anyFreeze)) return Result::fail ("Unfreeze the track before changing follow actions.");
-    if (clipFollowSettings (found->state) == settings) return Result::ok();
+    if (readFollow (found->state) == settings) return Result::ok();
     impl->transaction ("Change clip follow action");
-    // The native object caches this container. Retain its empty scaffolding
-    // through history so a later edit cannot target a detached cached tree.
-    found->state.getOrCreateChildWithName (te::IDs::FOLLOWACTIONS, nullptr);
-    auto* actions = found->getFollowActions();
-    found->followActionDurationType = te::Clip::FollowActionDurationType::beats;
-    found->followActionBeats = te::BeatDuration::fromBeats (settings.afterBeats);
-    while (! actions->getActions().empty()) actions->removeAction (*actions->getActions().back());
-    if (settings.action != FollowAction::off)
-    {
-        auto& action = actions->addAction();
-        action.action = nativeFollowActions[(size_t) settings.action];
-        const bool single = settings.actionB == FollowAction::off && settings.chanceA == 1;
-        action.weight = single ? 1.0 : settings.chanceA;
-        if (! single)
-        {
-            auto& second = actions->addAction();
-            second.action = nativeFollowActions[(size_t) settings.actionB];
-            second.weight = 1.0 - settings.chanceA;
-        }
-    }
-    impl->edit->restartPlayback(); impl->edit->dispatchPendingUpdatesSynchronously();
+    writeFollow (found->state, settings, &impl->edit->getUndoManager());
     impl->changed(); return Result::ok();
+}
+Result Session::setSceneFollowAction (const String& id, const FollowSettings& settings)
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    if (! followactions::valid (settings)) return Result::fail ("A Follow Action needs a time from a quarter beat, a multiplier from 1, chances from 0 to 100 % and Jump scenes from 0.");
+    auto* scene = impl->scene (id);
+    if (scene == nullptr) return Result::fail ("Scene not found.");
+    if (readFollow (scene->state) == settings) return Result::ok();
+    impl->transaction ("Change scene follow action");
+    writeFollow (scene->state, settings, &impl->edit->getUndoManager());
+    impl->changed(); return Result::ok();
+}
+void Session::setFollowActionsEnabled (bool on)
+{
+    if (impl->followActionsEnabled == on) return;
+    impl->followActionsEnabled = on;
+    sendChangeMessage();
+}
+void Session::seedFollowActions (std::uint32_t seed)
+{
+    impl->followSeed = seed;
+    for (auto& [id, track] : impl->followTracks) track.state = seed;
+    impl->sceneFollowState = seed;
 }
 Result Session::setClipActive(const String& id,bool active)
 {
@@ -15820,13 +16081,13 @@ Result Session::play()
     // A waiting Record starts with playback, from the insert marker.
     if (impl->recordWaiting && ! transport.isPlaying()) { impl->recordWaiting = false; return beginRecording (false); }
     if (! transport.isPlaying()) transport.setPosition (impl->playStart());
-    transport.play (false); sendChangeMessage(); return Result::ok();
+    transport.play (false); impl->watchFollow(); sendChangeMessage(); return Result::ok();
 }
 Result Session::continuePlayback()
 {
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
     if (! audioDeviceManager().getCurrentAudioDevice()) return Result::fail (impl->noDeviceMessage());
-    impl->edit->getTransport().play (false);
+    impl->edit->getTransport().play (false); impl->watchFollow();
     recordIfWaiting();
     sendChangeMessage(); return Result::ok();
 }
@@ -16569,11 +16830,11 @@ void Session::undo()
     if (impl->exporting || impl->anyRecording()) return;
     impl->endNudge();
     impl->endAudition();
-    const auto monitored=impl->monitoredMidiTracks();const auto clips=impl->clipActivationStates(); const auto follows=impl->followStates();
+    const auto monitored=impl->monitoredMidiTracks();const auto clips=impl->clipActivationStates();
     impl->resetTapTempo();
     const auto automated = impl->automatedPluginParameters();
     impl->floating.clear(); // As the reference's undo deselects every note, ending the floating notes' sessions.
-    endEditGesture(); closePluginEditors(); impl->edit->getUndoManager().undo(); impl->refreshClipActivation(clips); impl->refreshFollowActions(follows); impl->refreshParameterValues();
+    endEditGesture(); closePluginEditors(); impl->edit->getUndoManager().undo(); impl->refreshClipActivation(clips); impl->refreshParameterValues();
     impl->restoreManualPluginValues (automated); // Plug-in parameters whose automation went return to their values set by hand.
     impl->applyCue(); // A cue volume or switch undone, in either mode.
     impl->publishRemote(); // A mapping undone.
@@ -16585,7 +16846,7 @@ void Session::redo()
     if (impl->exporting || impl->anyRecording()) return;
     impl->endNudge();
     impl->endAudition();
-    const auto monitored=impl->monitoredMidiTracks();const auto clips=impl->clipActivationStates(); const auto follows=impl->followStates();
+    const auto monitored=impl->monitoredMidiTracks();const auto clips=impl->clipActivationStates();
     impl->resetTapTempo();
     const auto automated = impl->automatedPluginParameters();
     impl->floating.clear();
@@ -16599,7 +16860,7 @@ void Session::redo()
         const FreezeRender render (mayFreeze);
         history.redo();
     }
-    impl->refreshClipActivation(clips); impl->refreshFollowActions(follows); impl->refreshParameterValues();
+    impl->refreshClipActivation(clips); impl->refreshParameterValues();
     impl->restoreManualPluginValues (automated);
     impl->applyCue();
     impl->publishRemote();

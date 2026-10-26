@@ -14,6 +14,7 @@
 #include "RackEditor.h"
 #include "SoundSimilarity.h"
 #include "../tests/RealtimeDevice.h" // The audio-thread separation test plays through it.
+#include "FollowActions.h"
 #include "NoteTools.h"
 #include "Packs.h"
 #include "Session.h"
@@ -609,7 +610,7 @@ public:
         menu.setVisible (false);
        #endif
         for (auto* child : std::initializer_list<juce::Component*> {
-                 &playButton, &stopButton, &recordButton, &overdubButton, &sessionRecordButton, &automationArmButton, &reEnableButton, &captureButton, &punchInButton, &punchOutButton, &followButton, &tempo, &nudgeDown, &nudgeUp, &meterLabel, &extButton, &tapButton, &loopButton, &clickButton, &clickSettingsButton, &positionLabel, &loopStartLabel, &loopLengthLabel, &quantisation, &backToArrangement,
+                 &playButton, &stopButton, &recordButton, &overdubButton, &sessionRecordButton, &automationArmButton, &reEnableButton, &captureButton, &punchInButton, &punchOutButton, &followButton, &tempo, &nudgeDown, &nudgeUp, &meterLabel, &extButton, &tapButton, &loopButton, &clickButton, &clickSettingsButton, &positionLabel, &loopStartLabel, &loopLengthLabel, &quantisation, &backToArrangement, &followActionsButton,
                  &projectLabel, &audioButton, &addTrackButton, &addMidiButton, &newMidiClipButton, &sessionTab, &arrangementTab, &pianoTab, &importButton, &filesButton, &pluginsButton,
                  &folderButton, &upButton, &browserSearch, &browserList, &browserSidebar, &browseBack, &browseForward, &hotSwapLabel, &hotSwapClose, &info, &overview, &ruler, &timeRuler, &viewport,
                  &horizontalScroll, &gridReadout, &zoomIn, &zoomOut, &fitButton, &launcher, &arrangementMixer, &pianoRoll, &audioClipView, &midiLaunch, &clipLoop, &clipGroove, &clipTitle, &deviceChain, &sceneView,
@@ -722,6 +723,14 @@ public:
         backToArrangement.setColour (juce::TextButton::buttonOnColourId, orange);
         backToArrangement.onClick = [this] { report (session.returnToArrangement()); refresh(); };
         backToArrangement.setWantsKeyboardFocus (false); backToArrangement.setMouseClickGrabsKeyboardFocus (false);
+        // Enable Follow Actions Globally, beside Back to Arrangement as in the reference (its manual, section 16.7): lit while
+        // on, dimmed while nothing in the project has an active Follow Action.
+        followActionsButton.setName ("Enable Follow Actions Globally"); followActionsButton.setClickingTogglesState (true);
+        followActionsButton.setTooltip ("Enable Follow Actions Globally: off, starting clips and scenes plan no Follow Action, so playing clips can be edited without playback moving on");
+        followActionsButton.setColour (juce::TextButton::buttonOnColourId, themes::colour (0xffffcf4a));
+        followActionsButton.setColour (juce::TextButton::textColourOnId, themes::colour (0xff1a1a1a));
+        followActionsButton.onClick = [this] { session.setFollowActionsEnabled (followActionsButton.getToggleState()); refresh(); };
+        followActionsButton.setWantsKeyboardFocus (false); followActionsButton.setMouseClickGrabsKeyboardFocus (false);
         loopStartLabel.setTooltip ("Loop start in bars.beats.sixteenths. Double-click to type a new start.");
         loopLengthLabel.setTooltip ("Loop length in bars.beats.sixteenths. Double-click to type a new length.");
         loopStartLabel.setEditable (false, true, false); loopLengthLabel.setEditable (false, true, false);
@@ -1006,7 +1015,7 @@ public:
         auto message = status.isNotEmpty() ? status
             : showPiano && drawMode ? "Draw Mode: drag to draw notes    Alt: one pitch    Click a note: delete    B: leave Draw Mode"
             : showPiano ? "Double-click: add or delete a note    Drag: select    Shift: add to the selection    Ruler: insertion point    B: Draw Mode" : "Space: play / pause     Click ruler: seek     Shift-drag ruler: loop     Double-click MIDI clip: edit notes";
-        if (status.isEmpty() && showSession && ! showPiano) message = "Click triangle: launch     Double-click MIDI slot: edit     Enter: launch slot     Shift+Enter: launch scene     Tab: switch view";
+        if (status.isEmpty() && showSession && ! showPiano) message = "Click triangle: launch     Double-click MIDI slot: edit     Enter: launch slot     Shift+Enter: Follow Actions on or off     Tab: switch view";
         g.drawText (message, 13, getHeight() - statusHeight, getWidth() - 420, statusHeight, juce::Justification::centredLeft, true);
         auto* device = session.audioDeviceManager().getCurrentAudioDevice();
         const auto deviceText = device != nullptr
@@ -1074,7 +1083,8 @@ public:
         }
         if (! dropped.count (&punch)) punchOutButton.setBounds (centre.removeFromLeft (30));
         auto status = bar.withLeft (centre.getRight() + 12);
-        backToArrangement.setBounds (status.removeFromLeft (124)); status.removeFromLeft (8);
+        backToArrangement.setBounds (status.removeFromLeft (124)); status.removeFromLeft (4);
+        followActionsButton.setBounds (status.removeFromLeft (30)); status.removeFromLeft (8);
         projectLabel.setBounds (status);
         // Creation and zoom live in menus, keys and context menus, as in the reference workflow.
         for (auto* hidden : std::initializer_list<juce::Component*> { &importButton, &newMidiClipButton, &addTrackButton, &addMidiButton, &zoomIn, &zoomOut, &fitButton })
@@ -6162,18 +6172,11 @@ private:
                         g.setColour (slot->playing ? green.brighter (0.2f) : queued ? themes::colour (0xffffffff) : dark);
                         if (slot->stopQueued) g.fillRect (cell.getX() + 6, cell.getCentreY() - 4, 8, 8);
                         else if (slot->overdubbing) { g.setColour (red); g.fillEllipse ((float) cell.getX() + 6, (float) cell.getCentreY() - 4, 8, 8); }
-                        else drawTriangle (g, cell.getX() + 6, cell.getCentreY() - 5);
+                        else drawTriangle (g, cell.getX() + 6, cell.getCentreY() - 5, followactions::active (slot->clip.follow));
                         if (slot->playing) { g.setColour (dark.withAlpha (0.35f)); g.fillRect (cell.withTrimmedLeft (cell.getWidth() - 3)); }
-                        const bool follows = slot->clip.follow.action != Session::FollowAction::off;
                         g.setColour (dark); g.setFont (font (10.5f));
                         g.drawText ((slot->clip.active ? juce::String() : juce::String ("OFF / ")) + slot->clip.name,
-                                    cell.withTrimmedLeft (20).withTrimmedRight (follows ? 34 : 4), juce::Justification::centredLeft, true);
-                        if (follows)
-                        {
-                            g.setFont (font (9.0f));
-                            g.drawText (juce::String (slot->clip.follow.afterBeats, 2).trimCharactersAtEnd ("0").trimCharactersAtEnd (".") + "b >",
-                                        cell.withLeft (cell.getRight() - 33).reduced (2, 0), juce::Justification::centredRight, true);
-                        }
+                                    cell.withTrimmedLeft (20).withTrimmedRight (4), juce::Justification::centredLeft, true);
                     }
                     else if (slot != nullptr && slot->recording)
                     {
@@ -6225,7 +6228,8 @@ private:
                 g.setColour (coloured ? (selected ? info.colour.brighter (0.25f) : info.colour) : selected ? themes::colour (0xff4a4a4a) : themes::colour (0xff383838)); g.fillRect (cell);
                 // A scene that changes the tempo or meter lights its launch button.
                 const bool settings = info.tempo.has_value() || info.timeSignature.has_value();
-                g.setColour (selected ? orange : settings ? green : ink.withAlpha (0.8f)); drawTriangle (g, cell.getX() + 6, cell.getCentreY() - 5);
+                g.setColour (selected ? orange : settings ? green : ink.withAlpha (0.8f));
+                drawTriangle (g, cell.getX() + 6, cell.getCentreY() - 5, info.hasClips && followactions::active (info.follow));
                 if (selected && owner.clickedArea == Area::scenes) { g.setColour (orange); g.drawRect (cell, 2); }
                 auto nameArea = cell.withTrimmedLeft (20).withTrimmedRight (6);
                 // Its tempo and time signature fields, while they show: its own, or the song's dimmed.
@@ -6779,11 +6783,16 @@ private:
                 if (owner.selectedSceneIndex() >= 0) { owner.nudgeSelectedScenes (code == juce::KeyPress::upKey ? -1 : 1); scrollSelectionIntoView(); }
                 return true;
             }
+            if (code == juce::KeyPress::returnKey && mods.isShiftDown())
+            {
+                owner.toggleSelectedFollowActions(); // As the reference's Toggle Follow Actions for Selected Clips.
+                return true;
+            }
             if (code == juce::KeyPress::returnKey)
             {
                 if (keyCell.first >= 0) return true; // Key repeat while Enter is held.
                 const auto scene = owner.selectedSceneIndex();
-                if (scene >= 0 && (key.getModifiers().isShiftDown() || owner.clickedArea == Area::scenes))
+                if (scene >= 0 && owner.clickedArea == Area::scenes)
                 {
                     const auto result = owner.session.launchScene (scene); owner.report (result);
                     // Select Next Scene on Launch, as the reference's: the next scene is ready for the next Enter.
@@ -6897,7 +6906,17 @@ private:
             const int scene = (int) ((point.y - gridTop) / (double) rowHeight + offsetScene);
             return scene < (int) owner.state.scenes.size() ? scene : -1;
         }
-        static void drawTriangle (juce::Graphics& g, int x, int y) { juce::Path path; path.addTriangle ((float) x, (float) y, (float) x, (float) y + 10, (float) x + 9, (float) y + 5); g.fillPath (path); }
+        static void drawTriangle (juce::Graphics& g, int x, int y, bool striped = false)
+        {
+            juce::Path path; path.addTriangle ((float) x, (float) y, (float) x, (float) y + 10, (float) x + 9, (float) y + 5);
+            g.fillPath (path);
+            if (! striped) return;
+            // An active Follow Action stripes the launch button, as the reference's does.
+            const juce::Graphics::ScopedSaveState saved (g);
+            g.reduceClipRegion (path);
+            g.setColour (themes::colour (0xff1a1a1a).withAlpha (0.6f));
+            for (int k = -10; k < 10; k += 3) g.drawLine ((float) x + k, (float) y + 10, (float) x + k + 10, (float) y, 1.0f);
+        }
         void scrollBarMoved (juce::ScrollBar* bar, double start) override { if (bar == &horizontal) offsetX = start; else offsetScene = start; resized(); repaint(); }
     };
 
@@ -7090,6 +7109,165 @@ private:
     // many scenes are selected, and its menu renames and colours them. Tempo and Signature set the selected scenes'
     // own, which the fields show dimmed while they follow the song; Delete clears them. The reference's scene Follow
     // Actions below them are not here, as Halftrack's scenes have none.
+    // The Follow Action controls (see Session::FollowSettings), as the reference's Launch box and Scene View show them (its
+    // manual, section 16.7): the Follow Action switch and Linked; the multiplier while linked, else the time in bars, beats
+    // and sixteenths; actions A and B with their chances, editing one setting the other; and Jump's scene by its number.
+    class FollowPanel final : public juce::Component
+    {
+    public:
+        static constexpr int rowHeight = 20, gap = 4, height = 14 + 4 * rowHeight + 3 * gap;
+        explicit FollowPanel (Impl& o) : owner (o)
+        {
+            setName ("Follow Action");
+            for (auto* c : controls()) addAndMakeVisible (c);
+            enabled.setName ("Follow Action switch"); linked.setName ("Follow Action linked");
+            for (auto* button : { &enabled, &linked })
+            {
+                button->setClickingTogglesState (true); button->setWantsKeyboardFocus (false); button->setMouseClickGrabsKeyboardFocus (false);
+                button->setColour (juce::TextButton::buttonOnColourId, themes::colour (0xffffcf4a)); button->setColour (juce::TextButton::textColourOnId, themes::colour (0xff1a1a1a));
+            }
+            enabled.setTooltip ("Follow Action: after its time, play what action A or B picks (Shift+Return)");
+            linked.setTooltip ("Linked: at the end, or after the multiplier's passes round the loop; unlinked, after the time");
+            enabled.onClick = [this] { auto s = current; s.enabled = enabled.getToggleState(); change (s); };
+            linked.onClick = [this] { auto s = current; s.linked = linked.getToggleState(); change (s); };
+            actionA.setName ("Follow Action A"); actionB.setName ("Follow Action B");
+            actionA.setTooltip ("Action A: what plays at chance A"); actionB.setTooltip ("Action B: what plays at chance B");
+            for (auto* chooser : { &actionA, &actionB })
+            {
+                for (const auto* name : actionNames) chooser->addItem (name, chooser->getNumItems() + 1);
+                chooser->onChange = [this, chooser]
+                {
+                    auto s = current;
+                    (chooser == &actionA ? s.actionA : s.actionB) = static_cast<Session::FollowAction> (chooser->getSelectedId() - 1);
+                    change (s);
+                };
+            }
+            for (auto [field, name] : { std::pair<ValueField*, const char*> { &time, "Follow Action time" }, { &multiplier, "Follow Action multiplier" },
+                                        { &chanceA, "Follow Action chance A" }, { &chanceB, "Follow Action chance B" },
+                                        { &jumpA, "Follow Action jump A" }, { &jumpB, "Follow Action jump B" } })
+            {
+                field->setName (name); field->setEditable (false, true, false); field->setJustificationType (juce::Justification::centred);
+                field->setColour (juce::Label::backgroundColourId, themes::colour (0xff1c1c1c)); field->setColour (juce::Label::outlineColourId, line);
+                field->setColour (juce::Label::textColourId, ink);
+                field->onDragStart = [this] { from = current; dragging = true; owner.session.beginEditGesture ("Follow Action"); };
+                field->onDragEnd = [this] { dragging = false; owner.session.endEditGesture(); owner.refresh(); };
+            }
+            time.setTooltip ("Follow Action Time: from where it starts, in bars, beats and sixteenths");
+            multiplier.setTooltip ("Multiplier: how many passes round its loop a linked clip plays first");
+            chanceA.setTooltip ("Chance A: how likely action A is; chance B takes the rest");
+            chanceB.setTooltip ("Chance B: how likely action B is; chance A takes the rest");
+            jumpA.setTooltip ("Jump target for action A: the scene's number"); jumpB.setTooltip ("Jump target for action B: the scene's number");
+            time.onDrag = [this] (int part, int steps)
+            {
+                const double unit = 4.0 / meter.denominator, step = part == 0 ? meter.numerator * unit : part == 1 ? unit : 0.25;
+                auto s = from; s.timeBeats = juce::jlimit (0.25, followactions::maximumTime, from.timeBeats + steps * step); change (s);
+            };
+            time.onTextChange = [this]
+            {
+                if (const auto beats = readBarsBeats (time.getText(), meter, false); beats && *beats >= 0.25 && *beats <= followactions::maximumTime)
+                { auto s = current; s.timeBeats = *beats; change (s); }
+                owner.refresh();
+            };
+            multiplier.onDrag = [this] (int, int steps) { auto s = from; s.multiplier = juce::jlimit (1, followactions::maximumMultiplier, from.multiplier + steps); change (s); };
+            multiplier.onTextChange = [this]
+            {
+                const auto text = multiplier.getText().trim().trimCharactersAtStart ("xX").trim();
+                if (text.isNotEmpty() && text.containsOnly ("0123456789") && text.getLargeIntValue() >= 1)
+                { auto s = current; s.multiplier = (int) std::min<juce::int64> (text.getLargeIntValue(), followactions::maximumMultiplier); change (s); }
+                owner.refresh();
+            };
+            for (auto* field : { &chanceA, &chanceB })
+            {
+                const bool isA = field == &chanceA;
+                field->onDrag = [this, isA] (int, int steps) { auto s = from; setChance (s, isA, (isA ? from.chanceA : from.chanceB) + (float) steps); change (s); };
+                field->onTextChange = [this, field, isA]
+                {
+                    const auto text = field->getText().upToFirstOccurrenceOf ("%", false, false).trim();
+                    if (text.isNotEmpty() && text.containsOnly ("0123456789.")) { auto s = current; setChance (s, isA, text.getFloatValue()); change (s); }
+                    owner.refresh();
+                };
+            }
+            for (auto* field : { &jumpA, &jumpB })
+            {
+                const bool isA = field == &jumpA;
+                field->onDrag = [this, isA] (int, int steps)
+                { auto s = from; (isA ? s.jumpA : s.jumpB) = juce::jlimit (-1, juce::jmax (0, scenes - 1), (isA ? from.jumpA : from.jumpB) + steps); change (s); };
+                field->onTextChange = [this, field, isA]
+                {
+                    const auto text = field->getText().trim();
+                    if (text.isNotEmpty() && text.containsOnly ("0123456789"))
+                    { auto s = current; (isA ? s.jumpA : s.jumpB) = juce::jlimit (-1, juce::jmax (0, scenes - 1), text.getIntValue() - 1); change (s); }
+                    owner.refresh();
+                };
+            }
+        }
+        // A change: the owner applies it, as one undo step, or inside a field drag's gesture.
+        std::function<void (const Session::FollowSettings&)> onChange;
+        void set (const Session::FollowSettings& s, const Session::TimeSignature& m, int sceneCount, bool editable)
+        {
+            current = s; meter = m; scenes = sceneCount;
+            enabled.setToggleState (s.enabled, juce::dontSendNotification);
+            linked.setToggleState (s.linked, juce::dontSendNotification); linked.setButtonText (s.linked ? "Linked" : "Unlinked");
+            actionA.setSelectedId ((int) s.actionA + 1, juce::dontSendNotification); actionB.setSelectedId ((int) s.actionB + 1, juce::dontSendNotification);
+            const auto show = [] (ValueField& field, const juce::String& text) { if (! field.isBeingEdited()) field.setText (text, juce::dontSendNotification); };
+            show (time, barsBeats (s.timeBeats, meter, false)); show (multiplier, "x" + juce::String (s.multiplier));
+            show (chanceA, juce::String (juce::roundToInt (s.chanceA)) + " %"); show (chanceB, juce::String (juce::roundToInt (s.chanceB)) + " %");
+            show (jumpA, juce::String (s.jumpA + 1)); show (jumpB, juce::String (s.jumpB + 1));
+            time.setVisible (! s.linked); multiplier.setVisible (s.linked);
+            jumpA.setVisible (s.actionA == Session::FollowAction::jump); jumpB.setVisible (s.actionB == Session::FollowAction::jump);
+            for (auto* c : controls())
+            {
+                c->setEnabled (editable);
+                c->setAlpha (s.enabled || c == &enabled ? 1.0f : 0.5f); // Off, the rest dims.
+            }
+            resized();
+        }
+        void resized() override
+        {
+            auto area = getLocalBounds().withTrimmedTop (14);
+            auto row = area.removeFromTop (rowHeight);
+            linked.setBounds (row.removeFromRight (58)); row.removeFromRight (4); enabled.setBounds (row);
+            area.removeFromTop (gap); row = area.removeFromTop (rowHeight);
+            time.setBounds (row); multiplier.setBounds (row);
+            area.removeFromTop (gap); row = area.removeFromTop (rowHeight);
+            const auto half = (row.getWidth() - 4) / 2;
+            actionA.setBounds (row.removeFromLeft (half)); actionB.setBounds (row.withTrimmedLeft (4));
+            area.removeFromTop (gap); row = area.removeFromTop (rowHeight);
+            const auto place = [] (juce::Rectangle<int> r, ValueField& chance, ValueField& jump)
+            {
+                if (jump.isVisible()) { jump.setBounds (r.removeFromRight ((r.getWidth() - 2) / 2)); r.removeFromRight (2); }
+                chance.setBounds (r);
+            };
+            place (row.removeFromLeft (half), chanceA, jumpA); place (row.withTrimmedLeft (4), chanceB, jumpB);
+        }
+        void paint (juce::Graphics& g) override
+        {
+            g.setColour (muted); g.setFont (font (10.0f));
+            g.drawText ("Follow Action", 0, 0, getWidth(), 13, juce::Justification::bottomLeft);
+        }
+        juce::TextButton enabled { "Follow Action" }, linked { "Linked" };
+        juce::ComboBox actionA, actionB;
+        ValueField time, multiplier, chanceA, chanceB, jumpA, jumpB;
+        bool dragging = false; // A field drag is under way, inside its own edit gesture.
+    private:
+        static constexpr const char* actionNames[] { "No Action", "Stop", "Play Again", "Previous", "Next", "First", "Last", "Any", "Other", "Jump" };
+        std::vector<juce::Component*> controls() { return { &enabled, &linked, &time, &multiplier, &actionA, &actionB, &chanceA, &chanceB, &jumpA, &jumpB }; }
+        static void setChance (Session::FollowSettings& s, bool isA, float v)
+        {
+            const auto [edited, other] = followactions::coupled (v);
+            s.chanceA = isA ? edited : other; s.chanceB = isA ? other : edited;
+        }
+        void change (const Session::FollowSettings& s)
+        {
+            if (s == current || onChange == nullptr) return;
+            current = s;
+            onChange (s);
+        }
+        Impl& owner;
+        Session::FollowSettings current, from;
+        Session::TimeSignature meter;
+        int scenes = 1;
+    };
     class SceneView final : public juce::Component
     {
     public:
@@ -7122,6 +7300,8 @@ private:
             signature.onDragEnd = [this] { owner.session.endEditGesture(); owner.refresh(); };
             signature.onTextChange = [this] { if (const auto meter = parseMeter (signature.getText())) setMeters (*meter, true); owner.refresh(); };
             signature.onReset = [this] { setMeters (std::nullopt, true); owner.refresh(); };
+            addAndMakeVisible (follow);
+            follow.onChange = [this] (const Session::FollowSettings& settings) { setFollows (settings); };
         }
         // The scene the selection follows.
         const Session::SceneInfo* lead() const
@@ -7145,6 +7325,7 @@ private:
                 if (! signature.isBeingEdited()) signature.setText (owner.sceneSignatureText (*scene), juce::dontSendNotification);
                 tempo.setColour (juce::Label::textColourId, scene->tempo ? ink : muted.withAlpha (0.6f));
                 signature.setColour (juce::Label::textColourId, scene->timeSignature ? ink : muted.withAlpha (0.6f));
+                follow.set (scene->follow, owner.state.timeSignature, (int) owner.state.scenes.size(), ! owner.session.isExporting());
             }
             repaint();
         }
@@ -7153,6 +7334,7 @@ private:
         {
             const auto top = titleBounds().getBottom() + 10;
             tempo.setBounds (90, top, 76, 20); signature.setBounds (90, top + 26, 76, 20);
+            follow.setBounds (12, top + 56, 154, FollowPanel::height);
         }
         void paint (juce::Graphics& g) override
         {
@@ -7189,7 +7371,19 @@ private:
             if (own) owner.session.endEditGesture();
             owner.refresh();
         }
+        // Each selected scene takes the Follow Action, as one undo step: inside a field drag's gesture, or one of its own.
+        void setFollows (const Session::FollowSettings& settings)
+        {
+            const bool own = ! follow.dragging;
+            if (own) owner.session.beginEditGesture ("Scene follow action");
+            for (const auto& id : owner.sceneSelection()) owner.report (owner.session.setSceneFollowAction (id, settings));
+            if (own) owner.session.endEditGesture();
+            owner.refresh();
+        }
         Impl& owner;
+    public:
+        FollowPanel follow { owner };
+    private:
         double tempoFrom = 120;
         Session::TimeSignature meterFrom;
     };
@@ -7202,8 +7396,7 @@ private:
         {
             setName ("Launch box");
             for (auto* c : std::initializer_list<juce::Component*> { &mode, &legato, &grid, &velocity, &follow }) addAndMakeVisible (c);
-            follow.setName ("Follow action"); follow.setTooltip ("Follow Action: what plays after this clip, and when");
-            follow.setWantsKeyboardFocus (false); follow.onClick = [this] { owner.clipFollowDialog (clip.id); };
+            follow.onChange = [this] (const Session::FollowSettings& settings) { owner.report (owner.session.setClipFollowAction (clip.id, settings)); owner.refresh(); };
             mode.setName ("Launch mode");
             for (auto* text : { "Trigger", "Gate", "Toggle", "Repeat" }) mode.addItem (text, mode.getNumItems() + 1);
             mode.setTooltip ("Launch mode: Trigger starts on press, Gate plays while held, Toggle starts and stops on press, Repeat retriggers on the grid while held");
@@ -7230,7 +7423,9 @@ private:
             grid.setSelectedId ((int) clip.launch.quantisation + 1, juce::dontSendNotification);
             legato.setToggleState (clip.launch.legato, juce::dontSendNotification);
             if (! velocity.isMouseButtonDown()) velocity.setValue (clip.launch.velocityAmount * 100.0, juce::dontSendNotification);
-            for (auto* c : std::initializer_list<juce::Component*> { &mode, &legato, &grid, &velocity, &follow }) c->setEnabled (! owner.session.isExporting() && ! owner.state.recording);
+            const bool editable = ! owner.session.isExporting() && ! owner.state.recording;
+            for (auto* c : std::initializer_list<juce::Component*> { &mode, &legato, &grid, &velocity }) c->setEnabled (editable);
+            follow.set (clip.follow, owner.state.timeSignature, (int) owner.state.scenes.size(), editable);
         }
         void resized() override
         {
@@ -7239,7 +7434,7 @@ private:
             area.removeFromTop (8); legato.setBounds (area.removeFromTop (22));
             area.removeFromTop (20); grid.setBounds (area.removeFromTop (22));
             area.removeFromTop (20); velocity.setBounds (area.removeFromTop (20));
-            area.removeFromTop (8); follow.setBounds (area.removeFromTop (22));
+            area.removeFromTop (8); follow.setBounds (area.removeFromTop (FollowPanel::height));
         }
         void paint (juce::Graphics& g) override
         {
@@ -7257,8 +7452,11 @@ private:
         Impl& owner;
         Session::ClipInfo clip;
         juce::ComboBox mode, grid;
-        juce::TextButton legato { "Legato" }, follow { "Follow Action..." };
+        juce::TextButton legato { "Legato" };
         ValueSlider velocity;
+    public:
+        FollowPanel follow { owner };
+    private:
         void apply()
         {
             const Session::LaunchSettings settings { static_cast<Session::LaunchMode> (mode.getSelectedId() - 1),
@@ -12772,7 +12970,7 @@ private:
     AutomatedField meterLabel; // Lit while the Arrangement has time signature changes.
     NudgeButton nudgeDown { false }, nudgeUp { true };
     juce::ComboBox quantisation;
-    juce::TextButton backToArrangement { "Back to Arrangement" };
+    juce::TextButton backToArrangement { "Back to Arrangement" }, followActionsButton { "FA" };
     juce::Rectangle<int> meterBounds, cpuBounds;
     juce::TextEditor browserSearch;
     juce::ListBox browserList;
@@ -14083,59 +14281,30 @@ private:
             return;
         }
     }
-    void clipFollowDialog (const juce::String& id)
+    // Shift+Return, as the reference's Toggle Follow Actions for Selected Clips: the selected Session clips' Follow Action
+    // switches, or with the scenes' column clicked the selected scenes', all on unless all are, as one undo step.
+    void toggleSelectedFollowActions()
     {
-        if (session.isExporting()) return;
-        Session::FollowSettings settings; bool found = false;
-        for (const auto& track : state.tracks)
-            for (const auto& slot : track.slots)
-                if (slot.hasClip && slot.clip.id == id) { settings = slot.clip.follow; found = true; }
-        if (! found) { report (juce::Result::fail ("Session clip not found.")); return; }
-        auto* dialog = new juce::AlertWindow ("Clip Follow Action", "After the chosen beats, play action A (at its chance) or else action B. Next and Previous stop at the ends; Cycle wraps; Any picks any clip and Other any other clip. Empty slots are skipped.", juce::MessageBoxIconType::NoIcon, this);
-        const juce::StringArray actions { "Stop", "Play again", "Previous clip", "Next clip", "First clip", "Last clip", "Cycle to next clip", "Any clip", "Other clip" };
-        juce::StringArray first { "Off" }, second { "No action" }; first.addArray (actions); second.addArray (actions);
-        dialog->addComboBox ("action", first, "Action A");
-        dialog->getComboBoxComponent ("action")->setSelectedItemIndex ((int) settings.action, juce::dontSendNotification);
-        dialog->addTextEditor ("beats", juce::String (settings.afterBeats > 0 ? settings.afterBeats : 4, 6).trimCharactersAtEnd ("0").trimCharactersAtEnd ("."), "After beats");
-        dialog->addComboBox ("action-b", second, "Action B");
-        dialog->getComboBoxComponent ("action-b")->setSelectedItemIndex ((int) settings.actionB, juce::dontSendNotification);
-        dialog->addTextEditor ("chance", juce::String (settings.chanceA * 100, 2).trimCharactersAtEnd ("0").trimCharactersAtEnd ("."), "Chance of A (%)");
-        for (const char* name : { "beats", "chance" }) dialog->getTextEditor (name)->setEnabled (settings.action != Session::FollowAction::off);
-        dialog->getComboBoxComponent ("action-b")->setEnabled (settings.action != Session::FollowAction::off);
-        dialog->addButton ("Apply", 1, juce::KeyPress (juce::KeyPress::returnKey));
-        dialog->addButton ("Cancel", 0, juce::KeyPress (juce::KeyPress::escapeKey));
-        dialog->setLookAndFeel (&theme); alerts.emplace_back (dialog);
-        auto safe = juce::Component::SafePointer<Impl> (this);
-        auto safeDialog = juce::Component::SafePointer<juce::AlertWindow> (dialog);
-        dialog->getComboBoxComponent ("action")->onChange = [safeDialog]
+        std::vector<std::pair<juce::String, Session::FollowSettings>> clips, scenes;
+        if (clickedArea == Area::scenes)
         {
-            if (! safeDialog) return;
-            const bool on = safeDialog->getComboBoxComponent ("action")->getSelectedItemIndex() > 0;
-            for (const char* name : { "beats", "chance" }) safeDialog->getTextEditor (name)->setEnabled (on);
-            safeDialog->getComboBoxComponent ("action-b")->setEnabled (on);
-        };
-        dialog->enterModalState (true, juce::ModalCallbackFunction::create ([safe, safeDialog, id] (int result)
+            for (const auto& id : sceneSelection())
+                for (const auto& scene : state.scenes) if (scene.id == id) scenes.push_back ({ id, scene.follow });
+        }
+        else
         {
-            if (! safe || ! safeDialog || result != 1) return;
-            const auto action = static_cast<Session::FollowAction> (safeDialog->getComboBoxComponent ("action")->getSelectedItemIndex());
-            Session::FollowSettings next { action, 0 };
-            if (action != Session::FollowAction::off)
-            {
-                const auto number = [] (const juce::String& field, double& value)
-                {
-                    const auto text = field.trim().toStdString(); char* end = nullptr; value = std::strtod (text.c_str(), &end);
-                    return ! text.empty() && end == text.c_str() + text.size() && std::isfinite (value);
-                };
-                double chance = 100;
-                if (! number (safeDialog->getTextEditorContents ("beats"), next.afterBeats))
-                { safe->report (juce::Result::fail ("Enter a complete numeric beat duration.")); return; }
-                if (! number (safeDialog->getTextEditorContents ("chance"), chance) || chance < 0 || chance > 100)
-                { safe->report (juce::Result::fail ("Enter a chance for action A from 0 to 100%.")); return; }
-                next.actionB = static_cast<Session::FollowAction> (safeDialog->getComboBoxComponent ("action-b")->getSelectedItemIndex());
-                next.chanceA = chance / 100;
-            }
-            safe->report (safe->session.setClipFollowAction (id, next)); safe->refresh();
-        }), true);
+            auto cells = selectedSlots.size() > 1 ? selectedSlotClips() : std::vector<Session::SlotRef> { { selectedTrack, selectedSceneIndex() } };
+            for (const auto& ref : cells)
+                if (juce::isPositiveAndBelow (ref.track, (int) state.tracks.size()) && juce::isPositiveAndBelow (ref.scene, (int) state.tracks[(size_t) ref.track].slots.size()))
+                    if (const auto& slot = state.tracks[(size_t) ref.track].slots[(size_t) ref.scene]; slot.hasClip) clips.push_back ({ slot.clip.id, slot.clip.follow });
+        }
+        if (clips.empty() && scenes.empty()) return;
+        bool all = true;
+        for (const auto& list : { &clips, &scenes }) for (const auto& [id, follow] : *list) all = all && follow.enabled;
+        session.beginEditGesture ("Toggle follow actions");
+        for (auto [id, follow] : clips) { follow.enabled = ! all; report (session.setClipFollowAction (id, follow)); }
+        for (auto [id, follow] : scenes) { follow.enabled = ! all; report (session.setSceneFollowAction (id, follow)); }
+        session.endEditGesture(); refresh();
     }
     void renameClipDialog(const juce::String& id)
     {
@@ -15973,6 +16142,8 @@ private:
         {
             const bool overridden = std::any_of (state.tracks.begin(), state.tracks.end(), [] (const auto& track) { return track.launcherActive; });
             backToArrangement.setEnabled (overridden); backToArrangement.setToggleState (overridden, juce::dontSendNotification);
+            followActionsButton.setToggleState (state.followActionsEnabled, juce::dontSendNotification);
+            followActionsButton.setAlpha (state.followActionsInUse ? 1.0f : 0.45f);
         }
         if (! tempo.isBeingEdited()) tempo.setText (juce::String (state.tempo, 2), juce::dontSendNotification);
         // An automated tempo shows the playhead's tempo and is edited in the Song Tempo lane.
@@ -23873,10 +24044,12 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
     filesDropped ({ audioFixture.getFullPathName() }, dropPoint.x, dropPoint.y);
     check (state.tracks[(size_t) audioColumn].slots[1].clip.id == audioClipId && status.contains ("already contains"),
            "occupied audio-slot drop is rejected without replacing the existing clip");
-    launcher.keyPressed (juce::KeyPress (juce::KeyPress::returnKey, juce::ModifierKeys (juce::ModifierKeys::shiftModifier), 0));
+    clickedArea = Area::scenes;
+    launcher.keyPressed (juce::KeyPress (juce::KeyPress::returnKey));
+    clickedArea = Area::session;
     pumpSyntheticTestDevice (session, 8); refresh();
     check (state.tracks[(size_t) audioColumn].slots[1].playing && ! state.tracks[(size_t) midiTrack].slots.front().playing,
-           "Shift+Enter launches the selected scene and its empty MIDI slot stops the previous clip");
+           "Enter on the scenes' column launches the selected scene and its empty MIDI slot stops the previous clip");
     report (session.stopAllLauncherClips()); refresh();
     pumpSyntheticTestDevice (session, 8); refresh();
     check (std::all_of (state.tracks.begin(), state.tracks.end(), [] (const auto& track)
@@ -23889,7 +24062,7 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         const auto prefsBefore = session.preferences();
         check (prefsBefore.selectOnLaunch && prefsBefore.selectNextSceneOnLaunch, "Select on Launch and Select Next Scene on Launch are on at first");
         selectedSceneId = state.scenes[0].id; clickedArea = Area::scenes;
-        launcher.keyPressed (juce::KeyPress (juce::KeyPress::returnKey, juce::ModifierKeys (juce::ModifierKeys::shiftModifier), 0)); refresh();
+        launcher.keyPressed (juce::KeyPress (juce::KeyPress::returnKey)); refresh();
         check (selectedSceneIndex() == 1, "launching a scene with the keys selects the next, ready for the next press");
         report (session.stopAllLauncherClips()); session.stop(); refresh();
         const auto third = state.scenes[2].id;
@@ -29384,7 +29557,6 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         }
     }
     check (session.importAudioToSlot (audioFixture, 0, 0).wasOk(), "prepare follow-action UI clip"); refresh(); showSessionView(); selectLauncherSlot (0, 0);
-    const auto followClipId = selectedSlot()->clip.id;
     {
         openPianoRoll(); refresh();
         auto* box = findNamed (audioClipView, "Launch box");
@@ -29393,51 +29565,61 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         mode->setSelectedId (4, juce::sendNotificationSync);
         check (selectedSlot()->clip.launch.mode == Session::LaunchMode::repeat, "the audio clip view's Launch box edits the Session clip");
         session.undo(); refresh();
-        auto* follow = dynamic_cast<juce::Button*> (findNamed (audioClipView, "Follow action"));
-        check (follow != nullptr && follow->isVisible() && box->getLocalBounds().contains (follow->getBounds()), "the Launch box offers the clip's follow action");
-        if (follow != nullptr) follow->onClick();
+        // The Follow Action controls, as the reference's Launch box shows them (its manual, section 16.7).
+        const auto named = [&] (const char* name) { return findNamed (audioClipView, name); };
+        auto* panel = named ("Follow Action");
+        auto* enabled = dynamic_cast<juce::Button*> (named ("Follow Action switch"));
+        auto* linked = dynamic_cast<juce::Button*> (named ("Follow Action linked"));
+        auto* actionB = dynamic_cast<juce::ComboBox*> (named ("Follow Action B"));
+        auto* time = dynamic_cast<juce::Label*> (named ("Follow Action time"));
+        auto* multiplier = dynamic_cast<juce::Label*> (named ("Follow Action multiplier"));
+        auto* chanceA = dynamic_cast<juce::Label*> (named ("Follow Action chance A"));
+        auto* chanceB = dynamic_cast<juce::Label*> (named ("Follow Action chance B"));
+        auto* jumpB = dynamic_cast<juce::Label*> (named ("Follow Action jump B"));
+        check (panel != nullptr && panel->isVisible() && box->getLocalBounds().contains (panel->getBounds()) && enabled && linked && actionB && time && multiplier
+                   && chanceA && chanceB && jumpB, "the Launch box shows the clip's Follow Action controls");
+        check (! enabled->getToggleState() && linked->getToggleState() && multiplier->isVisible() && ! time->isVisible() && multiplier->getText() == "x1"
+                   && chanceA->getText() == "100 %" && ! jumpB->isVisible(), "a clip's Follow Action starts off, linked, once round its loop, with A sure");
+        const auto steps = session.undoSteps().size();
+        enabled->setToggleState (true, juce::dontSendNotification); enabled->onClick(); refresh();
+        check (selectedSlot()->clip.follow.enabled && session.undoSteps().size() == steps + 1, "its switch turns it on, one undo step");
+        linked->setToggleState (false, juce::dontSendNotification); linked->onClick(); refresh();
+        check (! selectedSlot()->clip.follow.linked && time->isVisible() && ! multiplier->isVisible() && time->getText() == "1.0.0", "unlinked, it shows its time: a bar");
+        time->setText ("2.1.0", juce::sendNotificationSync); refresh();
+        check (std::abs (selectedSlot()->clip.follow.timeBeats - 9) < 1e-9, "the time takes bars, beats and sixteenths");
+        actionB->setSelectedId ((int) Session::FollowAction::other + 1, juce::sendNotificationSync); refresh();
+        chanceA->setText ("30", juce::sendNotificationSync); refresh();
+        auto follow = selectedSlot()->clip.follow;
+        check (follow.actionA == Session::FollowAction::next && follow.actionB == Session::FollowAction::other && follow.chanceA == 30 && follow.chanceB == 70
+                   && chanceB->getText() == "70 %", "action B and the chances, setting one setting the other");
+        chanceB->setText ("62.5", juce::sendNotificationSync); refresh();
+        check (selectedSlot()->clip.follow.chanceB == 63 && selectedSlot()->clip.follow.chanceA == 37, "a chance rounds half away from zero, as the reference's");
+        actionB->setSelectedId ((int) Session::FollowAction::jump + 1, juce::sendNotificationSync); refresh();
+        check (jumpB->isVisible() && jumpB->getText() == "2", "Jump shows its scene's number, the second scene at first");
+        jumpB->setText ("1", juce::sendNotificationSync); refresh();
+        check (selectedSlot()->clip.follow.actionB == Session::FollowAction::jump && selectedSlot()->clip.follow.jumpB == 0, "typing a scene's number sets Jump's scene");
+        chanceA->setText ("140", juce::sendNotificationSync); refresh();
+        check (selectedSlot()->clip.follow.chanceA == 100 && selectedSlot()->clip.follow.chanceB == 0, "a chance past 100 % is held at 100 %");
+        session.undo(); refresh();
+        check (selectedSlot()->clip.follow.chanceA == 37, "each change is an undo step");
         closeClipView(); refresh();
     }
-    check (alerts.back() != nullptr, "the Launch box's Follow Action opens its controls");
-    const auto finishFollowDialog = [&] (int action, const juce::String& beats, int result)
     {
-        auto dialog = alerts.back(); check (dialog != nullptr, "follow-action dialog remains valid");
-        dialog->getComboBoxComponent ("action")->setSelectedItemIndex (action, juce::sendNotificationSync);
-        check (dialog->getTextEditor ("beats")->isEnabled() == (action != 0), "Off disables timed follow input");
-        dialog->getTextEditor ("beats")->setText (beats); dialog->exitModalState (result);
-        // The dialog applies its choice in a callback after it closes, which a loaded machine can take
-        // a moment to deliver.
-        for (int wait = 0; wait < 10; ++wait) juce::MessageManager::getInstance()->runDispatchLoopUntil (20);
-        refresh();
-    };
-    finishFollowDialog ((int) Session::FollowAction::cycle, "2.5", 1);
-    check (selectedSlot()->clip.follow == Session::FollowSettings { Session::FollowAction::cycle, 2.5 }, "production follow dialog sets actual native beat timing");
-    session.undo(); refresh(); check (selectedSlot()->clip.follow.action == Session::FollowAction::off, "follow settings undo once"); session.redo(); refresh();
-    {
-        // Action B with a chance: A plays at its percentage and B otherwise.
-        clipFollowDialog (followClipId);
-        auto dialog = alerts.back(); check (dialog != nullptr && dialog->getComboBoxComponent ("action-b") != nullptr && dialog->getTextEditor ("chance") != nullptr,
-                                            "the follow dialog offers action B and its chance");
-        dialog->getComboBoxComponent ("action")->setSelectedItemIndex ((int) Session::FollowAction::next, juce::sendNotificationSync);
-        dialog->getComboBoxComponent ("action-b")->setSelectedItemIndex ((int) Session::FollowAction::other, juce::sendNotificationSync);
-        dialog->getTextEditor ("beats")->setText ("2"); dialog->getTextEditor ("chance")->setText ("30");
-        dialog->exitModalState (1); juce::MessageManager::getInstance()->runDispatchLoopUntil (20); refresh();
-        const auto follow = selectedSlot()->clip.follow;
-        check (follow.action == Session::FollowAction::next && follow.actionB == Session::FollowAction::other && std::abs (follow.chanceA - .3) < 1e-9 && follow.afterBeats == 2,
-               "the dialog sets action A, action B and the chance of A");
-        clipFollowDialog (followClipId); dialog = alerts.back();
-        dialog->getTextEditor ("chance")->setText ("140"); dialog->exitModalState (1); juce::MessageManager::getInstance()->runDispatchLoopUntil (20); refresh();
-        check (selectedSlot()->clip.follow == follow, "an out-of-range chance leaves the follow action unchanged");
-        session.undo(); refresh();
+        // Shift+Return switches the selected clip's Follow Action, as the reference's Toggle Follow Actions for Selected Clips.
+        clickedArea = Area::session;
+        const bool was = selectedSlot()->clip.follow.enabled;
+        launcher.keyPressed (juce::KeyPress (juce::KeyPress::returnKey, juce::ModifierKeys (juce::ModifierKeys::shiftModifier), 0)); refresh();
+        check (selectedSlot()->clip.follow.enabled != was && ! selectedSlot()->playing, "Shift+Return switches the selected clip's Follow Action, launching nothing");
+        // The global switch beside Back to Arrangement: on, and lit only while a Follow Action is active.
+        check (followActionsButton.isVisible() && followActionsButton.getToggleState() && state.followActionsEnabled, "Enable Follow Actions Globally is on at first");
+        check ((followActionsButton.getAlpha() == 1.0f) == state.followActionsInUse, "it dims while no Follow Action is active");
+        followActionsButton.setToggleState (false, juce::dontSendNotification); followActionsButton.onClick(); refresh();
+        check (! state.followActionsEnabled && ! session.canRedo(), "it turns them off without an undo step");
+        followActionsButton.setToggleState (true, juce::dontSendNotification); followActionsButton.onClick(); refresh();
+        launcher.keyPressed (juce::KeyPress (juce::KeyPress::returnKey, juce::ModifierKeys (juce::ModifierKeys::shiftModifier), 0)); refresh();
+        check (selectedSlot()->clip.follow.enabled == was, "Shift+Return again switches it back");
+        session.undo(); session.undo(); refresh();
     }
-    clipFollowDialog (followClipId); finishFollowDialog ((int) Session::FollowAction::next, "2oops", 1);
-    check (selectedSlot()->clip.follow.action == Session::FollowAction::cycle, "invalid follow timing preserves existing state");
-    clipFollowDialog (followClipId); finishFollowDialog ((int) Session::FollowAction::stop, "1", 0);
-    check (selectedSlot()->clip.follow.action == Session::FollowAction::cycle, "cancelling follow dialog retains settings");
-    clipFollowDialog (followClipId);
-    check (session.clearSlot (0, 0).wasOk() && session.importAudioToSlot (audioFixture, 0, 0).wasOk(), "replace follow target while its dialog is open"); refresh();
-    finishFollowDialog ((int) Session::FollowAction::next, "1", 1);
-    check (selectedSlot()->clip.id != followClipId && selectedSlot()->clip.follow.action == Session::FollowAction::off, "stale follow dialog cannot change replacement clip");
     check (session.newProject().wasOk(), "prepare pending device menu"); refresh(); selectTrack (0);
     const auto pendingDeviceTrackId = state.tracks[0].id;
     const auto pendingDeviceGeneration = state.projectGeneration;

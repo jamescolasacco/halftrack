@@ -40,7 +40,7 @@ Each capability with partial implementation (a PARTIAL row of the [capability le
 | SES-001 | clip-loops, launcher, scene-capture, slot-clips, ui |  |
 | SES-002 | launcher |  |
 | SES-003 | launch-modes |  |
-| SES-004 | follow-actions |  |
+| SES-004 | follow-actions, ui |  |
 | SES-005 | scene-tempo, ui |  |
 | SES-006 | midi-input, midi-monitor, session, session-record, ui |  |
 | SES-007 | launcher |  |

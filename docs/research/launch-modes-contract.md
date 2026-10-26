@@ -59,7 +59,6 @@ UI checks cover the Launch box controls, mouse and Enter press/release, and Togg
 
 ## Not implemented
 
-- The reference's handling of a velocity change while a launch plays (whether it ramps), before any launch, in Arrangement playback, and for follow-action launches. Halftrack's starts at the launch, is full before one, and keeps the last launch's for follow actions.
+- The reference's handling of a velocity change while a launch plays (whether it ramps), before any launch, in Arrangement playback, and for follow-action launches. Halftrack's starts at the launch and is full before one. A follow-action launch, like any launch without a note, plays at full velocity (since 2026-10-26; it kept the last launch's before).
 - Gate/Repeat on scene launches.
-- Weighted follow actions in the Launch box.
 - Any comparison with reference launch timing.

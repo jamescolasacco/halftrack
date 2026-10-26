@@ -1541,13 +1541,14 @@ void playbackAndArrangementEditsDuringSessionTakes (const juce::File& root)
         Session::MetronomeSettings metronome; metronome.countInBars = 2;
         t.survives (0, "follow action and recording settings", [&]
         {
-            ok (session.setClipFollowAction (clipId, { Session::FollowAction::next, 4 }), "set a follow action on the recording track during the take");
+            Session::FollowSettings follow; follow.enabled = true;
+            ok (session.setClipFollowAction (clipId, follow), "set a follow action on the recording track during the take");
             ok (session.setMetronome (metronome), "change the count-in during the take");
             ok (session.setRecordQuantisation (Session::RecordQuantisation::quarter), "change recording quantization during the take");
         });
         const auto state = session.snapshot();
         check (state.metronome.countInBars == 2 && state.recordQuantisation == Session::RecordQuantisation::quarter
-               && state.tracks[2].slots[1].clip.follow.action == Session::FollowAction::next,
+               && state.tracks[2].slots[1].clip.follow.enabled && state.tracks[2].slots[1].clip.follow.actionA == Session::FollowAction::next,
                "the settings changed during the take are in place");
         metronome = state.metronome; metronome.countInBars = 0; ok (session.setMetronome (metronome), "no count-in for what follows");
     }

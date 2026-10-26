@@ -146,7 +146,7 @@ Note-activation default: toggle the selected notes only; an empty selection does
 Audio export defaults: keep the full stereo Arrangement mix and existing WAV defaults; add lossless AIFF/FLAC with the pinned writers' supported 16/24-bit depths. WAV retains 32-bit. FLAC uses the renderer's default compression setting. Normalization, configurable dither, range/stem export and lossy encoders remain separate features. Never silently down-convert a requested model depth; the UI explicitly selects 24-bit when changing away from 32-bit WAV.
 
 
-Follow-action default: Off. The first active configuration uses four project beats. Expose one deterministic action per Session clip: Stop, Play Again, Previous, Next, First, Last, or Cycle to Next. Previous/Next stop at the ends; Cycle wraps and all track actions skip empty slots. Off clears the action and timing; choosing an active action again starts with four beats. Weighted/random choices, contiguous-group targeting, loop-linked timing and scene follow actions require their own controls and tests.
+Follow Action defaults: since 2026-10-26 they are the reference's, read from its code (see the [follow actions contract](research/follow-actions-contract.md)).
 
 
 Export mix options default to Stereo and normalization Off. Mono means the arithmetic average of the full rendered channels, including both sides of the stereo mix. Peak normalization offers -1/-3/0 dB sample-peak ceilings using the pinned renderer's conservative headroom and 40 dB maximum boost. It does not modify faders. True-peak/LUFS normalization, dither selection and range/stem rendering remain separate features.
@@ -222,8 +222,7 @@ Insert Silence and Delete Time use the Arrangement time selection, or the loop r
 
 ### Follow action chance defaults
 
-The follow-action time is one value shared by both actions, and a No action choice is final for that launch (it is not evaluated again on later loops). Random choice uses the engine's unseeded generator, so tests check deterministic chances exactly and an even chance statistically. These are simplest-default choices pending reference measurement.
-
+Superseded on 2026-10-26: the draws, the chance rule and the groups are the reference's (static reading; see the [follow actions contract](research/follow-actions-contract.md)). Still open there: the reference's seeds, Create Follow Action Chain, the display of the multiplier and of Jump's scene, and a few timing edge cases.
 
 ### Track Delay defaults
 
@@ -455,7 +454,7 @@ The reference's manual describes what Convert Harmony, Melody and Drums do, not 
 
 ### Scene View
 
-The reference's manual describes the Scene View's sections but not their controls' look or what they show for several scenes with different values. Halftrack's Tempo and Signature are number fields like the scene fields in the launcher, showing the scene the selection follows; a change goes to every selected scene. Its title bar reads the scene's number and name ("2   Verse"), or "3 Scenes". Scene Follow Actions, its lower section in the reference, are missing.
+The reference's manual describes the Scene View's sections but not their controls' look or what they show for several scenes with different values. Halftrack's Tempo and Signature are number fields like the scene fields in the launcher, showing the scene the selection follows; a change goes to every selected scene. Its title bar reads the scene's number and name ("2   Verse"), or "3 Scenes". Its lower section holds the scene Follow Actions (2026-10-26), with the Launch box's controls; a change goes to every selected scene.
 
 ### Follow's pause
 
@@ -829,7 +828,7 @@ Defaults where the reference's remote control is not followed ([MIDI mapping](re
 
 - **Remote switches.** Every MIDI input acts as a remote, except the computer keyboard and All MIDI Ins (whose sources already do). The reference has a Remote switch per input port.
 - **Note ranges.** A note maps alone. The reference can map a range of keys to a slot to play it chromatically, or spread a control's values across a range.
-- **Launch velocity.** How the reference handles a velocity change while a launch plays (whether it ramps), before any launch, in Arrangement playback and for follow-action launches is not read. Halftrack's starts at the launch, is full before one, and keeps the last launch's for follow actions ([contract](research/launch-modes-contract.md)).
+- **Launch velocity.** How the reference handles a velocity change while a launch plays (whether it ramps), before any launch, in Arrangement playback and for follow-action launches is not read. Halftrack's starts at the launch and is full before one; a follow-action launch plays at full velocity, as any launch without a note ([contract](research/launch-modes-contract.md)).
 - **Switch ranges.** A controller mapped to a switch control (a device's two-state control) takes the nearest step along its range rather than turning on inside Min–Max.
 - **Learning over a mapping.** Learning a note or controller already mapped elsewhere moves it without the reference's confirmation.
 - **Solo and arm timing.** The reference gathers solo and arm presses from remote controls on a short timer and applies them together; Halftrack applies each at once.
