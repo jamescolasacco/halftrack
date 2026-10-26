@@ -66,6 +66,7 @@ Sources:
   - Fields drag and take typing as the other number fields do. Each change is one undo step; a drag is one step.
   - Shift+Return switches the selected clips' Follow Actions on or off, all on unless all are on already (Toggle Follow Actions for Selected Clips). With the scenes' column clicked, it switches the selected scenes'.
   - An active Follow Action stripes its clip's or scene's launch button.
+  - While a clip's Follow Action is on and unlinked, the note and sample editors mark its time on the ruler, after the start marker (2026-10-26). Dragging the marker sets the time, on the grid unless the grid is bypassed, in one undo step. Where it and the start marker overlap, the nearer takes the press.
 - **Saving.**
   - A `HALFTRACKFOLLOWACTION` child of the clip or scene holds the settings. Settings at their defaults are left out.
   - Projects saved before 2026-10-26 kept a clip's follow actions in the engine's own form. Loading converts them: switched on, unlinked, after their beats, with their weights as chances. Next and Previous now wrap round the group, and Cycle becomes Next.
@@ -94,12 +95,11 @@ With rendered audio, the same suite checks:
 - undo, invalid settings, scene settings, a duplicated scene's clips, saving and reopening, chances loading as percentages, invalid values rejecting loads, older projects converting, Arrangement clips refused, and export protection;
 - a held MIDI note releasing at a follow launch at 60, 120 and 240 BPM.
 
-The UI suite edits a Session clip's Follow Action through the Launch box: the switch, Linked, the time, action B, both chances (rounding and the 100 % limit), Jump's scene and undo. It also checks Shift+Return and the global switch.
+The UI suite edits a Session clip's Follow Action through the Launch box: the switch, Linked, the time, action B, both chances (rounding and the 100 % limit), Jump's scene and undo. It also checks Shift+Return and the global switch, and drags the time's marker in the note editor a beat on.
 
 ## Not yet covered
 
 - Create Follow Action Chain (Cmd+Shift+Return, and the clip's context menu) is missing. What it sets was not read.
-- The Follow Action time marker in the clip editors is missing.
 - How the reference displays the multiplier and the time was not read. Neither was the base of Jump's display; the reference's internal default, row 1, shows as scene 2.
 - Planning differences from the reference:
   - A scene's Follow Action launch replaces the tracks' clip plans when it is queued, a quarter second early, rather than when it plays.

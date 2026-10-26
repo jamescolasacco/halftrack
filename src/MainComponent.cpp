@@ -168,6 +168,14 @@ juce::String barsBeats (double beats, const Session::TimeSignature& meter, bool 
     const auto shown = std::abs (rounded - std::round (rounded)) < 1e-6 ? juce::String ((int) std::round (rounded) + (position ? 1 : 0)) : juce::String (rounded + (position ? 1 : 0), 2);
     return juce::String ((int) whole + (position ? 1 : 0)) + "." + juce::String ((int) beat + (position ? 1 : 0)) + "." + shown;
 }
+// A Follow Action time's marker on a clip editor's ruler, as the reference's editors show it (its manual, section 16.7): a
+// flag pointing back to the start marker, standing on the ruler's foot at x.
+void drawFollowMarker (juce::Graphics& g, float x, float foot)
+{
+    juce::Path flag; flag.addTriangle (x, foot - 10, x - 8, foot - 5, x, foot);
+    g.setColour (themes::colour (0xff6fcfff)); g.fillPath (flag);
+    g.drawVerticalLine ((int) x, foot - 12, foot);
+}
 std::optional<double> readBarsBeats (const juce::String& text, const Session::TimeSignature& meter, bool position)
 {
     const auto parts = juce::StringArray::fromTokens (text.trim(), ".,", "");
@@ -8631,6 +8639,7 @@ private:
                     juce::Path flag; flag.addTriangle (x, (float) wave.getBottom() - 10, x + 8, (float) wave.getBottom() - 5, x, (float) wave.getBottom());
                     g.setColour (themes::colour (0xffdadada)); g.fillPath (flag);
                 }
+                if (clip.follow.enabled && ! clip.follow.linked) drawFollowMarker (g, followMarkerX(), (float) wave.getBottom());
                 // Transients: short grey marks along the top, where a double-click pins a marker.
                 g.setColour (themes::colour (0xffa0a0a0));
                 for (const auto t : transients)
@@ -8836,7 +8845,7 @@ private:
             if (clip.canLoop && (braceDrag = braceAt (e.position)) != 0)
             {
                 // The view follows the loop as it changes, so the drag keeps the scale it began with.
-                braceOrigin = clip.loop; startOrigin = clip.contentStartBeat; braceDownX = e.position.x; draggedMarker = -1;
+                braceOrigin = clip.loop; startOrigin = clip.contentStartBeat; followOrigin = clip.follow.timeBeats; braceDownX = e.position.x; draggedMarker = -1;
                 braceBeatsPerPixel = visibleBeats().second / std::max (1.0f, (float) waveBounds().getWidth());
                 return;
             }
@@ -8867,6 +8876,15 @@ private:
                 const auto delta = (e.position.x - braceDownX) * braceBeatsPerPixel;
                 const auto snap = [&] (double beat) { return ! snapsMarkers (e.mods) ? beat : std::round (beat / snapGrid()) * snapGrid(); };
                 const double shortest = ! snapsMarkers (e.mods) ? 1.0 / 64 : snapGrid(), audioEnd = sourceBeats (clip);
+                if (braceDrag == 5)
+                {
+                    auto follow = clip.follow;
+                    follow.timeBeats = juce::jlimit (0.25, followactions::maximumTime, snap (startOrigin + followOrigin + delta) - startOrigin);
+                    if (follow == clip.follow) return;
+                    if (! gesture) { owner.session.beginEditGesture ("Move follow action time"); gesture = true; }
+                    owner.report (owner.session.setClipFollowAction (clip.id, follow)); owner.refresh(); sync();
+                    return;
+                }
                 auto loop = braceOrigin;
                 auto start = startOrigin;
                 if (braceDrag == 1)
@@ -8924,19 +8942,27 @@ private:
         }
         EnvelopeEditor envelope { owner };
         juce::ComboBox envelopeChoice;
+        // Where the Follow Action time's marker is: its time after the start marker.
+        float followMarkerX() const { return beatX (clip.contentStartBeat + clip.follow.timeBeats); }
     private:
         int draggedMarker = -1;
-        // A drag of the loop brace (1 its start, 2 its end, 3 all of it) or the start marker (4).
+        // A drag of the loop brace (1 its start, 2 its end, 3 all of it), the start marker (4) or the Follow Action time's (5).
         int braceDrag = 0;
         Session::ClipLoop braceOrigin;
-        double startOrigin = 0;
+        double startOrigin = 0, followOrigin = 0;
         float braceDownX = 0;
         double braceBeatsPerPixel = 0;
         int braceAt (juce::Point<float> p) const
         {
             const auto wave = waveBounds().toFloat();
             if (! wave.contains (p)) return 0;
-            if (std::abs (p.x - beatX (clip.contentStartBeat)) <= 6 && p.y >= wave.getBottom() - 12) return 4;
+            if (p.y >= wave.getBottom() - 12)
+            {
+                // The nearer of the start marker and the Follow Action time's.
+                const auto start = std::abs (p.x - beatX (clip.contentStartBeat));
+                const auto follow = clip.follow.enabled && ! clip.follow.linked ? std::abs (p.x - followMarkerX()) : 1.0e9f;
+                if (std::min (start, follow) <= 6) return follow < start ? 5 : 4;
+            }
             if (! clip.loop.on || p.y > wave.getY() + 8) return 0;
             const auto from = beatX (clip.loop.start), to = beatX (clip.loop.start + clip.loop.length);
             if (std::abs (p.x - from) <= 4) return 1;
@@ -9361,6 +9387,8 @@ private:
                 const auto startX = (float) (keysWidth + (clip->contentStartBeat - viewBeat) * pixelsPerBeat);
                 juce::Path flag; flag.addTriangle (startX, (float) gridTop - 10, startX + 8, (float) gridTop - 5, startX, (float) gridTop);
                 g.setColour (startMarkerSelected ? orange : ink); g.fillPath (flag);
+                if (clip->follow.enabled && ! clip->follow.linked)
+                    drawFollowMarker (g, (float) (keysWidth + (clip->contentStartBeat + clip->follow.timeBeats - viewBeat) * pixelsPerBeat), (float) gridTop);
                 g.restoreState();
             }
             if (insertX >= grid.getX() && insertX <= grid.getRight())
@@ -9418,7 +9446,8 @@ private:
             if (const int grabbed = braceAt (*clip, e.position); grabbed != 0)
             {
                 grabKeyboardFocus(); endGesture(); repaint();
-                braceDrag = grabbed; braceOrigin = clip->loop; startOrigin = clip->contentStartBeat; dragOrigin = e.position; dragClipId = clip->id;
+                braceDrag = grabbed; braceOrigin = clip->loop; startOrigin = clip->contentStartBeat; followOrigin = clip->follow.timeBeats;
+                dragOrigin = e.position; dragClipId = clip->id;
                 return;
             }
             if (e.y >= headerHeight && e.y < gridTop)
@@ -9573,6 +9602,16 @@ private:
                 const auto delta = (e.position.x - dragOrigin.x) / pixelsPerBeat;
                 const auto snap = [&] (double beat) { return ! snapsNotes (e.mods) ? beat : std::round (beat / snapBeats()) * snapBeats(); };
                 const double shortest = ! snapsNotes (e.mods) ? 1.0 / 64 : snapBeats();
+                if (braceDrag == 5)
+                {
+                    // The Follow Action time's marker moves the time, from the start marker.
+                    auto follow = clip->follow;
+                    follow.timeBeats = juce::jlimit (0.25, followactions::maximumTime, snap (startOrigin + followOrigin + delta) - startOrigin);
+                    if (follow == clip->follow) return;
+                    if (! gesture) { owner.session.beginEditGesture ("Move follow action time"); gesture = true; }
+                    owner.report (owner.session.setClipFollowAction (clip->id, follow)); owner.refresh();
+                    return;
+                }
                 auto loop = braceOrigin;
                 auto start = startOrigin;
                 if (braceDrag == 1)
@@ -9843,6 +9882,13 @@ private:
         }
         int topShownPitch() const { return pitchAtRow (topRow()); }
         double beatWidth() const { return pixelsPerBeat; }
+        // Where the shown clip's Follow Action time marker stands on the ruler: its time after the start marker.
+        juce::Point<float> followMarker() const
+        {
+            const auto* clip = owner.currentMidiClip();
+            const auto beat = clip != nullptr ? clip->contentStartBeat + clip->follow.timeBeats : 0.0;
+            return { (float) (keysWidth + (beat - viewBeat) * pixelsPerBeat), (float) gridTop - 5 };
+        }
         // Whether the loop brace was clicked last, so it takes its keys (see braceKey).
         bool loopBraceSelected = false;
         // The start marker, clicked, takes Left and Right (its manual, section 8.8).
@@ -10010,10 +10056,11 @@ private:
             for (const auto pitch : sounding) owner.session.previewNote (soundingTrack, pitch, 0, false);
             sounding.clear();
         }
-        // A ruler drag of the loop brace (1 its start, 2 its end, 3 all of it) or the start marker (4).
+        // A ruler drag of the loop brace (1 its start, 2 its end, 3 all of it), the start marker (4) or the Follow Action
+        // time's marker (5).
         int braceDrag = 0;
         Session::ClipLoop braceOrigin;
-        double startOrigin = 0;
+        double startOrigin = 0, followOrigin = 0;
         // A selected loop brace, as the reference's (its manual, section 42.8): Left and Right move it by the
         // grid, Up and Down by its length; with Cmd/Ctrl, Left and Right shorten and lengthen it by the grid, and
         // Up and Down double and halve it. Each is one undo step, the start kept inside the loop.
@@ -10057,7 +10104,13 @@ private:
         {
             if (p.y < headerHeight || p.y >= gridTop) return 0;
             const auto at = [this] (double beat) { return (float) (keysWidth + (beat - viewBeat) * pixelsPerBeat); };
-            if (std::abs (p.x - at (clip.contentStartBeat)) <= 5 && p.y >= gridTop - 11) return 4;
+            if (p.y >= gridTop - 11)
+            {
+                // The nearer of the start marker and the Follow Action time's.
+                const auto start = std::abs (p.x - at (clip.contentStartBeat));
+                const auto follow = clip.follow.enabled && ! clip.follow.linked ? std::abs (p.x - at (clip.contentStartBeat + clip.follow.timeBeats)) : 1.0e9f;
+                if (std::min (start, follow) <= 5) return follow < start ? 5 : 4;
+            }
             if (! clip.loop.on || p.y > headerHeight + 8) return 0;
             const auto from = at (clip.loop.start), to = at (clip.loop.start + clip.loop.length);
             if (std::abs (p.x - from) <= 4) return 1;
@@ -26467,6 +26520,26 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         setEditorTab (EditorTab::content); laneBox->setSelectedId (1, juce::sendNotificationSync); closeClipView();
         check (session.addMidiClipToSlot (currentTrack()->id, 0, 4).wasOk(), "a Session MIDI clip"); refresh();
         showSessionView(); selectLauncherSlot (lane, 0); openPianoRoll(); refresh();
+        {
+            // The Follow Action time's marker on the note editor's ruler drags the time, as the reference's editors do.
+            Session::FollowSettings follow; follow.enabled = true; follow.linked = false; follow.timeBeats = 1;
+            check (session.setClipFollowAction (currentMidiClip()->id, follow).wasOk(), "a Follow Action a beat after the start"); refresh();
+            const auto marker = pianoRoll.followMarker();
+            const auto steps = session.undoSteps().size();
+            const auto at = [&] (juce::Point<float> p, bool dragged)
+            {
+                const auto now = juce::Time::getCurrentTime();
+                return juce::MouseEvent (juce::Desktop::getInstance().getMainMouseSource(), p, juce::ModifierKeys (juce::ModifierKeys::leftButtonModifier), 1.0f, 0, 0, 0, 0,
+                                         &pianoRoll, &pianoRoll, now, marker, now, 1, dragged);
+            };
+            const auto to = marker.translated ((float) pianoRoll.beatWidth(), 0);
+            pianoRoll.mouseDown (at (marker, false)); pianoRoll.mouseDrag (at (to, true)); pianoRoll.mouseUp (at (to, true)); refresh();
+            check (std::abs (currentMidiClip()->follow.timeBeats - 2) < 1e-6 && currentMidiClip()->contentStartBeat == 0 && session.undoSteps().size() == steps + 1,
+                   "dragging the Follow Action time's marker a beat on makes the time two beats, one undo step ("
+                       + juce::String (currentMidiClip()->follow.timeBeats, 3) + ")");
+            session.undo(); session.undo(); refresh();
+            check (! currentMidiClip()->follow.enabled, "undo takes them back");
+        }
         setEditorTab (EditorTab::envelopes);
         check (findItem (*laneBox, "Envelope automation", "Track Volume") > 0, "a Session clip's Envelopes tab offers automation envelopes too");
         setEditorTab (EditorTab::content);
