@@ -2999,3 +2999,7 @@ Engine and UI areas. Capture MIDI now follows the reference's capture code (stat
 ## Session clip automation overrides — 2026-10-26
 
 Engine area. As the reference's manual describes, moving a control now overrides its Session clips' automation as well as its Arrangement lane: the clip stops setting it, and Re-Enable Automation lights. Re-Enable Automation (or the control's own), launching the clip again, or recording into it brings the clip's automation back. A new Tracktion patch makes a bypassed clip curve leave its parameter alone.
+
+## Several loop bars — 2026-10-26
+
+UI area. As the reference's manual describes, multi-clip editing's loop bars now select together: Cmd-click adds or removes one, Shift-click selects those between, and Focus keeps one. Duplicate doubles every selected loop and a Cmd-drag of a loop's end moves them all, each one undo step. A drag beside the bars sets their height, and in Focus the other clips' bars are grey until pointed at.
