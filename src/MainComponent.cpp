@@ -8973,7 +8973,8 @@ private:
             const bool cmdOnly = mods.isCommandDown() && ! mods.isShiftDown() && ! mods.isAltDown();
             if (cmdOnly && (code == 'I' || code == 'i') && markersEditable()) { insertWarpMarkers(); return true; }
             if (cmdOnly && (code == 'L' || code == 'l') && clip.canLoop) { loopSelection(); return true; }
-            if ((code == juce::KeyPress::leftKey || code == juce::KeyPress::rightKey) && ! selected.empty() && ! mods.isAltDown() && ! mods.isCtrlDown())
+            // Ctrl is the command key on Windows and Linux; on macOS Ctrl alone is not one of these keys.
+            if ((code == juce::KeyPress::leftKey || code == juce::KeyPress::rightKey) && ! selected.empty() && ! mods.isAltDown() && (mods.isCommandDown() || ! mods.isCtrlDown()))
             {
                 const bool right = code == juce::KeyPress::rightKey;
                 if (plain)
