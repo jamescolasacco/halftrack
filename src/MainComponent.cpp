@@ -834,6 +834,18 @@ public:
         midiMapButton.setColour (juce::TextButton::buttonOnColourId, themes::colour (0xff3d8bff)); midiMapButton.setColour (juce::TextButton::textColourOnId, themes::colour (0xffffffff));
         midiMapButton.setWantsKeyboardFocus (false); midiMapButton.setMouseClickGrabsKeyboardFocus (false);
         midiMapButton.onClick = [this] { setMidiMapMode (midiMapButton.getToggleState()); };
+        // The map mode of the controller mapped to the control being learned, in the status bar as the reference's
+        // MIDI Map Mode shows it for a controller's mapping.
+        addChildComponent (mapModeChooser);
+        mapModeChooser.setName ("MIDI map mode");
+        for (int m = 0; m < Session::mapModeCount; ++m) mapModeChooser.addItem (Session::mapModeName ((Session::MapMode) m), m + 1);
+        mapModeChooser.setTooltip ("How the controller's values move the control: Absolute positions, or relative steps as an encoder sends them. Learning detects it.");
+        mapModeChooser.onChange = [this]
+        {
+            const auto target = state.midiLearnTarget;
+            if (target.isEmpty() || mapModeChooser.getSelectedId() < 1) return;
+            report (session.setMidiMappingMode (target, (Session::MapMode) (mapModeChooser.getSelectedId() - 1))); refresh();
+        };
         reEnableButton.setTooltip ("Re-Enable Automation: overridden controls follow their automation again");
         reEnableButton.onClick = [this] { report (session.reEnableAutomation()); refresh(); };
         followButton.setName ("Follow"); followButton.setClickingTogglesState (true); followButton.setToggleState (true, juce::dontSendNotification);
@@ -1111,6 +1123,7 @@ public:
         mixerViewButton.setBounds (mixerViewOptions.getX() - 30, mixerViewOptions.getY(), 30, mixerViewOptions.getHeight());
         deviceViewSelector.setBounds (mixerViewButton.getX() - 46, mixerViewOptions.getY(), 40, mixerViewOptions.getHeight());
         clipViewSelector.setBounds (deviceViewSelector.getX() - 42, mixerViewOptions.getY(), 40, mixerViewOptions.getHeight());
+        mapModeChooser.setBounds (juce::jmax (0, clipViewSelector.getX() - 258) - 186, getHeight() - statusHeight + 2, 180, statusHeight - 4);
         clipViewSelector.setToggleState (showDetail && showPiano, juce::dontSendNotification); clipViewSelector.setEnabled (canShowClipView());
         deviceViewSelector.setToggleState (showDetail && (! showPiano || stackDevices), juce::dontSendNotification);
         // MIDI Map Mode shows its mappings in the browser's place, so the browser shows meanwhile.
@@ -13639,6 +13652,7 @@ private:
     MapOverlay mapOverlay { *this };
     MappingList mappingList { *this };
     juce::TextButton midiMapButton { "MIDI" };
+    juce::ComboBox mapModeChooser;
     // The computer MIDI keyboard: M or the KEYS switch turns it on; then the note keys play the
     // Computer Keyboard input and are released when the key comes up.
     juce::TextButton keysButton { "KEYS" };
@@ -16802,6 +16816,12 @@ private:
         if (selectedSceneIndex() < 0) selectedSceneId = state.scenes.empty() ? juce::String() : state.scenes.front().id;
         followRemoteLaunch (previous.remoteLaunch);
         showPickUp (previous.pickUp);
+        {
+            const auto learned = std::find_if (state.midiMappings.begin(), state.midiMappings.end(), [this] (const auto& m) { return m.target == state.midiLearnTarget; });
+            const bool chooses = midiMapMode && state.midiLearnTarget.isNotEmpty() && learned != state.midiMappings.end() && ! learned->note;
+            mapModeChooser.setVisible (chooses);
+            if (chooses) mapModeChooser.setSelectedId ((int) learned->mode + 1, juce::dontSendNotification);
+        }
         launcher.sync();
         if (arrangementMixerLaidOut != (! showSession && state.arrangementMixerSections.shown ? arrangementMixer.preferredHeight() : -1)) resized();
         arrangementMixer.sync();
@@ -22701,9 +22721,17 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         check (state.midiMappings.size() == 1 && state.midiMappings[0].controller == 7 && minimum != nullptr && minimum->isVisible() && mappingList.isVisible(), "it maps the fader and the list shows the mapping");
         minimum->setValue (-30, juce::sendNotificationSync);
         check (std::abs (state.midiMappings[0].minimum + 30) < 1e-3, "the list's Min edits the mapping");
+        // The learned controller's map mode, in the status bar as the reference's MIDI Map Mode shows it.
+        check (mapModeChooser.isVisible() && mapModeChooser.getText() == "Absolute" && mapModeChooser.getNumItems() == Session::mapModeCount
+                   && mapModeChooser.getBottom() == getHeight() - 2, "the status bar shows the controller's map mode, Absolute");
+        mapModeChooser.setSelectedId (2, juce::sendNotificationSync);
+        check (state.midiMappings[0].mode == Session::MapMode::signedBit && mapModeChooser.getText() == "Relative (Signed Bit)", "choosing Relative (Signed Bit) sets it");
+        mapModeChooser.setSelectedId (1, juce::sendNotificationSync);
+        check (state.midiMappings[0].mode == Session::MapMode::absolute, "and Absolute again");
         report (session.setMidiLearnTarget ("track:" + state.tracks[0].id + ":solo"));
         check (session.handleMidiNote (1, 60, 100).wasOk(), "a note arrives for the track's solo switch"); refresh();
-        check (state.midiMappings.size() == 2 && state.midiMappings[1].note && state.midiMappings[1].controller == 60, "the note maps the switch");
+        check (state.midiMappings.size() == 2 && state.midiMappings[1].note && state.midiMappings[1].controller == 60 && ! mapModeChooser.isVisible(),
+               "the note maps the switch, and a note's mapping shows no map mode");
         check (MappingList::controllerText (state.midiMappings[1]) == "Ch 1  Note C3" && MappingList::controllerText (state.midiMappings[0]) == "Ch 1  CC 7",
                "the list names the note as the reference does, C3 for note 60, beside the controller");
         report (session.removeMidiMapping ("track:" + state.tracks[0].id + ":solo")); refresh();

@@ -6,7 +6,7 @@
 #include "NativeEffects.h"
 #include "Racks.h"
 #include "CaptureTempo.h"
-#include "MidiTakeover.h"
+#include "RemoteMapping.h"
 #include "FollowActions.h"
 #include "NoteTools.h"
 #include "Grooves.h"
@@ -2868,7 +2868,8 @@ const juce::Identifier parameterIdProperty { "parameterID" };
 Session::MidiMapping readMidiMapping (const juce::ValueTree& v)
 {
     return { v["target"].toString(), static_cast<int> (v["channel"]), static_cast<int> (v["controller"]),
-             static_cast<float> (v["minimum"]), static_cast<float> (v["maximum"]), static_cast<bool> (v.getProperty ("note", false)) };
+             static_cast<float> (v["minimum"]), static_cast<float> (v["maximum"]), static_cast<bool> (v.getProperty ("note", false)),
+             static_cast<Session::MapMode> (juce::jlimit (0, Session::mapModeCount - 1, static_cast<int> (v.getProperty ("mode", 0)))) };
 }
 juce::ValueTree midiMappingTree (const Session::MidiMapping& m)
 {
@@ -2876,7 +2877,16 @@ juce::ValueTree midiMappingTree (const Session::MidiMapping& m)
     v.setProperty ("target", m.target, nullptr); v.setProperty ("channel", m.channel, nullptr); v.setProperty ("controller", m.controller, nullptr);
     v.setProperty ("minimum", m.minimum, nullptr); v.setProperty ("maximum", m.maximum, nullptr);
     if (m.note) v.setProperty ("note", true, nullptr); // A note's mapping; a controller's has no flag.
+    if (m.mode != Session::MapMode::absolute) v.setProperty ("mode", (int) m.mode, nullptr); // Absolute, the reference's first mode, has none.
     return v;
+}
+// The controllers and notes a mapping takes, by note, channel and number: its own, and an Absolute (14bit) pair's fine
+// half, 32 above.
+std::vector<int> mappingKeys (const Session::MidiMapping& m)
+{
+    std::vector<int> keys { (m.note ? 4096 : 0) + m.channel * 128 + m.controller };
+    if (! m.note && m.mode == Session::MapMode::absolute14) keys.push_back (m.channel * 128 + m.controller + 32);
+    return keys;
 }
 Result validateMidiMappings (const juce::ValueTree& state)
 {
@@ -2891,11 +2901,14 @@ Result validateMidiMappings (const juce::ValueTree& state)
             const auto whole = [&] (const char* key, double low, double high) { return finiteProperty (m[key], low, high) && static_cast<double> (m[key]) == std::floor (static_cast<double> (m[key])); };
             const auto target = m["target"].toString();
             const auto kind = target.upToFirstOccurrenceOf (":", false, false);
+            const auto keys = mappingKeys (readMidiMapping (m));
             if (! m.hasType (midiMappingType) || ! knownTargetKind (target) || ! whole ("channel", 1, 16) || ! whole ("controller", 0, 127)
                 || ! finiteProperty (m["minimum"], -1.0e6, 1.0e6) || ! finiteProperty (m["maximum"], -1.0e6, 1.0e6)
                 || (m.hasProperty ("note") && ! whole ("note", 0, 1))
+                || (m.hasProperty ("mode") && (! whole ("mode", 0, Session::mapModeCount - 1) || static_cast<bool> (m["note"])
+                                               || (static_cast<int> (m["mode"]) == (int) Session::MapMode::absolute14 && static_cast<int> (m["controller"]) > 95)))
                 || ! targets.insert (target).second
-                || ! controllers.insert ((static_cast<bool> (m["note"]) ? 4096 : 0) + static_cast<int> (m["channel"]) * 128 + static_cast<int> (m["controller"])).second
+                || ! std::all_of (keys.begin(), keys.end(), [&] (int key) { return controllers.insert (key).second; })
                 || (m.hasProperty (parameterIdProperty) && (kind != "device" || m[parameterIdProperty].toString().isEmpty() || m[parameterIdProperty].toString().length() > 512)))
                 return Result::fail ("The project contains an invalid MIDI mapping.");
         }
@@ -3008,7 +3021,11 @@ public:
     void publish (const std::vector<Session::MidiMapping>& mappings, bool isLearning)
     {
         std::array<bool, 2 * 16 * 128> now {};
-        for (const auto& m : mappings) now[index (m.note, m.channel, m.controller)] = true;
+        for (const auto& m : mappings)
+        {
+            now[index (m.note, m.channel, m.controller)] = true;
+            if (! m.note && m.mode == Session::MapMode::absolute14 && m.controller + 32 < 128) now[index (false, m.channel, m.controller + 32)] = true;
+        }
         for (size_t i = 0; i < now.size(); ++i) mapped[i].store (now[i], std::memory_order_relaxed);
         learning.store (isLearning);
     }
@@ -7056,7 +7073,7 @@ struct Session::Impl
         edit->editFileRetriever = [this] { return editLocation(); };
         grooveWatcher.watch (edit->state);
         pluginEditorWatch.sync(); // Plug-in editors' moves, from now on (it keeps up on a timer).
-        midiLearnTarget.clear(); keyLearnTarget.clear(); buttonValues.clear(); autoArmed.clear(); autoInput = false; pickUp.reset();
+        midiLearnTarget.clear(); keyLearnTarget.clear(); buttonValues.clear(); autoArmed.clear(); autoInput = false; pickUp.reset(); fourteenBitHalves.clear();
         attachRemote(); attachCapture();
         if (useDevices && ! remoteWatch.isTimerRunning()) { remoteWatch.tick = [this] { attachRemote(); attachCapture(); reconcileMidiMappings(); publishRemote(); }; remoteWatch.startTimer (1000); }
         flushStructuralUpdates();
@@ -7694,6 +7711,19 @@ struct Session::Impl
     // Takeover Mode; kept while the application runs, as its are. And the control Pick-Up waits for.
     std::map<std::tuple<String, int, int>, int> controllerHistory;
     std::optional<Session::Snapshot::PickUp> pickUp;
+    // An Absolute (14bit) mapping's halves until both have come, with their previous values, by target.
+    struct FourteenBitHalves { std::optional<int> coarse, fine; int coarsePrior = remotemap::unknownValue, finePrior = remotemap::unknownValue; };
+    std::map<String, FourteenBitHalves> fourteenBitHalves;
+    // A native device's stepped control (a choice, a switch or a whole number) that a target names, or none.
+    const EffectParameter* steppedControl (const String& target) const
+    {
+        const auto parts = juce::StringArray::fromTokens (target, ":", "");
+        if (parts[0] != "device") return nullptr;
+        if (auto* device = nativeDevice (parts[1]))
+            if (const auto fields = effectParameters (device->getKind()); juce::isPositiveAndBelow (parts[2].getIntValue(), (int) fields.size()))
+                if (const auto& field = fields[(size_t) parts[2].getIntValue()]; field.integer || field.choices != nullptr) return &field;
+        return nullptr;
+    }
     int trackIndexOf (const String& id) const
     {
         const auto tracks = te::getAudioTracks (*edit);
@@ -7846,22 +7876,47 @@ struct Session::Impl
     }
     // Maps the learn target to a controller or note, replacing the target's mapping and the
     // controller's or note's: one undo step.
-    Result learnMidi (int channel, int number, bool note)
+    // Learns the next message for the learn target. A controller's mode is detected from its value and the one before
+    // it from the same input, as the reference's learning does (see Session::setMidiLearnTarget).
+    Result learnMidi (int channel, int number, bool note, std::optional<int> prior = std::nullopt, int value = 0)
     {
         if (! owner.isMappableTarget (midiLearnTarget)) { midiLearnTarget.clear(); publishRemote(); owner.sendChangeMessage(); return Result::fail ("The control being mapped no longer exists."); }
         auto* undo = &edit->getUndoManager();
         const auto range = owner.midiTargetRange (midiLearnTarget).value_or (std::pair { 0.0f, 1.0f });
-        const Session::MidiMapping mapping { midiLearnTarget, channel, number, range.first, range.second, note };
         auto map = edit->state.getChildWithName (midiMapType);
-        for (const auto& m : map)
-            if (readMidiMapping (m) == mapping) return Result::ok();
+        std::optional<Session::MidiMapping> existing;
+        for (const auto& m : map) if (const auto read = readMidiMapping (m); read.target == midiLearnTarget) existing = read;
+        auto controller = number; auto mode = Session::MapMode::absolute;
+        if (! note)
+        {
+            const auto learned = remotemap::learn (number, value, prior, existing && ! existing->note && existing->channel == channel ? std::optional<int> (existing->controller) : std::nullopt);
+            controller = learned.controller; mode = static_cast<Session::MapMode> (learned.mode);
+        }
+        const Session::MidiMapping mapping { midiLearnTarget, channel, controller, range.first, range.second, note, mode };
+        // The target's controller again changes nothing, or its mode alone outside the undo history when a known
+        // value was repeated, as the reference's does.
+        if (existing && existing->note == note && existing->channel == channel && existing->controller == controller)
+        {
+            if (existing->mode == mode) return Result::ok();
+            if (prior)
+            {
+                for (auto m : map)
+                    if (m["target"].toString() == midiLearnTarget)
+                    { if (mode == Session::MapMode::absolute) m.removeProperty ("mode", nullptr); else m.setProperty ("mode", (int) mode, nullptr); }
+                publishRemote(); changed(); return Result::ok();
+            }
+        }
         transaction (note ? "MIDI note mapping" : "MIDI mapping");
         map = edit->state.getOrCreateChildWithName (midiMapType, undo);
-        // A controller or note drives one target, and a target has one controller or note.
+        // A controller or note drives one target, and a target has one controller or note; a 14-bit pair takes both
+        // its controllers.
+        const auto keys = mappingKeys (mapping);
         for (int i = map.getNumChildren(); --i >= 0;)
         {
-            const auto existing = readMidiMapping (map.getChild (i));
-            if (existing.target == mapping.target || (existing.note == note && existing.channel == channel && existing.controller == number)) map.removeChild (i, undo);
+            const auto other = readMidiMapping (map.getChild (i));
+            const auto taken = mappingKeys (other);
+            if (other.target == mapping.target || std::any_of (taken.begin(), taken.end(), [&] (int key) { return std::find (keys.begin(), keys.end(), key) != keys.end(); }))
+                map.removeChild (i, undo);
         }
         auto added = midiMappingTree (mapping);
         if (const auto id = externalParameterId (mapping.target); id.isNotEmpty()) added.setProperty (parameterIdProperty, id, nullptr);
@@ -16474,43 +16529,82 @@ Result Session::handleMidiControl (int channel, int controller, int value, const
     // The input remembers the controller's value before anything acts on it, as the reference's does.
     std::optional<float> prior;
     if (const auto [entry, added] = impl->controllerHistory.try_emplace ({ port, channel, controller }, value); ! added) { prior = (float) entry->second; entry->second = value; }
-    if (impl->midiLearnTarget.isNotEmpty()) return impl->learnMidi (channel, controller, false);
+    if (impl->midiLearnTarget.isNotEmpty()) return impl->learnMidi (channel, controller, false, prior ? std::optional<int> ((int) *prior) : std::nullopt, value);
     std::optional<MidiMapping> mapping;
     for (const auto& m : impl->edit->state.getChildWithName (midiMapType))
-        if (const auto candidate = readMidiMapping (m); ! candidate.note && candidate.channel == channel && candidate.controller == controller && impl->mappingCurrent (m)) mapping = candidate;
+        if (const auto candidate = readMidiMapping (m); ! candidate.note && candidate.channel == channel && impl->mappingCurrent (m)
+            && (candidate.controller == controller || (candidate.mode == MapMode::absolute14 && candidate.controller + 32 == controller)))
+            mapping = candidate;
     if (! mapping) return Result::ok();
+    const auto mode = static_cast<remotemap::Mode> (mapping->mode);
+    const bool fineHalf = mapping->mode == MapMode::absolute14 && controller != mapping->controller;
     if (isButtonTarget (mapping->target))
     {
-        if (! impl->buttonExists (mapping->target)) return Result::ok();
-        // A switch follows the controller: on at 64 and above, off below.
-        if (Impl::isSwitchButton (mapping->target)) return impl->setSwitchButton (mapping->target, value > 63);
-        // Anything else is pressed as the controller rises above 63, and a clip slot released as it
-        // falls back, as the reference treats them as a note-on and a note-off.
-        auto& last = impl->buttonValues.try_emplace (mapping->target, -1).first->second;
-        const bool pressed = value > 63 && last <= 63, released = value <= 63 && last > 63;
-        last = value;
+        if (! impl->buttonExists (mapping->target) || fineHalf) return Result::ok();
+        // A switch follows the controller: on at 64 and above, off below, or as the reference's relative modes turn it.
+        const bool on = remotemap::switchesOn (mode, (float) value);
+        if (Impl::isSwitchButton (mapping->target)) return impl->setSwitchButton (mapping->target, on);
+        // Anything else is pressed as the controller turns it on, and a clip slot released as it turns it off, as the
+        // reference treats them as a note-on and a note-off.
+        auto& last = impl->buttonValues.try_emplace (mapping->target, 0).first->second;
+        const bool pressed = on && last == 0, released = ! on && last != 0;
+        last = on ? 1 : 0;
         return pressed ? impl->pressButton (mapping->target) : released ? impl->releaseButton (mapping->target) : Result::ok();
     }
     const auto lane = impl->laneFor (mapping->target);
     if (! lane) return Result::ok();
-    // The controller moves the fader or knob position between the mapping's ends, as the reference maps an absolute
-    // controller, and with Pick-Up or Value Scaling a continuous control out of step with it waits or scales.
+    // The controller moves the fader or knob position between the mapping's ends, as the reference maps a controller:
+    // absolutely, where with Pick-Up or Value Scaling a continuous control out of step with it waits or scales, or by
+    // a 256th of the range a relative step.
     const auto from = lane->proportion (mapping->minimum), to = lane->proportion (mapping->maximum);
     const auto lower = std::min (from, to), upper = std::max (from, to);
-    const auto mode = lane->takesOver ? static_cast<takeover::Mode> (impl->prefs.takeoverMode) : takeover::Mode::none;
     const auto current = impl->targetValue (mapping->target);
     const auto position = current ? lane->proportion (*current) : lower;
-    const auto move = takeover::apply (mode, position, prior, (float) value, lower, upper, to < from);
-    if (move.pickUp)
+    std::optional<float> target;
+    if (remotemap::isAbsolute (mode))
     {
-        // As the reference's status bar keeps it: the control's value and the controller's until a move picks it up.
-        const auto received = takeover::absolute ((float) value, lower, upper, to < from);
-        const Snapshot::PickUp waiting { mapping->target, lane->value (move.value), lane->value (received) };
-        if (move.value == received) { if (impl->pickUp && impl->pickUp->target == mapping->target) { impl->pickUp.reset(); sendChangeMessage(); } }
-        else if (impl->pickUp != waiting) { impl->pickUp = waiting; sendChangeMessage(); }
+        auto controllerValue = (float) value;
+        auto controllerPrior = prior;
+        if (mapping->mode == MapMode::absolute14)
+        {
+            // The pair's halves wait for each other, in either order, then act as one value from 0 to 127, as the
+            // reference's do; a half's previous value not yet known counts as the reference's -129.
+            auto& halves = impl->fourteenBitHalves[mapping->target];
+            (fineHalf ? halves.fine : halves.coarse) = value;
+            (fineHalf ? halves.finePrior : halves.coarsePrior) = prior ? (int) *prior : remotemap::unknownValue;
+            if (! halves.coarse || ! halves.fine) return Result::ok();
+            controllerValue = remotemap::fourteenBit (*halves.coarse, *halves.fine);
+            controllerPrior = remotemap::fourteenBit (halves.coarsePrior, halves.finePrior);
+            halves = {};
+        }
+        const auto takeover = lane->takesOver ? static_cast<remotemap::Takeover> (impl->prefs.takeoverMode) : remotemap::Takeover::none;
+        const auto move = remotemap::takeover (takeover, position, controllerPrior, controllerValue, lower, upper, to < from);
+        if (move.pickUp)
+        {
+            // As the reference's status bar keeps it: the control's value and the controller's until a move picks it up.
+            const auto received = remotemap::absolute (controllerValue, lower, upper, to < from);
+            const Snapshot::PickUp waiting { mapping->target, lane->value (move.value), lane->value (received) };
+            if (move.value == received) { if (impl->pickUp && impl->pickUp->target == mapping->target) { impl->pickUp.reset(); sendChangeMessage(); } }
+            else if (impl->pickUp != waiting) { impl->pickUp = waiting; sendChangeMessage(); }
+        }
+        if (current && move.value == position) return Result::ok();
+        target = lane->value (move.value);
     }
-    if (current && move.value == position) return Result::ok();
-    const auto target = lane->value (move.value);
+    else if (const auto* field = impl->steppedControl (mapping->target); field != nullptr && current)
+    {
+        // A stepped control turns a step a message in its own units, and a switch turns on as the encoder turns up.
+        const auto steps = remotemap::relativeSteps (mode, (float) value);
+        target = field->maximum - field->minimum <= 1 ? (steps > 0 ? field->maximum : field->minimum)
+                                                      : remotemap::relative (mode, (float) value, *current, std::min (mapping->minimum, mapping->maximum),
+                                                                             std::max (mapping->minimum, mapping->maximum), true, mapping->maximum < mapping->minimum);
+        if (*target == *current) return Result::ok();
+    }
+    else
+    {
+        const auto next = remotemap::relative (mode, (float) value, position, lower, upper, false, to < from);
+        if (current && next == position) return Result::ok();
+        target = lane->value (next);
+    }
     // A controller's moves form one gesture until it rests. A move after half a second's rest
     // starts a new one even if the rest timer has not run yet, as on a loaded machine.
     if (impl->remoteGesture && juce::Time::getMillisecondCounter() - impl->lastRemote >= 500) { impl->remoteGesture = false; endEditGesture(); }
@@ -16527,7 +16621,40 @@ Result Session::handleMidiControl (int channel, int controller, int value, const
         impl->remoteRest.startTimer (100);
     }
     const juce::ScopedValueSetter<bool> applying (impl->applyingRemote, true);
-    return impl->applyValue (mapping->target, target);
+    return impl->applyValue (mapping->target, *target);
+}
+juce::String Session::mapModeName (MapMode mode)
+{
+    static const char* const names[] { "Absolute", "Relative (Signed Bit)", "Relative (BinOffset)", "Relative (2's Comp.)", "Relative (Signed Bit 2)", "Absolute (14bit)",
+                                       "Relative (lin. Signed Bit)", "Relative (lin. BinOffset)", "Relative (lin. 2's Comp.)", "Relative (lin. Signed Bit 2)" };
+    return names[juce::jlimit (0, mapModeCount - 1, (int) mode)];
+}
+Result Session::setMidiMappingMode (const String& target, MapMode mode)
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    if (! juce::isPositiveAndBelow ((int) mode, mapModeCount)) return Result::fail ("Unknown MIDI mapping mode.");
+    auto map = impl->edit->state.getChildWithName (midiMapType);
+    for (auto m : map)
+        if (m["target"].toString() == target)
+        {
+            auto mapping = readMidiMapping (m);
+            if (mapping.mode == mode) return Result::ok();
+            if (mapping.note) return Result::fail ("A note's mapping has no map mode.");
+            if (mode == MapMode::absolute14 && mapping.controller > 95) return Result::fail ("Absolute (14bit) needs a controller from 0 to 95, so its fine half, 32 above, exists.");
+            mapping.mode = mode;
+            impl->transaction ("MIDI mapping mode");
+            auto* undo = &impl->edit->getUndoManager();
+            // A 14-bit pair takes its fine half from any other mapping of it.
+            const auto keys = mappingKeys (mapping);
+            for (int i = map.getNumChildren(); --i >= 0;)
+                if (const auto other = readMidiMapping (map.getChild (i)); other.target != target)
+                    if (const auto taken = mappingKeys (other); std::any_of (taken.begin(), taken.end(), [&] (int key) { return std::find (keys.begin(), keys.end(), key) != keys.end(); }))
+                        map.removeChild (i, undo);
+            if (mode == MapMode::absolute) m.removeProperty ("mode", undo); else m.setProperty ("mode", (int) mode, undo);
+            impl->fourteenBitHalves.erase (target);
+            impl->publishRemote(); impl->changed(); return Result::ok();
+        }
+    return Result::fail ("That control has no MIDI mapping.");
 }
 Result Session::handleMidiNote (int channel, int note, int velocity)
 {

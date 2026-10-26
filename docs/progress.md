@@ -3030,4 +3030,8 @@ Engine and UI areas. After a static reading of the reference's sample display, w
 
 ## Takeover Mode — 2026-10-26
 
-Engine and UI areas. After a static reading of the reference's controller code, Preferences > Link, Tempo & MIDI offers Takeover Mode: None (the default), Pick-Up or Value Scaling. Each input remembers its controllers' last values, and continuous controls take a controller over as the reference's do, in arithmetic ported from the research model (`src/MidiTakeover.cpp`) that matches it exactly in 17 cases. While Pick-Up waits, the status bar says so with both values. Choices, switches and buttons still jump. MIDI mapping, preferences and UI suites pass.
+Engine and UI areas. After a static reading of the reference's controller code, Preferences > Link, Tempo & MIDI offers Takeover Mode: None (the default), Pick-Up or Value Scaling. Each input remembers its controllers' last values, and continuous controls take a controller over as the reference's do, in arithmetic ported from the research model (now `src/RemoteMapping.cpp`) that matches it exactly in 17 cases. While Pick-Up waits, the status bar says so with both values. Choices, switches and buttons still jump. MIDI mapping, preferences and UI suites pass.
+
+## Map modes — 2026-10-26
+
+Engine and UI areas. After the same reading, controller mappings take the reference's ten map modes: Absolute, the four relative encodings that speed up through its tables, Absolute (14bit) pairs, and the four linear relative encodings. Learning detects them from repeated values and a controller 32 from the mapped one, and MIDI Map Mode's status bar chooses them. Relative turns move a 256th of the range a step, or one step of a stepped control, and switch buttons as the reference's table says. The arithmetic matches the research model exactly. MIDI mapping and UI suites pass.

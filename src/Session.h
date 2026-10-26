@@ -668,6 +668,14 @@ public:
         float rhythm = 0;
         bool operator== (const MetronomeSettings&) const = default;
     };
+    // A controller mapping's map mode, as the reference's (static reading of its code), in its order: Absolute; the
+    // relative Signed Bit, BinOffset, 2's Comp. and Signed Bit 2, whose steps grow through fixed tables as an encoder
+    // turns faster; Absolute (14bit), the controller with the one 32 above it as its fine half; and the four relative
+    // modes taken linearly. Learning detects it (see setMidiLearnTarget). A note's mapping is Absolute.
+    enum class MapMode { absolute, signedBit, binaryOffset, twosComplement, signedBit2, absolute14, linearSignedBit, linearBinaryOffset, linearTwosComplement, linearSignedBit2 };
+    static constexpr int mapModeCount = 10;
+    // Its name, as the reference's chooser lists it.
+    static juce::String mapModeName (MapMode);
     // A MIDI mapping (see setMidiLearnTarget): a controller, or a note, on a channel and the target
     // it drives between minimum and maximum, in the target's own units.
     struct MidiMapping
@@ -676,6 +684,7 @@ public:
         int channel = 1, controller = 0; // A note mapping's controller is its note number.
         float minimum = 0, maximum = 1;
         bool note = false;
+        MapMode mode = MapMode::absolute;
         bool operator== (const MidiMapping&) const = default;
     };
     // A computer key and the target it drives in Key Map Mode (see setKeyLearnTarget).
@@ -1757,9 +1766,16 @@ public:
     // in the control's own units. Every enabled MIDI input acts as a remote control.
     // While a learn target is set, the next controller maps to it (replacing the target's mapping and
     // the controller's previous one) and moves nothing. An empty target ends learning.
+    // As the reference's learning (static reading of its code), a controller value repeated from its last makes the
+    // mapping relative by the value (1 Signed Bit, 63 BinOffset, 127 2's Comp., 65 Signed Bit 2), and a controller 32
+    // from the one the target has on the channel makes the pair Absolute (14bit); a mode a repeat changes on the same
+    // controller changes outside the undo history, as the reference's does.
     juce::Result setMidiLearnTarget (const juce::String& target);
     juce::Result removeMidiMapping (const juce::String& target);
     juce::Result setMidiMappingRange (const juce::String& target, float minimum, float maximum);
+    // A controller mapping's map mode, chosen; one undo step. Absolute (14bit) needs a controller from 0 to 95, so its
+    // fine half, 32 above, exists. A note's mapping keeps Absolute.
+    juce::Result setMidiMappingMode (const juce::String& target, MapMode);
     // A controller change, as it arrives from a MIDI input (by its name; empty for one not named). Moves from one
     // controller are one undo step until it rests for half a second. As in the reference, each input remembers each
     // controller's last value, which Takeover Mode compares with the control's (see TakeoverMode); a continuous

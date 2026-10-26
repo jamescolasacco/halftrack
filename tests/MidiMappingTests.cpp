@@ -1,4 +1,4 @@
-#include "MidiTakeover.h"
+#include "RemoteMapping.h"
 #include "NativeEffects.h"
 #include "Session.h"
 #include <tracktion_engine/tracktion_engine.h>
@@ -331,8 +331,8 @@ int runMidiMappingTests (const juce::File& artifacts)
         {
             // Takeover Mode, ported from the research model of the reference's arithmetic: each case gives the model's own
             // single-precision result, from the control's value now, the controller's previous value and its value now.
-            struct Case { const char* name; takeover::Mode mode; float from, to, current; std::optional<int> prior; int value; float expected; bool pickUp; };
-            using M = takeover::Mode;
+            struct Case { const char* name; remotemap::Takeover mode; float from, to, current; std::optional<int> prior; int value; float expected; bool pickUp; };
+            using M = remotemap::Takeover;
             const Case cases[] {
                 { "None jumps", M::none, 0x0.0p+0f, 0x1.0p+0f, 0x1.333334p-2f, 10, 100, 0x1.93264cp-1f, false },
                 { "Pick-Up waits", M::pickUp, 0x0.0p+0f, 0x1.0p+0f, 0x1.0p-1f, 10, 20, 0x1.0p-1f, true },
@@ -354,7 +354,7 @@ int runMidiMappingTests (const juce::File& artifacts)
             };
             for (const auto& c : cases)
             {
-                const auto move = takeover::apply (c.mode, c.current, c.prior ? std::optional<float> ((float) *c.prior) : std::nullopt, (float) c.value,
+                const auto move = remotemap::takeover (c.mode, c.current, c.prior ? std::optional<float> ((float) *c.prior) : std::nullopt, (float) c.value,
                                                    std::min (c.from, c.to), std::max (c.from, c.to), c.to < c.from);
                 check (move.value == c.expected && move.pickUp == c.pickUp, juce::String ("takeover: ") + c.name + ", " + juce::String (move.value, 7) + " as the model's");
             }
@@ -383,7 +383,7 @@ int runMidiMappingTests (const juce::File& artifacts)
             choose (Session::TakeoverMode::valueScaling);
             ok (t.handleMidiControl (1, 7, 20, "Knobs"), "Value Scaling: Knobs' controller from 90 down to 20");
             const auto position = Session::automationValueToProportion (Target::volume, -12);
-            const auto scaled = takeover::apply (takeover::Mode::valueScaling, position, 90.0f, 20.0f, 0, 1, false).value;
+            const auto scaled = remotemap::takeover (remotemap::Takeover::valueScaling, position, 90.0f, 20.0f, 0, 1, false).value;
             check (near (level(), Session::automationProportionToValue (Target::volume, scaled)) && level() < -12,
                    "Value Scaling moves the fader down as far toward the bottom, in proportion, as the controller went");
             choose (Session::TakeoverMode::none);
@@ -404,6 +404,124 @@ int runMidiMappingTests (const juce::File& artifacts)
             ok (t.handleMidiControl (1, 30, 10, "Knobs"), "CC 30 from 0 to 10, below it");
             check (t.snapshot().tracks[0].plugins.back().effect.values[(size_t) bandType] == std::round (range->first + (range->second - range->first) * 10 / 127.0f),
                    "with Pick-Up, a choice still jumps to the controller");
+        }
+        {
+            // Relative and 14-bit map modes, ported from the research model: each case gives the model's own result.
+            using Mode = remotemap::Mode;
+            struct Steps { int mode, value; float expected; };
+            const Steps steps[] {
+                { 1, 1, 0x1.0p+0f }, { 1, 65, -0x1.0p+0f }, { 1, 7, 0x1.4p+3f }, { 1, 9, 0x1.9p+5f }, { 1, 10, 0x1.4p+4f }, { 1, 0, 0x1.4p+4f },
+                { 2, 65, 0x1.0p+0f }, { 2, 63, -0x1.0p+0f }, { 2, 71, 0x1.4p+4f }, { 2, 64, 0x1.9p+5f }, { 3, 127, -0x1.0p+0f }, { 3, 65, 0x1.9p+5f },
+                { 3, 66, -0x1.9p+5f }, { 4, 65, 0x1.0p+0f }, { 4, 1, -0x1.0p+0f }, { 4, 0, -0x1.9p+5f }, { 6, 64, 0x1.0p+6f }, { 6, 127, -0x1.f8p+5f },
+                { 7, 60, -0x1.0p+2f }, { 8, 127, -0x1.0p+0f }, { 8, 65, -0x1.f8p+5f }, { 9, 3, -0x1.8p+1f }, { 9, 66, 0x1.0p+1f }, { 0, 99, 0.0f }, { 5, 99, 0.0f },
+            };
+            bool stepsMatch = true;
+            for (const auto& c : steps) stepsMatch = stepsMatch && remotemap::relativeSteps ((Mode) c.mode, (float) c.value) == c.expected;
+            check (stepsMatch, "25 relative values decode to the model's steps, through its tables in the accelerated modes");
+            struct Relative { int mode, value; float current, lower, upper; bool stepped, reverse; float expected; };
+            const Relative moves[] {
+                { 1, 1, 0x1.0p-1f, 0.0f, 0x1.0p+0f, false, false, 0x1.02p-1f }, { 2, 68, 0x1.4p+3f, 0.0f, 0x1.fcp+6f, false, false, 0x1.7f8p+3f },
+                { 1, 9, 0x1.fae148p-1f, 0.0f, 0x1.0p+0f, false, false, 0x1.0p+0f }, { 1, 1, 0x1.0p-1f, 0.0f, 0x1.0p+0f, false, true, 0x1.fcp-2f },
+                { 1, 9, 0x1.8p+1f, 0.0f, 0x1.4p+3f, true, false, 0x1.0p+2f }, { 3, 127, 0x1.333334p-2f, 0x1.99999ap-3f, 0x1.99999ap-1f, false, false, 0x1.30cccep-2f },
+                { 6, 64, 0x1.99999ap-4f, 0.0f, 0x1.0p+0f, false, false, 0x1.666666p-2f }, { 9, 3, 0x1.666666p-1f, 0.0f, 0x1.0p+0f, false, false, 0x1.606666p-1f },
+                { 4, 0, 0x1.4p+2f, 0.0f, 0x1.cp+2f, true, true, 0x1.8p+2f }, { 8, 65, 0x1.0p-1f, 0.0f, 0x1.0p+0f, false, false, 0x1.04p-2f },
+            };
+            bool movesMatch = true;
+            for (const auto& c : moves) movesMatch = movesMatch && remotemap::relative ((Mode) c.mode, (float) c.value, c.current, c.lower, c.upper, c.stepped, c.reverse) == c.expected;
+            check (movesMatch, "ten relative moves give the model's values: a 256th of the range a step, clamped, reversed, or a step of a stepped control");
+            const int values[] { 0, 1, 63, 64, 65, 127 };
+            const char* const on[] { "000111", "111100", "000111", "111100", "000011", "000111", "111100", "111100", "000000", "000000" };
+            bool switchesMatch = true;
+            for (int m = 0; m < 10; ++m) for (int v = 0; v < 6; ++v) switchesMatch = switchesMatch && remotemap::switchesOn ((Mode) m, (float) values[v]) == (on[m][v] == '1');
+            check (switchesMatch, "each mode switches buttons as the model's table does");
+            check (remotemap::fourteenBit (64, 0) == 0x1.fc07fp+5f && remotemap::fourteenBit (127, 127) == 0x1.fcp+6f
+                       && remotemap::fourteenBit (remotemap::unknownValue, remotemap::unknownValue) == -0x1.fc07fp-8f,
+                   "a 14-bit pair gives the model's value from 0 to 127, and its value for halves not known");
+            const auto learned = [] (int cc, int value, std::optional<int> prior, std::optional<int> mapped) { const auto l = remotemap::learn (cc, value, prior, mapped); return std::pair { l.controller, (int) l.mode }; };
+            check (learned (7, 1, 1, {}) == std::pair { 7, 1 } && learned (7, 63, 63, {}) == std::pair { 7, 2 } && learned (7, 127, 127, {}) == std::pair { 7, 3 }
+                       && learned (7, 65, 65, {}) == std::pair { 7, 4 } && learned (7, 64, 64, {}) == std::pair { 7, 0 } && learned (7, 5, 4, {}) == std::pair { 7, 0 }
+                       && learned (39, 10, 3, 7) == std::pair { 7, 5 } && learned (8, 10, 3, 40) == std::pair { 8, 5 } && learned (7, 10, std::nullopt, std::nullopt) == std::pair { 7, 0 },
+                   "learning detects the model's modes: repeated 1, 63, 127 and 65, and a controller 32 from the mapped one");
+
+            // In a Session: an encoder learned on the volume.
+            Session r (false);
+            const auto first = r.snapshot().tracks[0].id, gainTarget = "mixer:" + first + ":volume";
+            const auto mapped = [&] (const juce::String& target)
+            {
+                const auto shown = r.snapshot();
+                const auto* m = find (shown.midiMappings, target);
+                return m != nullptr ? std::optional<Session::MidiMapping> (*m) : std::nullopt;
+            };
+            ok (r.setMidiLearnTarget (gainTarget), "learn the volume with an encoder");
+            ok (r.handleMidiControl (1, 20, 1, "Encoders"), "it turns once: CC 20 at 1");
+            auto stepsBefore = r.undoSteps().size();
+            ok (r.handleMidiControl (1, 20, 1, "Encoders"), "and again: CC 20 at 1 again");
+            check (mapped (gainTarget) && mapped (gainTarget)->mode == Session::MapMode::signedBit && r.undoSteps().size() == stepsBefore,
+                   "the repeated 1 makes it Relative (Signed Bit), changing the mode outside the undo history");
+            ok (r.setMidiLearnTarget ({}), "end learning");
+            ok (r.setTrackGain (0, -12), "the mouse sets -12 dB");
+            const auto proportion = [] (float db) { return Session::automationValueToProportion (Target::volume, db); };
+            const auto fromProportion = [] (float p) { return Session::automationProportionToValue (Target::volume, p); };
+            const auto turned = [&] (float before, int value) { return fromProportion (remotemap::relative (Mode::signedBit, (float) value, proportion (before), 0, 1, false, false)); };
+            auto expected = turned (-12, 1);
+            ok (r.handleMidiControl (1, 20, 1, "Encoders"), "a turn up");
+            check (near (r.snapshot().tracks[0].gainDb, expected) && r.snapshot().tracks[0].gainDb > -12, "moves the fader a 256th of its travel up");
+            expected = turned (r.snapshot().tracks[0].gainDb, 7);
+            ok (r.handleMidiControl (1, 20, 7, "Encoders"), "a fast turn: 7");
+            check (near (r.snapshot().tracks[0].gainDb, expected), "moves it ten steps, through the Signed Bit table");
+            auto prefs = r.preferences(); prefs.takeoverMode = Session::TakeoverMode::pickUp; ok (r.setPreferences (prefs), "choose Pick-Up");
+            expected = turned (r.snapshot().tracks[0].gainDb, 65);
+            ok (r.handleMidiControl (1, 20, 65, "Encoders"), "a turn down: 65");
+            check (near (r.snapshot().tracks[0].gainDb, expected), "moves it a step down, whatever the Takeover Mode");
+            prefs.takeoverMode = Session::TakeoverMode::none; ok (r.setPreferences (prefs), "back to None");
+            stepsBefore = r.undoSteps().size();
+            ok (r.setMidiMappingMode (gainTarget, Session::MapMode::twosComplement), "choose Relative (2's Comp.)");
+            check (mapped (gainTarget)->mode == Session::MapMode::twosComplement && r.undoSteps().size() == stepsBefore + 1, "the chosen mode is one undo step");
+            const auto before = r.snapshot().tracks[0].gainDb;
+            ok (r.handleMidiControl (1, 20, 127, "Encoders"), "127 in 2's Comp.");
+            check (r.snapshot().tracks[0].gainDb < before, "turns it down a step");
+            check (r.setMidiMappingMode (gainTarget, Session::MapMode::absolute14).wasOk(), "CC 20 can be the coarse half of a 14-bit pair");
+            ok (r.setMidiMappingMode (gainTarget, Session::MapMode::absolute), "back to Absolute");
+            // A 14-bit pair on pan: learned from CC 10 and then CC 42.
+            const auto panTarget = "mixer:" + first + ":pan";
+            ok (r.setMidiLearnTarget (panTarget), "learn pan"); ok (r.handleMidiControl (1, 10, 64, "Encoders"), "with CC 10");
+            ok (r.handleMidiControl (1, 42, 0, "Encoders"), "then CC 42, 32 above it");
+            ok (r.setMidiLearnTarget ({}), "end learning");
+            check (mapped (panTarget) && mapped (panTarget)->controller == 10 && mapped (panTarget)->mode == Session::MapMode::absolute14,
+                   "the pair maps as Absolute (14bit) on CC 10");
+            ok (r.setTrackPan (0, -1), "pan hard left");
+            ok (r.handleMidiControl (1, 10, 100, "Encoders"), "the coarse half alone");
+            check (near (r.snapshot().tracks[0].pan, -1), "moves nothing until the fine half comes");
+            ok (r.handleMidiControl (1, 42, 64, "Encoders"), "the fine half");
+            const auto panAt = Session::automationProportionToValue (Target::pan, remotemap::absolute (remotemap::fourteenBit (100, 64), 0, 1, false));
+            check (near (r.snapshot().tracks[0].pan, panAt, 1e-4), "together they place pan at (100 x 128 + 64) / 129 of 127");
+            check (r.setMidiMappingMode (panTarget, Session::MapMode::signedBit).wasOk() && r.setMidiMappingMode ("mixer:missing:pan", Session::MapMode::signedBit).failed(),
+                   "a mapping's mode can be chosen, and an unmapped control's cannot");
+            // Buttons: a relative encoder switches solo on as it turns up and off as it turns down.
+            const auto solo = "track:" + first + ":solo";
+            ok (r.setMidiLearnTarget (solo), "learn solo"); ok (r.handleMidiControl (1, 30, 1, "Encoders"), "with CC 30"); ok (r.handleMidiControl (1, 30, 1, "Encoders"), "turned again");
+            ok (r.setMidiLearnTarget ({}), "end learning");
+            check (mapped (solo)->mode == Session::MapMode::signedBit, "solo's encoder is Relative (Signed Bit)");
+            check (r.handleMidiControl (1, 30, 1, "Encoders").wasOk() && r.snapshot().tracks[0].solo, "turning it up switches solo on");
+            check (r.handleMidiControl (1, 30, 65, "Encoders").wasOk() && ! r.snapshot().tracks[0].solo, "and down, off");
+            // The modes reopen, and damaged ones are refused.
+            const auto project = root.getChildFile ("Modes").getChildFile ("Modes.halftrack");
+            ok (project.getParentDirectory().createDirectory(), "create the modes project folder");
+            const auto modes = r.snapshot().midiMappings;
+            ok (r.saveProject (project), "save the modes");
+            Session reopened (false);
+            ok (reopened.loadProject (project), "reopen them");
+            check (reopened.snapshot().midiMappings == modes, "the map modes reopen");
+            const auto damage = [&] (const juce::String& name, const std::function<void (juce::XmlElement&)>& change)
+            {
+                auto xml = juce::XmlDocument::parse (project); check (xml != nullptr, "parse the modes project");
+                change (*xml->getChildByName ("EDIT")->getChildByName ("HALFTRACKMIDIMAP"));
+                const auto damaged = project.getSiblingFile (name + ".halftrack"); check (xml->writeTo (damaged), "write " + name);
+                check (reopened.loadProject (damaged).failed() && reopened.snapshot().midiMappings == modes, name + " is refused, keeping the open project");
+            };
+            damage ("Unknown mode", [] (juce::XmlElement& m) { m.getFirstChildElement()->setAttribute ("mode", 10); });
+            damage ("High pair", [] (juce::XmlElement& m) { m.getFirstChildElement()->setAttribute ("mode", 5); m.getFirstChildElement()->setAttribute ("controller", 100); });
+            damage ("Note mode", [] (juce::XmlElement& m) { m.getFirstChildElement()->setAttribute ("note", 1); m.getFirstChildElement()->setAttribute ("mode", 1); });
         }
         std::cout << "MIDI mapping passed: " << root.getFullPathName() << std::endl; return 0;
     }

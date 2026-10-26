@@ -77,7 +77,7 @@ The reference's Takeover Mode preference, after a static reading of its code (Li
 - **The setting.** `Preferences::takeoverMode` is None, Pick-Up or Value Scaling, None by default as the reference's is. It is one setting for every input and mapping, kept with the preferences, not the project. The Link, Tempo & MIDI page offers it below the control surfaces.
 - **History.** Each input remembers each controller's last value, by input name, channel and controller, before anything acts on it. This happens while learning too. It is kept while the application runs and is not reset by opening a project, as the reference's inputs keep theirs. `handleMidiControl (channel, controller, value, port)` takes the input's name.
 - **Which controls.** Continuous controls take it over: mixer and send levels, pans, the master, native device controls (whole-number ones included) and plug-in parameters. Choices, switches and buttons always follow the controller, as the reference's do.
-- **The arithmetic** is `src/MidiTakeover.cpp`, ported from the research model in single precision, built without floating-point contraction so only the reference's fused multiply-adds fuse. It works in the control's fader or knob positions, as Halftrack's mappings do:
+- **The arithmetic** is `src/RemoteMapping.cpp`, ported from the research model in single precision, built without floating-point contraction so only the reference's fused multiply-adds fuse. It works in the control's fader or knob positions, as Halftrack's mappings do:
   - a controller value v gives `upper·t + lower·(1−t)` (fused) with `t = v/127`, or `t = (127−v)/127` for a reversed range;
   - **None** jumps the control to the controller;
   - **in step:** with Pick-Up or Value Scaling, a controller whose previous value lay within half a step (1/128 of the range) of the control's value follows it;
@@ -98,12 +98,44 @@ Evidence (`tests/MidiMappingTests.cpp`):
 - `tests/PreferencesTests.cpp`: the setting is saved and read back, and a value beyond Value Scaling makes the file unreadable.
 - The UI suite: the MIDI page's chooser sets it, and the status bar shows the wait (`1-Audio / Volume waiting for pick-up: -52.12  >>  -6.00`) and clears it.
 
+## Map modes (2026-10-26)
+
+After the same reading, each controller mapping has one of the reference's ten map modes, `MidiMapping::mode`, kept with the project (`mode`, left out for Absolute).
+
+| Mode | Steps up | Steps down |
+| --- | --- | --- |
+| Absolute | – | – |
+| Relative (Signed Bit) | 1–64, sized through 1, 2, 3, 4, 5, 8, 10, 20, 50 (20 past it; 0 is +20) | 65–127, from 65 |
+| Relative (BinOffset) | 64–127, from 65 through 1, 2, 3, 4, 5, 8, 20, 50 (50 past it; 64 is +50) | 0–63, from 63 |
+| Relative (2's Comp.) | 0–65, from 1 (0 is +50) | 66–127, from 127 |
+| Relative (Signed Bit 2) | 65–127, from 65 | 0–64, from 1 (0 is −50) |
+| Absolute (14bit) | – | – |
+| Relative (lin. Signed Bit) | v below 65: v | 64 − v |
+| Relative (lin. BinOffset) | v − 64 | |
+| Relative (lin. 2's Comp.) | v below 65: v | v − 128 |
+| Relative (lin. Signed Bit 2) | 65 and above: v − 64 | −v |
+
+- **Relative moves.** A relative message moves a continuous control a 256th of the mapping's range (in fader or knob position) per step, from its value now, within the range, the other way for a reversed range. A stepped device control (a choice or a whole number) moves one step a message in its own units, rounded half away from zero, and a two-state switch turns on as the encoder turns up and off as it turns down. Takeover does not apply.
+- **Absolute (14bit)** pairs the mapped controller (0 to 95) with the one 32 above it as its fine half. The two halves wait for each other, in either order, and then act as one value from 0 to 127 in steps of 1/129, `((coarse × 128) | fine) / 129`. Takeover applies, with a previous value made the same way from both halves' previous values; a half not yet known counts as the reference's −129, as its arithmetic does. The fine half's controller stops acting as track input too.
+- **Buttons.** A controller switches or presses a button as the reference's table for each mode says: above 63 in the absolute modes; below 65 in Signed Bit, lin. Signed Bit and lin. BinOffset, as the reference's table has it; 64 and above in BinOffset; 64 and below in 2's Comp.; 65 and above in Signed Bit 2; and never in lin. 2's Comp. and lin. Signed Bit 2.
+- **Learning** detects the mode, as the reference's does, from the message and the controller's previous value from the same input:
+  - the same value twice in a row: 1 gives Signed Bit, 63 BinOffset, 127 2's Comp. and 65 Signed Bit 2; any other repeat, Absolute;
+  - a controller 32 from the one the target already has on the channel makes the pair Absolute (14bit), on the lower controller;
+  - otherwise Absolute.
+  - Learning the target's own controller again changes nothing; with a known previous value and another mode, the mode alone changes, outside the undo history, as the reference's does. Anything else is a new mapping, one undo step, taking both controllers of a 14-bit pair from other mappings.
+- **Choosing.** `setMidiMappingMode (target, mode)` sets a controller mapping's mode in one undo step; Absolute (14bit) needs a controller from 0 to 95, and a note's mapping has none. In MIDI Map Mode, the status bar shows the mode of the control being learned when a controller maps it, with the reference's names, as its status bar shows its map mode chooser.
+- **Loading** refuses a mode outside the ten, a mode on a note's mapping, a 14-bit pair above controller 95, and a controller taken twice, by a pair's fine half among them.
+
+Evidence (`tests/MidiMappingTests.cpp`):
+- The arithmetic gives the research model's results exactly: 25 relative values' steps, ten relative moves (a step on 0–1 and on 0–127, clamped, reversed, stepped, linear), the button table for every mode at 0, 1, 63, 64, 65 and 127, the 14-bit values, and the modes learning detects.
+- In a Session: an encoder sending 1 twice is learned as Signed Bit with no extra undo step; its turns move the volume a step up, ten steps for a 7, and a step down for 65 with Pick-Up chosen; 2's Comp. chosen is one undo step and turns 127 down; CC 10 then CC 42 learn pan as a 14-bit pair, the coarse half alone moves nothing and both together place it; an encoder switches solo on turning up and off turning down; the modes reopen, and three damaged projects are refused.
+- The UI suite: the status bar shows the learned controller's mode, sets Signed Bit and back, and shows none for a note.
+
 ## Not implemented
 
 - Note ranges: a slot played chromatically from a range of keys, and a control given evenly spaced values across a range.
-- Pitch bend and 14-bit controllers.
+- Pitch bend.
 - Per-input Remote switches (every input other than the computer keyboard acts as a remote).
-- Relative encoder modes and 14-bit controllers (the reading found ten map modes, chosen per mapping and detected while learning; see the ignored findings).
 - MIDI output feedback.
 - The reference's inverted switch ranges (values outside the range turn a switch on). A controller mapped to a switch control, such as a device's HP switch, takes the nearest step along the range instead.
 - The reference's confirmation when a message already mapped elsewhere is learned again; Halftrack moves the mapping without asking.
