@@ -576,6 +576,7 @@ bool isAudio (const juce::File& file)
     return file.hasFileExtension ("wav;aif;aiff;flac;ogg;mp3;wave");
 }
 bool isProject (const juce::File& file) { return file.hasFileExtension ("halftrack"); }
+bool isLiveClip (const juce::File& file) { return file.hasFileExtension (juce::String (Session::liveClipExtension).substring (1)); }
 }
 
 class MainComponent::Impl final : public juce::Component,
@@ -4949,8 +4950,18 @@ private:
             }
             if (owner.selectedClipIds.size() > 1 && owner.selectedClipIds.contains (dragClipId)) { dragGroup (e, current); return; }
             // Over the Session's selector the drag goes on in the Session: the move so far is taken back.
-            if (owner.dragArrangementClipAcross (dragClipId, e.getEventRelativeTo (&owner).getPosition(), [this]
-                { if (clipGesture) { owner.session.endEditGesture(); clipGesture = false; owner.session.undo(); movedClips.clear(); owner.refresh(); } }))
+            if (owner.dragArrangementClipAcross (dragClipId, e.getEventRelativeTo (&owner).getPosition(), [this, &current]
+                {
+                    if (! clipGesture) return;
+                    // Only a move or copy made so far is undone: an unchanged gesture leaves no step of its own.
+                    bool moved = movedByCopy;
+                    for (int t = 0; t < (int) current.tracks.size(); ++t)
+                        for (const auto& clip : current.tracks[(size_t) t].clips)
+                            if (clip.id == dragClipId && (t != dragTrack || std::abs (clip.start - originalStart) > 1e-9)) moved = true;
+                    owner.session.endEditGesture(); clipGesture = false;
+                    if (moved) owner.session.undo();
+                    movedClips.clear(); owner.refresh();
+                }))
                 return;
             // Resolve the stable identity on every event; sorting, deletion or a
             // project switch must never redirect a body drag to the old index.
@@ -14099,7 +14110,12 @@ private:
     juce::String browserKey (int row) const
     {
         if (row < 0 || row >= const_cast<Impl*> (this)->getNumRows()) return {};
-        if (sampleBrowser()) return browserItems[(size_t) row].directory || ! isAudio (browserItems[(size_t) row].file) ? juce::String() : "sample:" + browserItems[(size_t) row].file.getFullPathName();
+        if (sampleBrowser())
+        {
+            const auto& item = browserItems[(size_t) row];
+            if (! item.directory && isLiveClip (item.file)) return "clip:" + item.file.getFullPathName();
+            return item.directory || ! isAudio (item.file) ? juce::String() : "sample:" + item.file.getFullPathName();
+        }
         const auto& item = deviceItems[(size_t) row];
         if (item.header || item.projectTemplate != juce::File()) return {};
         if (item.sample != juce::File()) return "sample:" + item.sample.getFullPathName();
@@ -17524,6 +17540,13 @@ private:
     // Returns whether the drag is going on in the Arrangement.
     bool dragSlotClipAcross (std::pair<int, int> from, juce::Point<int> at)
     {
+        if (overBrowser (at))
+        {
+            const auto* slot = juce::isPositiveAndBelow (from.first, (int) state.tracks.size()) && juce::isPositiveAndBelow (from.second, (int) state.tracks[(size_t) from.first].slots.size())
+                             ? &state.tracks[(size_t) from.first].slots[(size_t) from.second] : nullptr;
+            if (slot != nullptr && slot->hasClip) { aimAtBrowser (slot->clip.id); return true; }
+        }
+        else leaveBrowser();
         if (selectedSlots.size() > 1) return false; // Several slots move only within the grid.
         if (crossViewDrag && crossViewDrag->fromSession && sessionTab.getBounds().contains (at)) { crossViewDrag.reset(); showSessionView(); return false; }
         if (! crossViewDrag && arrangementTab.getBounds().contains (at))
@@ -17549,6 +17572,8 @@ private:
     // made so far, and the drag aims at the slot under the pointer.
     bool dragArrangementClipAcross (const juce::String& clipId, juce::Point<int> at, const std::function<void()>& takeBack)
     {
+        if (overBrowser (at) && clipId.isNotEmpty()) { if (! browserClipDrag) takeBack(); aimAtBrowser (clipId); return true; }
+        leaveBrowser();
         if (crossViewDrag && ! crossViewDrag->fromSession && arrangementTab.getBounds().contains (at)) { crossViewDrag.reset(); showArrangementView(); return false; }
         if (! crossViewDrag && sessionTab.getBounds().contains (at) && clipId.isNotEmpty())
         {
@@ -17562,9 +17587,39 @@ private:
         launcher.repaint();
         return true;
     }
+    // A clip dragged onto the browser is saved there as a Live Clip when let go, as the reference's drag into its Places
+    // saves one: into the folder a place shows, or the User Library, under the clip's name (numbered beside another).
+    std::optional<juce::String> browserClipDrag;
+    bool overBrowser (juce::Point<int> at) const { return showBrowser && ! mapping() && browserBounds.contains (at); }
+    juce::File liveClipFolder() const { return browserCategory == BrowserCategory::place && browserFolder.isDirectory() ? browserFolder : userLibrary; }
+    void aimAtBrowser (const juce::String& clipId)
+    {
+        if (browserClipDrag == clipId) return;
+        browserClipDrag = clipId;
+        const auto folder = liveClipFolder();
+        status = folder == juce::File() ? juce::String ("Choose a User Library to keep Live Clips in.") : "Release to save the clip as a Live Clip in " + folder.getFileName() + ".";
+        statusFrames = 24 * 7; canvas.repaint(); launcher.repaint(); repaint();
+    }
+    void leaveBrowser() { if (std::exchange (browserClipDrag, std::nullopt)) { status.clear(); repaint(); } }
+    void saveClipToBrowser (const juce::String& clipId)
+    {
+        const auto folder = liveClipFolder();
+        if (folder == juce::File()) { report (juce::Result::fail ("Choose a User Library to keep Live Clips in.")); return; }
+        juce::String name;
+        for (const auto& t : state.tracks)
+        {
+            for (const auto& c : t.clips) if (c.id == clipId) name = c.name;
+            for (const auto& slot : t.slots) if (slot.hasClip && slot.clip.id == clipId) name = slot.clip.name;
+        }
+        name = juce::File::createLegalFileName (name.trim());
+        const auto file = folder.getNonexistentChildFile (name.isEmpty() ? "Clip" : name, Session::liveClipExtension, false);
+        report (session.saveLiveClip (clipId, file), "Saved the Live Clip " + file.getFileNameWithoutExtension() + ".");
+        scannedBrowserFolder = juce::File(); folderListings.erase (folder); updateBrowser();
+    }
     // The drop at the end of a drag across: a copy where it aims. Returns whether there was one.
     bool dropAcross()
     {
+        if (const auto clip = std::exchange (browserClipDrag, std::nullopt)) { crossViewDrag.reset(); saveClipToBrowser (*clip); canvas.repaint(); launcher.repaint(); return true; }
         const auto across = std::exchange (crossViewDrag, std::nullopt);
         if (! across) return false;
         if (across->fromSession && across->dropTrack >= 0)
@@ -20046,8 +20101,8 @@ private:
                             std::transform (extension.begin(), extension.end(), extension.begin(), [] (unsigned char c) { return (char) std::tolower (c); });
                             const auto audio = extension == ".wav" || extension == ".wave" || extension == ".aif" || extension == ".aiff"
                                 || extension == ".flac" || extension == ".ogg" || extension == ".mp3";
-                            // Projects are listed too, as the reference's browser lists Sets.
-                            if (! typeError && (directory || audio || extension == ".halftrack")) entries.push_back ({ std::move (name), directory });
+                            // Projects and Live Clips are listed too, as the reference's browser lists Sets and clips.
+                            if (! typeError && (directory || audio || extension == ".halftrack" || extension == ".halftrackclip")) entries.push_back ({ std::move (name), directory });
                         }
                         iterator.increment (ec);
                     }
@@ -20636,8 +20691,11 @@ private:
         const int row = rows[0];
         if (sampleBrowser())
         {
-            if (! juce::isPositiveAndBelow (row, (int) browserItems.size()) || ! isAudio (browserItems[(size_t) row].file)) return {};
-            return browserDragPrefix + juce::String ("sample:") + browserItems[(size_t) row].file.getFullPathName();
+            if (! juce::isPositiveAndBelow (row, (int) browserItems.size())) return {};
+            const auto& file = browserItems[(size_t) row].file;
+            if (isLiveClip (file)) return browserDragPrefix + juce::String ("clip:") + file.getFullPathName();
+            if (! isAudio (file)) return {};
+            return browserDragPrefix + juce::String ("sample:") + file.getFullPathName();
         }
         const auto key = browserKey (row);
         return key.isEmpty() ? juce::var() : juce::var (browserDragPrefix + key);
@@ -20671,6 +20729,7 @@ private:
             filesDropped (juce::StringArray { key.fromFirstOccurrenceOf ("sample:", false, false) }, at.x, at.y);
             return;
         }
+        if (key.startsWith ("clip:")) { liveClipDropped (juce::File (key.fromFirstOccurrenceOf ("clip:", false, false)), at); return; }
         const auto row = collectionRow (key);
         if (! row) return;
         // A groove goes into the Groove Pool, and onto the clip it is dropped on, as the reference's grooves do.
@@ -20723,6 +20782,29 @@ private:
             else selectedTrack = -1; // Without a track under it, useDeviceRow makes one (a refresh would select the first).
         }
         useDeviceRow (*row);
+    }
+    // A Live Clip lands as a dropped sound does, as the reference's: onto the track or slot under it, or where no track is
+    // onto a new one made from its saved track.
+    void liveClipDropped (const juce::File& file, juce::Point<int> at)
+    {
+        juce::String loaded;
+        if (showSession)
+        {
+            const auto local = launcher.getLocalPoint (this, at);
+            const auto cell = launcher.cellAt (local);
+            if (cell.first >= 0 && cell.second >= 0) report (session.loadLiveClipToSlot (file, cell.first, cell.second, loaded));
+            else if (const int scene = launcher.dropAreaScene (local); scene >= 0) report (session.loadLiveClipToSlot (file, -1, scene, loaded));
+            else return;
+        }
+        else
+        {
+            const auto p = canvas.getLocalPoint (this, at);
+            const auto inside = viewport.getBounds().contains (at) && p.x < canvas.timelineWidth();
+            const auto index = inside ? trackAtY (p.y) : -1;
+            const auto time = inside ? juce::jmax (0.0, viewStart + p.x / pixelsPerSecond) : state.insertMarker;
+            report (session.loadLiveClip (file, index, session.beatsAt (snapSeconds (time)), loaded));
+        }
+        refresh();
     }
     // Right-click: the collections the item belongs to, ticked, each toggled by its choice (or keys 1 to 7).
     void listBoxItemClicked (int row, const juce::MouseEvent& e) override
@@ -21968,6 +22050,57 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         uninstallPack ("org.halftrack.ui");
         check (getNumRows() == 0 && ! userLibrary.getChildFile ("Packs/org.halftrack.ui").exists(), "Uninstall Pack removes it");
         userLibrary = library; browserFolder = folder; setBrowserCategory (category);
+        root.deleteRecursively();
+    }
+    {
+        // Live Clips, as the reference's: a clip dragged onto the browser is saved in the place it shows, and a Live Clip
+        // dragged from there lands on the track under it, or in the Session's drop area on a new track.
+        const auto category = browserCategory; const auto folder = browserFolder; const auto library = userLibrary; const bool browserWas = showBrowser;
+        const int previousTrack = selectedTrack;
+        const auto root = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("halftrack-live-clips-ui-" + juce::Uuid().toString());
+        userLibrary = root.getChildFile ("User Library");
+        check (userLibrary.createDirectory().wasOk(), "a User Library for Live Clips");
+        showBrowser = true; showArrangementView(); resized();
+        showPlace (userLibraryPlace); updateBrowser();
+        check (session.addMidiTrack ("Riff").wasOk(), "a MIDI track"); refresh();
+        const int riff = (int) state.tracks.size() - 1;
+        check (session.addMidiClip (state.tracks[(size_t) riff].id, 0, 4).wasOk(), "with a clip"); refresh();
+        selectTrack (riff); refresh();
+        const auto now = juce::Time::getCurrentTime();
+        const auto from = canvas.clipBarPoint (state.tracks[(size_t) riff].clips[0], riff);
+        const auto onBrowser = canvas.getLocalPoint (this, browserBounds.getCentre()).toFloat();
+        const auto at = [&] (juce::Point<float> p, bool dragged)
+        { return juce::MouseEvent (juce::Desktop::getInstance().getMainMouseSource(), p, juce::ModifierKeys (juce::ModifierKeys::leftButtonModifier), 1.0f, 0, 0, 0, 0, &canvas, &canvas, now, from, now, 1, dragged); };
+        canvas.mouseDown (at (from, false)); canvas.mouseDrag (at (from.translated (3, 0), true)); canvas.mouseDrag (at (onBrowser, true)); canvas.mouseUp (at (onBrowser, true)); refresh();
+        const auto saved = userLibrary.getChildFile (state.tracks[(size_t) riff].clips[0].name + Session::liveClipExtension);
+        check (saved.existsAsFile() && state.tracks[(size_t) riff].clips.size() == 1 && std::abs (state.tracks[(size_t) riff].clips[0].start) < 1e-9,
+               "dragging the clip onto the browser saves it there as a Live Clip, the clip staying where it was");
+        for (int i = 0; i < 1000 && browserBusy(); ++i) { juce::Thread::sleep (5); pollBrowserScan(); }
+        updateBrowser();
+        int row = -1;
+        for (int r = 0; r < (int) browserItems.size(); ++r) if (browserItems[(size_t) r].file == saved) row = r;
+        juce::SparseSet<int> rows; rows.addRange ({ row, row + 1 });
+        check (row >= 0 && getDragSourceDescription (rows).toString() == juce::String (browserDragPrefix) + "clip:" + saved.getFullPathName(), "the browser lists it, dragging as a Live Clip");
+        // Onto the track's lane, at its second bar.
+        int laneY = -1;
+        for (const auto& lane : lanes) if (lane.index == riff && lane.take < 0) laneY = lane.y + 4;
+        const auto onRiff = getLocalPoint (&canvas, juce::Point<int> ((int) ((secondsAt (4) - viewStart) * pixelsPerSecond) + 2, laneY));
+        check (laneY >= 0 && viewport.getBounds().contains (onRiff), "the track's lane is in view");
+        browserItemDropped ("clip:" + saved.getFullPathName(), onRiff); refresh();
+        check (state.tracks[(size_t) riff].clips.size() == 2 && std::abs (state.tracks[(size_t) riff].clips[1].startBeat - 4) < 1e-6, "dropped on the track, it lands at the bar under it");
+        session.undo(); refresh();
+        // The Session's drop area: a new track with its devices.
+        showSessionView(); refresh();
+        const auto tracks = state.tracks.size();
+        browserItemDropped ("clip:" + saved.getFullPathName(), getLocalPoint (&launcher, launcher.dropArea().getCentre())); refresh();
+        check (state.tracks.size() == tracks + 1 && state.tracks.back().isMidi
+                   && std::any_of (state.tracks.back().slots.begin(), state.tracks.back().slots.end(), [] (const auto& slot) { return slot.hasClip; }),
+               "dropped in the Session's drop area, it lands in a slot of a new track");
+        session.undo(); refresh();
+        showArrangementView(); refresh();
+        check (session.removeTrack (riff).wasOk(), "remove the Live Clip track"); refresh();
+        selectTrack (previousTrack); refresh();
+        userLibrary = library; browserFolder = folder; setBrowserCategory (category); showBrowser = browserWas; resized();
         root.deleteRecursively();
     }
     {

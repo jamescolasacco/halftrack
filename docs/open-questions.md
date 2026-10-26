@@ -528,6 +528,15 @@ Only launches and stops made through Halftrack's launch commands are captured. T
 
 Replaced Arrangement material is split at the recorded range when it can be. A clip that cannot be split stays underneath.
 
+### Live Clips
+
+The manual describes saving and loading Live Clips ([contract](research/live-clips-contract.md)). Defaults where it is silent:
+
+- **Where they are saved.** Into the folder a place shows, or the User Library when the browser shows something else; under the clip's name, numbered beside an existing file rather than replacing it.
+- **No devices.** The built-in synth a new MIDI track starts with counts as no devices, standing in for the reference's empty MIDI track.
+- **Samples.** An audio clip's sample is always copied beside the file, into Samples.
+- **Slots.** A Live Clip dropped on a slot replaces its clip.
+
 ### Capture MIDI boundaries
 
 Capture follows the reference's code (static reading, [contract](research/capture-midi-contract.md)). Defaults where it was not read:

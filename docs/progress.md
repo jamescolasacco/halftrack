@@ -3003,3 +3003,7 @@ Engine area. As the reference's manual describes, moving a control now overrides
 ## Several loop bars — 2026-10-26
 
 UI area. As the reference's manual describes, multi-clip editing's loop bars now select together: Cmd-click adds or removes one, Shift-click selects those between, and Focus keeps one. Duplicate doubles every selected loop and a Cmd-drag of a loop's end moves them all, each one undo step. A drag beside the bars sets their height, and in Focus the other clips' bars are grey until pointed at.
+
+## Live Clips — 2026-10-26
+
+Engine and UI areas. As the reference's manual describes, dragging a clip onto the browser saves it as a Live Clip in the place shown: its settings, loop, notes and envelopes with its track's devices, and an audio clip's sample beside it. The browser lists Live Clips, and dragging one into the project lands it like a sound: on the track or slot under it, bringing its devices onto an empty track, or on a new track where no track is.

@@ -1,6 +1,8 @@
 #include "NativeEffects.h"
 #include "Session.h"
+#include <cmath>
 #include <iostream>
+#include <optional>
 #include <stdexcept>
 
 // Device presets and the default set. Presets of a native effect, the Utility and an
@@ -208,6 +210,87 @@ int runPresetTests (const juce::File& artifacts)
         check (snapshot.tempo == 100 && snapshot.tracks.size() == 3 && snapshot.tracks.back().name == "Keys" && std::abs (snapshot.tracks[0].gainDb + 5) < 1e-3,
                "the new project has the template's tempo, tracks and mixer");
         check (snapshot.projectFile == juce::File() && ! snapshot.dirty && ! fresh.canUndo(), "it is untitled, unchanged and without history");
+        // Live Clips, as the reference's: a clip with its track's devices in a file. Where no track is, or onto a track with
+        // neither clips nor devices, its devices come too; onto another track the clip alone, keeping its mixer envelope.
+        {
+            Session live (false);
+            ok (live.saveProject (root.getChildFile ("Live").getChildFile ("Live.halftrack")), "save a project for the Live Clips");
+            ok (live.addMidiTrack ("Bass"), "a MIDI track");
+            const int bass = (int) live.snapshot().tracks.size() - 1;
+            const auto bassId = live.snapshot().tracks[(size_t) bass].id;
+            ok (live.addNativeEffect (bass, Kind::saturator), "with a Saturator");
+            const auto sat = last (live, bass);
+            ok (live.addMidiClip (bassId, 0, 4), "a four-beat clip");
+            const auto clipId = live.snapshot().tracks[(size_t) bass].clips[0].id;
+            ok (live.addMidiNote (clipId, 40, 1, 1, .8f), "with a note");
+            const int drive = effectParameterIndex (Kind::saturator, "driveDb");
+            ok (live.setClipEnvelope (clipId, { { sat.id, drive }, Session::EnvelopeMode::modulation, { { 0, .5f }, { 4, -.5f } } }), "a Saturator envelope");
+            ok (live.setClipEnvelope (clipId, { { {}, 0 }, Session::EnvelopeMode::modulation, { { 0, 1 }, { 4, .5f } } }), "and a volume envelope");
+            const auto file = root.getChildFile ("Clips").getChildFile (juce::String ("Bassline") + Session::liveClipExtension);
+            ok (live.saveLiveClip (clipId, file), "save it as a Live Clip");
+            Session::LiveClip info;
+            ok (live.readLiveClip (file, info), "read it back");
+            check (info.midi && info.devices == 2 && std::abs (info.lengthBeats - 4) < 1e-9, "it is a four-beat MIDI clip with two devices, the synth and the Saturator");
+            const auto saturatorOf = [] (const Session::TrackInfo& t) -> juce::String
+            { for (const auto& p : t.plugins) if (p.effect.kind == Kind::saturator) return p.id; return {}; };
+            const auto clipOf = [] (const Session::TrackInfo& t, const juce::String& id) -> std::optional<Session::ClipInfo>
+            {
+                for (const auto& c : t.clips) if (c.id == id) return c;
+                for (const auto& slot : t.slots) if (slot.hasClip && slot.clip.id == id) return slot.clip;
+                return std::nullopt;
+            };
+            const auto tracks = live.snapshot().tracks.size();
+            juce::String loaded;
+            ok (live.loadLiveClip (file, -1, 8, loaded), "drop it where no track is");
+            auto snap = live.snapshot();
+            check (snap.tracks.size() == tracks + 1, "a new track is made");
+            auto made = snap.tracks.back();
+            auto placed = clipOf (made, loaded);
+            check (saturatorOf (made).isNotEmpty() && saturatorOf (made) != sat.id && placed && std::abs (placed->startBeat - 8) < 1e-6
+                       && placed->notes.size() == 1 && placed->notes[0].pitch == 40 && placed->envelopes.size() == 2
+                       && std::any_of (placed->envelopes.begin(), placed->envelopes.end(), [&] (const auto& e) { return e.target.pluginId == saturatorOf (made); }),
+                   "with the devices, the clip at beat 8, and its envelope on the new track's Saturator");
+            live.undo();
+            check (live.snapshot().tracks.size() == tracks, "one undo removes the track and its clip");
+            ok (live.addMidiTrack ("Empty"), "an empty MIDI track");
+            const int empty = (int) live.snapshot().tracks.size() - 1;
+            ok (live.loadLiveClipToSlot (file, empty, 0, loaded), "drop it into the empty track's slot");
+            snap = live.snapshot();
+            placed = clipOf (snap.tracks[(size_t) empty], loaded);
+            check (saturatorOf (snap.tracks[(size_t) empty]).isNotEmpty() && placed && placed->notes.size() == 1 && placed->envelopes.size() == 2,
+                   "the devices join the empty track, the clip in its slot with both envelopes");
+            ok (live.loadLiveClip (file, bass, 8, loaded), "drop it onto the Bass track, which has devices");
+            snap = live.snapshot();
+            placed = clipOf (snap.tracks[(size_t) bass], loaded);
+            int saturators = 0;
+            for (const auto& p : snap.tracks[(size_t) bass].plugins) if (p.effect.kind == Kind::saturator) ++saturators;
+            check (saturators == 1 && placed && placed->envelopes.size() == 1 && placed->envelopes[0].target.pluginId.isEmpty() && placed->envelopes[0].target.parameter == 0,
+                   "the clip comes alone, keeping its volume envelope on the track's mixer");
+            check (live.loadLiveClip (file, 0, 0, loaded).failed(), "a MIDI clip does not go onto an audio track");
+            // Audio: its sample beside the file, collected into the project on loading.
+            const auto tone = root.getChildFile ("tone.wav");
+            {
+                juce::AudioBuffer<float> x (1, 48000);
+                for (int n = 0; n < x.getNumSamples(); ++n) x.setSample (0, n, (float) (.25 * std::sin (2 * 3.14159265358979 * 440 * n / 48000)));
+                juce::WavAudioFormat format; std::unique_ptr<juce::OutputStream> stream (tone.createOutputStream());
+                auto writer = format.createWriterFor (stream, juce::AudioFormatWriterOptions().withSampleRate (48000).withNumChannels (1).withBitsPerSample (24));
+                check (writer && writer->writeFromAudioSampleBuffer (x, 0, x.getNumSamples()), "write a tone");
+            }
+            ok (live.importAudio (tone, 0, 0), "import it onto the first track");
+            const auto audioId = live.snapshot().tracks[0].clips.back().id;
+            const auto audioFile = root.getChildFile ("Clips").getChildFile (juce::String ("Tone") + Session::liveClipExtension);
+            ok (live.saveLiveClip (audioId, audioFile), "save the audio clip as a Live Clip");
+            check (audioFile.getSiblingFile ("Samples").getChildFile ("tone.wav").existsAsFile(), "its sample is copied beside it, into Samples");
+            ok (live.loadLiveClip (audioFile, 0, 8, loaded), "load it onto the track at beat 8");
+            placed = clipOf (live.snapshot().tracks[0], loaded);
+            check (placed && placed->file.existsAsFile() && placed->file != tone && placed->file.isAChildOf (root.getChildFile ("Live")) && std::abs (placed->startBeat - 8) < 1e-6,
+                   "its sample is collected into the project");
+            const auto junk = root.getChildFile (juce::String ("Junk") + Session::liveClipExtension);
+            check (junk.replaceWithText ("<HALFTRACKCLIP version=\"1\" kind=\"midi\" lengthBeats=\"-4\"/>"), "write a damaged Live Clip");
+            const auto count = live.snapshot().tracks.size();
+            check (live.readLiveClip (junk, info).failed() && live.loadLiveClip (junk, -1, 0, loaded).failed() && live.snapshot().tracks.size() == count,
+                   "a damaged Live Clip is refused, changing nothing");
+        }
         std::cout << "Presets passed: " << root.getFullPathName() << std::endl; return 0;
     }
     catch (const std::exception& e) { std::cerr << "FAIL presets: " << e.what() << std::endl; return 1; }

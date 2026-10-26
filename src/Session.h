@@ -840,6 +840,18 @@ public:
     // them (not those of a new project, nor Slice to New MIDI Track's), with a new colour.
     juce::Result saveTrackAsDefault (const juce::String& trackId, const juce::File& file);
     void setDefaultTrackFiles (const juce::File& audio, const juce::File& midi);
+    // Live Clips, as the reference's (its manual, Managing Files and Sets): a clip in a .halftrackclip file with its clip
+    // and envelope settings and its track's devices, an audio clip's sample copied beside the file into Samples.
+    // Loading puts it in the Arrangement at a beat or into a Session slot, its sample collected into the project. With
+    // trackIndex -1 a new track is made from the saved one; onto a track with neither clips nor devices (the built-in
+    // synth counting as none) its devices come too; onto any other track the clip alone comes, its envelopes keeping
+    // only the mixer's. One undo step.
+    static constexpr const char* liveClipExtension = ".halftrackclip";
+    struct LiveClip { juce::String name; bool midi = false; double lengthBeats = 0; int devices = 0; };
+    juce::Result saveLiveClip (const juce::String& clipId, const juce::File&);
+    juce::Result readLiveClip (const juce::File&, LiveClip&) const;
+    juce::Result loadLiveClip (const juce::File&, int trackIndex, double startBeat, juce::String& clipId);
+    juce::Result loadLiveClipToSlot (const juce::File&, int trackIndex, int sceneIndex, juce::String& clipId);
     juce::Result addAudioTrack (juce::String name = {}, const juce::String& after = {});
     juce::Result addMidiTrack (juce::String name = {}, const juce::String& after = {});
     juce::Result addReturnTrack (juce::String name = {}, const juce::String& after = {});

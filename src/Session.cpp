@@ -4389,6 +4389,195 @@ struct Session::Impl
         if (recorded) recordingClipColour = colour;
         clip.state.setProperty (clipColourProperty, juce::VariantConverter<juce::Colour>::toVar (colour), &edit->getUndoManager());
     }
+    // A track's devices and mixer at their current values, without clips, automation, take lanes, sends, link, info
+    // text or freezing, as Save as Default Track and Live Clips keep them.
+    juce::ValueTree deviceTrackState (te::AudioTrack& t) const
+    {
+        t.flushStateToValueTree();
+        auto state = t.state.createCopy();
+        const std::function<void (juce::ValueTree)> strip = [&] (juce::ValueTree node)
+        {
+            for (int i = node.getNumChildren(); --i >= 0;)
+            {
+                auto child = node.getChild (i);
+                const bool clip = child.hasType (te::IDs::AUDIOCLIP) || child.hasType (te::IDs::MIDICLIP) || child.hasType (te::IDs::STEPCLIP) || child.hasType (te::IDs::EDITCLIP);
+                const bool send = child.hasType (te::IDs::PLUGIN) && child[te::IDs::type].toString() == te::AuxSendPlugin::xmlTypeName;
+                if (clip || send || child.hasType (te::IDs::AUTOMATIONCURVE) || child.hasType (takeLanesType) || child.hasType (te::IDs::CLIPSLOTS)) node.removeChild (i, nullptr);
+                else strip (child);
+            }
+        };
+        strip (state);
+        for (const auto& property : { linkProperty, infoTextProperty }) state.removeProperty (property, nullptr);
+        state.removeProperty (te::IDs::frozenIndividually, nullptr);
+        return state;
+    }
+    // A device in a track's chain, as Live Clips count them: a native device or rack, the Utility, the built-in synth
+    // or a plug-in, not the mixer, sends, returns' inputs or the track delay.
+    static bool isDeviceState (const juce::ValueTree& plugin)
+    {
+        if (! plugin.hasType (te::IDs::PLUGIN)) return false;
+        const auto type = plugin[te::IDs::type].toString();
+        return type == NativeEffectPlugin::xmlTypeName || type == SubtractiveSynthPlugin::xmlTypeName || type == "halftrackUtility" || type == te::ExternalPlugin::xmlTypeName;
+    }
+    // Whether a track has devices, the built-in synth a new MIDI track starts with not counting.
+    static bool hasDevices (te::AudioTrack& t)
+    {
+        for (auto* plugin : t.pluginList.getPlugins())
+            if (isDeviceState (plugin->state) && dynamic_cast<SubtractiveSynthPlugin*> (plugin) == nullptr) return true;
+        return false;
+    }
+    static constexpr const char* liveClipTag = "HALFTRACKCLIP";
+    struct LiveClipFile { juce::ValueTree clip, track; bool midi = false, session = false, warped = false; double lengthBeats = 0, offsetBeats = 0; File sample; };
+    // A Live Clip file, checked before anything changes: its kind, clip, optional track and sample.
+    static Result readLiveClipFile (const File& file, LiveClipFile& out)
+    {
+        auto xml = juce::XmlDocument::parse (file);
+        if (xml == nullptr || ! xml->hasTagName (liveClipTag) || xml->getIntAttribute ("version", 0) < 1) return Result::fail ("This is not a Live Clip.");
+        const auto kind = xml->getStringAttribute ("kind");
+        if (kind != "midi" && kind != "audio") return Result::fail ("The Live Clip's kind is not known.");
+        out.midi = kind == "midi";
+        out.session = xml->getBoolAttribute ("session");
+        out.warped = xml->getBoolAttribute ("warped");
+        out.lengthBeats = xml->getDoubleAttribute ("lengthBeats"); out.offsetBeats = xml->getDoubleAttribute ("offsetBeats");
+        if (! std::isfinite (out.lengthBeats) || out.lengthBeats <= 0 || out.lengthBeats > 1000000 || ! std::isfinite (out.offsetBeats) || out.offsetBeats < 0 || out.offsetBeats > 1000000)
+            return Result::fail ("The Live Clip's length is invalid.");
+        auto* clip = xml->getChildByName (out.midi ? "MIDICLIP" : "AUDIOCLIP");
+        if (clip == nullptr) return Result::fail ("The Live Clip holds no clip of its kind.");
+        out.clip = juce::ValueTree::fromXml (*clip);
+        if (auto* track = xml->getChildByName ("TRACK"))
+        {
+            out.track = juce::ValueTree::fromXml (*track);
+            if (static_cast<bool> (out.track.getProperty (midiTrackProperty, false)) != out.midi || static_cast<bool> (out.track.getProperty (returnProperty, false)))
+                return Result::fail ("The Live Clip's track does not match its clip.");
+        }
+        if (! out.midi)
+        {
+            const auto relative = xml->getStringAttribute ("sample");
+            out.sample = relative.isEmpty() ? File() : file.getParentDirectory().getChildFile (relative);
+            if (relative.isEmpty() || ! out.sample.existsAsFile()) return Result::fail ("The Live Clip's sample is missing.");
+        }
+        return Result::ok();
+    }
+    // Loads a Live Clip into the Arrangement at a beat, or into a Session slot; with no track, onto a new one made from
+    // its saved track. Onto a track with neither clips nor devices its devices come too. One undo step.
+    Result loadLiveClip (const File& file, int trackIndex, std::optional<double> startBeat, int scene, String& clipId)
+    {
+        clipId.clear();
+        if (exporting) return Result::fail ("Finish or cancel the current export first.");
+        if (edit->getTransport().isRecording()) return Result::fail ("Stop recording before adding clips.");
+        LiveClipFile live;
+        if (auto read = readLiveClipFile (file, live); read.failed()) return read;
+        te::AudioTrack* t = trackIndex >= 0 ? track (trackIndex) : nullptr;
+        if (trackIndex >= 0)
+        {
+            if (t == nullptr || isReturn (*t)) return Result::fail ("Track not found.");
+            if (static_cast<bool> (t->state.getProperty (midiTrackProperty, false)) != live.midi) return Result::fail (live.midi ? "MIDI clips go on MIDI tracks." : "Audio clips go on audio tracks.");
+            if (auto frozen = unfrozen (t); frozen.failed()) return frozen;
+        }
+        if (startBeat && (! std::isfinite (*startBeat) || *startBeat < 0 || *startBeat + live.lengthBeats > 1000000)) return Result::fail ("The clip must fit inside the timeline.");
+        if (! startBeat && scene >= edit->getSceneList().getNumScenes()) return Result::fail ("Scene not found.");
+        if (! startBeat && t != nullptr)
+            if (auto* slot = t->getClipSlotList().getClipSlots()[scene]; slot == nullptr || slotRecording (slot->itemID) != nullptr) return Result::fail ("That slot cannot take a clip now.");
+        transaction ("Add Live Clip");
+        const juce::ScopedValueSetter<bool> one (composite, true);
+        // The clip and the saved track get new identities together, so the clip's envelopes keep their devices.
+        auto combined = live.track.isValid() ? live.track.createCopy() : juce::ValueTree (te::IDs::TRACK);
+        String savedMixer;
+        for (const auto& plugin : combined) if (isMixerState (plugin)) savedMixer = plugin[te::IDs::id].toString();
+        auto clipState = live.clip.createCopy();
+        combined.appendChild (clipState, nullptr);
+        te::EditItemID::remapIDs (combined, nullptr, *edit);
+        for (const auto& plugin : combined) if (isMixerState (plugin)) savedMixer = plugin[te::IDs::id].toString();
+        combined.removeChild (clipState, nullptr);
+        auto* undo = &edit->getUndoManager();
+        const bool withDevices = t == nullptr || (allTrackClips (*t).isEmpty() && ! hasDevices (*t));
+        bool fromSaved = false;
+        if (t == nullptr)
+        {
+            if (live.track.isValid())
+            {
+                const auto original = combined.createCopy();
+                edit->state.addChild (combined, -1, undo);
+                t = dynamic_cast<te::AudioTrack*> (te::findTrackForState (*edit, combined));
+                if (t == nullptr) return Result::fail ("Could not make a track for the Live Clip.");
+                freshCopy (*t, original);
+                t->getClipSlotList().ensureNumberOfSlots (edit->getSceneList().getNumScenes());
+                placeNewTrack (*t, {}); lastCreated = t;
+                t->setColour (newTrackColour (*t, undo));
+                fromSaved = true;
+            }
+            else
+            {
+                if (auto made = live.midi ? owner.addMidiTrack() : owner.addAudioTrack(); made.failed()) return made;
+                t = lastCreated;
+            }
+            if (t == nullptr) return Result::fail ("Could not make a track for the Live Clip.");
+        }
+        else if (withDevices && live.track.isValid())
+        {
+            // Its devices join the empty track's chain, in their order, in place of the built-in synth when they hold an instrument.
+            std::vector<juce::ValueTree> devices;
+            for (const auto& plugin : combined) if (isDeviceState (plugin)) devices.push_back (plugin.createCopy());
+            const bool instrument = std::any_of (devices.begin(), devices.end(), [] (const juce::ValueTree& d)
+            {
+                const auto type = d[te::IDs::type].toString();
+                return type == SubtractiveSynthPlugin::xmlTypeName || static_cast<bool> (d.getProperty (hostedInstrumentProperty, false))
+                    || (type == NativeEffectPlugin::xmlTypeName && effectIsInstrument (static_cast<EffectKind> ((int) d.getProperty ("effectKind", 0))));
+            });
+            if (instrument) if (auto* builtIn = synth (*t)) builtIn->deleteFromParent();
+            for (const auto& device : devices) t->pluginList.insertPlugin (device, chainEnd (*t));
+        }
+        // The saved mixer's envelopes follow the track's own mixer; envelopes of devices the track lacks are left out.
+        if (! fromSaved && t->getVolumePlugin() != nullptr)
+            if (auto curves = clipState.getChildWithName (te::IDs::AUTOMATIONCURVES); curves.isValid())
+            {
+                std::set<String> present;
+                for (auto* plugin : t->pluginList.getPlugins()) present.insert (plugin->itemID.toString());
+                for (int i = curves.getNumChildren(); --i >= 0;)
+                {
+                    auto modifier = curves.getChild (i);
+                    if (savedMixer.isNotEmpty() && modifier[te::IDs::source].toString() == savedMixer) modifier.setProperty (te::IDs::source, t->getVolumePlugin()->itemID.toString(), nullptr);
+                    if (! present.contains (modifier[te::IDs::source].toString())) curves.removeChild (i, nullptr);
+                }
+            }
+        renewMidiNoteIDs (clipState);
+        // An audio clip's sample is collected into the project.
+        File collected;
+        if (! live.midi)
+        {
+            const auto folder = assets();
+            if (auto made = folder.createDirectory(); made.failed()) return made;
+            collected = folder.getNonexistentChildFile (live.sample.getFileNameWithoutExtension(), live.sample.getFileExtension(), true);
+            if (! live.sample.copyFileTo (collected)) return Result::fail ("Could not collect the Live Clip's sample into this project.");
+            clipState.setProperty (te::IDs::source, collected.getFullPathName(), nullptr);
+        }
+        te::Clip* inserted = nullptr;
+        if (startBeat)
+        {
+            auto& tempo = edit->tempoSequence;
+            const auto start = tempo.toTime (te::BeatPosition::fromBeats (*startBeat));
+            clipState.setProperty (te::IDs::start, start.inSeconds(), nullptr);
+            if (live.midi || live.warped)
+            {
+                const auto end = tempo.toTime (te::BeatPosition::fromBeats (*startBeat + live.lengthBeats));
+                clipState.setProperty (te::IDs::length, (end - start).inSeconds(), nullptr);
+                clipState.setProperty (te::IDs::offset, live.offsetBeats / tempo.getBeatsPerSecondAt (start), nullptr);
+            }
+            if (live.midi) clipState.setProperty (te::IDs::sync, te::Clip::syncBarsBeats, nullptr);
+            inserted = te::insertClipCopy (*t, te::ClipCopy::fromClipboardState (clipState, false));
+        }
+        else
+        {
+            auto* slot = t->getClipSlotList().getClipSlots()[scene];
+            if (slot == nullptr) return Result::fail ("Slot not found.");
+            if (auto* replaced = slot->getClip()) replaced->removeFromParent();
+            inserted = te::insertClipCopy (*slot, te::ClipCopy::fromClipboardState (live.session ? clipState : asSlotClip (clipState, live.lengthBeats, live.offsetBeats, live.midi), live.session));
+            if (inserted != nullptr && ! live.session) applyLaunchDefaults (*inserted);
+        }
+        if (inserted == nullptr) { collected.deleteFile(); return Result::fail ("The Live Clip could not be placed there."); }
+        clipId = inserted->itemID.toString();
+        changed(); return Result::ok();
+    }
     bool addFromDefault (bool midi, const String& name, const String& after)
     {
         const auto file = defaultTracks[midi ? 1 : 0];
@@ -12557,22 +12746,7 @@ Result Session::saveTrackAsDefault (const String& trackId, const File& file)
     if (t->isFrozen (te::Track::anyFreeze)) return Result::fail ("Unfreeze the track before saving it as the default.");
     // As the reference's: the devices and the mixer at their current values, with neither clips nor
     // automation; and no take lanes, sends, link or input, which belong to this project.
-    t->flushStateToValueTree();
-    auto state = t->state.createCopy();
-    const std::function<void (juce::ValueTree)> strip = [&] (juce::ValueTree node)
-    {
-        for (int i = node.getNumChildren(); --i >= 0;)
-        {
-            auto child = node.getChild (i);
-            const bool clip = child.hasType (te::IDs::AUDIOCLIP) || child.hasType (te::IDs::MIDICLIP) || child.hasType (te::IDs::STEPCLIP) || child.hasType (te::IDs::EDITCLIP);
-            const bool send = child.hasType (te::IDs::PLUGIN) && child[te::IDs::type].toString() == te::AuxSendPlugin::xmlTypeName;
-            if (clip || send || child.hasType (te::IDs::AUTOMATIONCURVE) || child.hasType (takeLanesType)) node.removeChild (i, nullptr);
-            else strip (child);
-        }
-    };
-    strip (state);
-    for (const auto& property : { linkProperty, infoTextProperty }) state.removeProperty (property, nullptr);
-    state.removeProperty (te::IDs::frozenIndividually, nullptr);
+    const auto state = impl->deviceTrackState (*t);
     juce::XmlElement root (Impl::defaultTrackTag);
     root.setAttribute ("version", 1);
     root.setAttribute ("kind", static_cast<bool> (t->state.getProperty (midiTrackProperty, false)) ? "midi" : "audio");
@@ -12584,6 +12758,61 @@ Result Session::saveTrackAsDefault (const String& trackId, const File& file)
     return Result::ok();
 }
 void Session::setDefaultTrackFiles (const File& audio, const File& midi) { impl->defaultTracks[0] = audio; impl->defaultTracks[1] = midi; }
+Result Session::saveLiveClip (const String& clipId, const File& file)
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    auto* clip = impl->anyClip (clipId);
+    auto* t = clip != nullptr ? dynamic_cast<te::AudioTrack*> (clip->getTrack()) : nullptr;
+    auto* wave = dynamic_cast<te::WaveAudioClip*> (clip);
+    const bool midi = dynamic_cast<te::MidiClip*> (clip) != nullptr;
+    if (t == nullptr || (! midi && wave == nullptr) || clip->isGrouped()) return Result::fail ("Save an ungrouped audio or MIDI clip as a Live Clip.");
+    if (wave != nullptr && (wave->getNumTakes (true) > 1 || wave->isCurrentTakeComp())) return Result::fail ("A Live Clip keeps one take; flatten the clip's takes first.");
+    clip->flushStateToValueTree();
+    auto state = clip->state.createCopy();
+    state.removeChild (state.getChildWithName (te::IDs::TAKES), nullptr);
+    juce::XmlElement root (Impl::liveClipTag);
+    root.setAttribute ("version", 1);
+    root.setAttribute ("kind", midi ? "midi" : "audio");
+    root.setAttribute ("session", clip->getClipSlot() != nullptr ? 1 : 0);
+    root.setAttribute ("warped", wave != nullptr && wave->getAutoTempo() ? 1 : 0);
+    root.setAttribute ("lengthBeats", clip->getLengthInBeats().inBeats());
+    root.setAttribute ("offsetBeats", std::max (0.0, clip->getOffsetInBeats().inBeats()));
+    // Its sample goes beside the file, in Samples, unless the same audio is there already.
+    if (wave != nullptr)
+    {
+        const auto source = wave->getSourceFileReference().getFile();
+        if (! source.existsAsFile()) return Result::fail ("The clip's sample is missing.");
+        const auto folder = file.getSiblingFile ("Samples");
+        if (! folder.createDirectory()) return Result::fail ("Could not make the Live Clip's Samples folder.");
+        auto copy = folder.getChildFile (source.getFileName());
+        if (copy.existsAsFile() && ! copy.hasIdenticalContentTo (source)) copy = folder.getNonexistentChildFile (source.getFileNameWithoutExtension(), source.getFileExtension(), true);
+        if (! copy.existsAsFile() && ! source.copyFileTo (copy)) return Result::fail ("Could not copy the clip's sample.");
+        root.setAttribute ("sample", copy.getRelativePathFrom (file.getParentDirectory()).replaceCharacter ('\\', '/'));
+        state.removeProperty (te::IDs::source, nullptr);
+    }
+    if (auto xml = state.createXml()) root.addChildElement (xml.release());
+    if (auto xml = impl->deviceTrackState (*t).createXml()) root.addChildElement (xml.release());
+    // Written beside the file, then moved over it.
+    if (! file.getParentDirectory().createDirectory()) return Result::fail ("Could not make the folder for the Live Clip.");
+    juce::TemporaryFile temporary (file);
+    if (! root.writeTo (temporary.getFile()) || ! temporary.overwriteTargetFileWithTemporary()) return Result::fail ("Could not save the Live Clip.");
+    return Result::ok();
+}
+Result Session::readLiveClip (const File& file, LiveClip& info) const
+{
+    Impl::LiveClipFile live;
+    if (auto read = Impl::readLiveClipFile (file, live); read.failed()) return read;
+    info.name = live.clip[te::IDs::name].toString();
+    info.midi = live.midi; info.lengthBeats = live.lengthBeats; info.devices = 0;
+    for (const auto& plugin : live.track) if (Impl::isDeviceState (plugin)) ++info.devices;
+    return Result::ok();
+}
+Result Session::loadLiveClip (const File& file, int trackIndex, double startBeat, String& clipId) { return impl->loadLiveClip (file, trackIndex, startBeat, 0, clipId); }
+Result Session::loadLiveClipToSlot (const File& file, int trackIndex, int sceneIndex, String& clipId)
+{
+    if (sceneIndex < 0) return Result::fail ("Scene not found.");
+    return impl->loadLiveClip (file, trackIndex, std::nullopt, sceneIndex, clipId);
+}
 Result Session::setInfoText (const String& id, const String& text)
 {
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
