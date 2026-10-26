@@ -1256,6 +1256,9 @@ public:
         if (mappedKey (key)) return true;
         if (computerKeyboardKey (key)) return true;
         if (const auto repeat = latchKey (key)) return *repeat;
+        // N switches the note editor's Focus, as the reference's key does (its manual, section 10.8.1).
+        if ((key.getKeyCode() == 'N' || key.getKeyCode() == 'n') && ! key.getModifiers().isAnyModifierKeyDown() && showPiano && currentMidiClip() != nullptr)
+        { pianoRoll.setFocusMode (! pianoRoll.focusMode); return true; }
         if (valueKey (key)) return true;
         const auto code = key.getKeyCode();
         const auto cmd = key.getModifiers().isCommandDown();
@@ -8759,7 +8762,7 @@ private:
         {
             setName ("Piano roll editor");
             setWantsKeyboardFocus (true);
-            for (auto* c : std::initializer_list<juce::Component*> { &gridButton, &noteLength, &velocity, &noteTools, &laneChoice, &laneView, &foldButton, &scaleButton, &scaleRoot, &scaleMode, &horizontal, &vertical, &previewSwitch,
+            for (auto* c : std::initializer_list<juce::Component*> { &gridButton, &noteLength, &velocity, &noteTools, &laneChoice, &laneView, &foldButton, &focusButton, &scaleButton, &scaleRoot, &scaleMode, &horizontal, &vertical, &previewSwitch,
                                                                     &notesTab, &envelopesTab, &expressionTab }) addAndMakeVisible (c);
             // The editor's tabs, as the reference's: the notes with their velocity and chance lanes, the
             // clip's envelopes (its MIDI controllers among them) filling the editor, and its notes' MPE.
@@ -8779,6 +8782,11 @@ private:
             foldButton.setColour (juce::TextButton::buttonOnColourId, orange); foldButton.setColour (juce::TextButton::textColourOnId, themes::colour (0xff1a1a1a));
             foldButton.setWantsKeyboardFocus (false); foldButton.setMouseClickGrabsKeyboardFocus (false);
             foldButton.onClick = [this] { owner.setFold (foldButton.getToggleState(), owner.foldToScale); };
+            focusButton.setName ("Focus"); focusButton.setClickingTogglesState (true);
+            focusButton.setTooltip ("Focus: with several clips shown, edit only the one in front, the others' notes grey  |  N");
+            focusButton.setColour (juce::TextButton::buttonOnColourId, orange); focusButton.setColour (juce::TextButton::textColourOnId, themes::colour (0xff1a1a1a));
+            focusButton.setWantsKeyboardFocus (false); focusButton.setMouseClickGrabsKeyboardFocus (false);
+            focusButton.onClick = [this] { setFocusMode (focusButton.getToggleState()); };
             previewSwitch.setTooltip ("Preview: hear notes as you click the keys, add, select and move them; with the track armed, step record held keys with the arrow keys");
             previewSwitch.onClick = [this] { silence(); owner.session.setNotePreview (previewSwitch.getToggleState()); };
             scaleButton.setName ("Scale"); scaleButton.setClickingTogglesState (true); scaleButton.setTooltip ("Scale: highlight this clip's scale in the note editor");
@@ -8853,14 +8861,27 @@ private:
             auto id = clip == nullptr ? juce::String() : clip->id;
             if (id != loadedClip)
             {
-                endGesture(); loadedClip = id; clearSelection(); originalNotes.clear(); marquee = false; viewBeat = 0; insertionBeat = 0; timeRange.reset();
-                if (clip != nullptr && ! clip->notes.empty())
+                // Another of the shown clips becoming the edited one keeps the view where it was, in that clip's beats,
+                // and with Focus off the selection; any other clip starts afresh.
+                const auto* before = shownClip (loadedClip);
+                endGesture(); originalNotes.clear(); otherOriginals.clear(); marquee = false; timeRange.reset();
+                if (before != nullptr && clip != nullptr)
                 {
-                    int high = 60; for (const auto& note : clip->notes) high = juce::jmax (high, note.pitch);
-                    topPitch = juce::jlimit (36, 127, high + 10);
+                    viewBeat += (before->startBeat - before->contentStartBeat) - (clip->startBeat - clip->contentStartBeat);
+                    if (focusMode) clearSelection();
+                    loadedClip = id;
                 }
-                else topPitch = 77;
-                fit();
+                else
+                {
+                    loadedClip = id; clearSelection(); viewBeat = 0; insertionBeat = 0;
+                    if (clip != nullptr && ! clip->notes.empty())
+                    {
+                        int high = 60; for (const auto& note : clip->notes) high = juce::jmax (high, note.pitch);
+                        topPitch = juce::jlimit (36, 127, high + 10);
+                    }
+                    else topPitch = 77;
+                    fit();
+                }
             }
             if (! gesture) updateRows();
             std::unordered_set<juce::String> liveIds;
@@ -8870,6 +8891,7 @@ private:
                 liveIds.reserve (clip->notes.size());
                 for (const auto& note : clip->notes) liveIds.insert (note.id);
             }
+            if (! focusMode) for (const auto* other : owner.extraMidiClips()) for (const auto& note : other->notes) liveIds.insert (note.id);
             std::erase_if (selectedNoteIds, [&] (const auto& noteId) { return ! liveIds.contains (noteId); });
             std::erase_if (originalNotes, [&] (const auto& note) { return ! selectedNoteIds.contains (note.id); });
             if (! selectedNoteIds.contains (selectedNoteId))
@@ -8882,6 +8904,7 @@ private:
             const bool active = clip != nullptr;
             previewSwitch.setToggleState (owner.session.notePreview(), juce::dontSendNotification);
             gridButton.setEnabled (active); updateGridButton(); noteLength.setEnabled (active); velocity.setEnabled (active); noteTools.setEnabled (active); laneChoice.setEnabled (active);
+            focusButton.setEnabled (active); focusButton.setToggleState (focusMode, juce::dontSendNotification);
             refreshLaneChoices (clip);
             const auto scale = clip != nullptr ? clip->scale : Session::ScaleSettings {};
             scaleButton.setToggleState (scale.enabled, juce::dontSendNotification);
@@ -8929,7 +8952,8 @@ private:
             nameX = 8 + 44 + 2 + 66 + 2 + 38 + 10;
             struct Part { int label; std::vector<std::pair<juce::Component*, int>> controls; int gap; int* labelAt; };
             const std::vector<Part> parts {
-                { 32, { { &laneChoice, laneWidth } }, 10, &labelX[3] }, { 0, { { &foldButton, 40 } }, 4, nullptr }, { 0, { { &scaleButton, 48 } }, 12, nullptr },
+                { 32, { { &laneChoice, laneWidth } }, 10, &labelX[3] }, { 0, { { &foldButton, 40 } }, 4, nullptr }, { 0, { { &focusButton, 48 } }, 4, nullptr },
+                { 0, { { &scaleButton, 48 } }, 12, nullptr },
                 { 34, { { &gridButton, 66 } }, 8, &labelX[0] }, { 0, { { &noteTools, toolsWidth } }, 12, nullptr },
                 { 56, { { &velocity, velocityWidth } }, 12, &labelX[2] }, { 0, { { &scaleRoot, 52 }, { &scaleMode, modeWidth } }, 12, nullptr },
                 { 48, { { &noteLength, 76 } }, 12, &labelX[1] } };
@@ -9041,8 +9065,16 @@ private:
                 for (const auto& ghost : ghostNotes (*other))
                 {
                     const auto r = ghostRect (ghost);
-                    g.setColour (themes::colour (0xff5d6e6a).withAlpha (ghost.note->active ? 0.75f : 0.35f)); g.fillRect (r);
-                    g.setColour (themes::colour (0xff2a3633)); g.drawRect (r, 1.0f);
+                    const auto& note = *ghost.note;
+                    if (focusMode)
+                    {
+                        g.setColour (themes::colour (0xff5d6e6a).withAlpha (note.active ? 0.75f : 0.35f)); g.fillRect (r);
+                        g.setColour (themes::colour (0xff2a3633)); g.drawRect (r, 1.0f);
+                        continue;
+                    }
+                    const bool selected = selectedNoteIds.contains (note.id);
+                    g.setColour (note.active ? (selected ? orange.get() : other->colour).withAlpha (0.48f + note.velocity * 0.52f) : themes::colour (0xff5c5c5c)); g.fillRect (r);
+                    g.setColour (selected ? (note.active ? ink.get() : orange.get()) : other->colour.darker (0.6f)); g.drawRect (r, 1.0f);
                 }
             }
             for (const auto& note : clip->notes)
@@ -9211,52 +9243,26 @@ private:
             // notes (drawNotes); without it, a double-click adds a note (addNote) or deletes one.
             const bool plain = ! e.mods.isPopupMenu() && ! e.mods.isShiftDown();
             const bool draw = owner.drawMode && plain, second = ! owner.drawMode && plain && e.getNumberOfClicks() >= 2;
-            // A note of another shown clip makes that clip the edited one, with the note selected,
-            // keeping the view where it was.
+            // A note of another shown clip makes that clip the edited one, keeping the note under the pointer. With
+            // Focus on it is then selected alone; with it off the press goes on to it as to the edited clip's notes,
+            // so the notes selected in every shown clip move together.
             if (std::none_of (clip->notes.begin(), clip->notes.end(), [&] (const auto& n) { return noteBounds (n).contains (e.position); }))
                 for (const auto* other : owner.extraMidiClips())
                     for (const auto& ghost : ghostNotes (*other))
                         if (ghostRect (ghost).contains (e.position))
                         {
                             const auto otherId = other->id, noteId = ghost.note->id;
-                            // The clicked note stays under the pointer in its own clip's beats.
-                            const auto shift = ghost.beat - ghost.note->startBeat;
+                            const auto offset = ghost.beat - viewBeat, noteBeat = ghost.note->startBeat;
                             owner.focusMidiClip (otherId);
-                            viewBeat = juce::jmax (earliestBeat(), viewBeat - shift);
-                            selectedNoteIds = { noteId }; selectedNoteId = noteId;
-                            updateScroll(); repaint(); return;
+                            viewBeat = noteBeat - offset; updateScroll();
+                            const auto* edited = owner.currentMidiClip();
+                            const auto found = edited == nullptr ? nullptr : [&]() -> const Session::MidiNoteInfo*
+                            { for (const auto& n : edited->notes) if (n.id == noteId) return &n; return nullptr; }();
+                            if (focusMode || found == nullptr) { selectedNoteIds = { noteId }; selectedNoteId = noteId; repaint(); return; }
+                            pressNote (*edited, *found, e, draw, second); return;
                         }
             for (auto it = clip->notes.rbegin(); it != clip->notes.rend(); ++it)
-                if (noteBounds (*it).contains (e.position))
-                {
-                    if (draw || second)
-                    {
-                        // The note goes; in Draw Mode, so do those the drag goes on to cross.
-                        owner.session.beginEditGesture ("Delete MIDI notes"); gesture = true;
-                        dragClipId = clip->id; erasing = draw; eraseAt (e.position);
-                        return;
-                    }
-                    const auto note = *it;
-                    if (e.mods.isShiftDown() && ! e.mods.isPopupMenu())
-                    {
-                        if (selectedNoteIds.contains (note.id))
-                        {
-                            selectedNoteIds.erase (note.id); sync(); return;
-                        }
-                        selectedNoteIds.insert (note.id);
-                    }
-                    else if (! selectedNoteIds.contains (note.id)) selectOnly (note.id);
-                    selectedNoteId = note.id; original = note; originalNotes = selectedNotes();
-                    previewDelta = 0; if (! e.mods.isPopupMenu()) sound ({ { note.pitch, note.velocity } });
-                    dragOrigin = e.position; dragClipId = clip->id;
-                    // As in the reference, Cmd (Alt elsewhere) held at the press makes a vertical drag change
-                    // the selected notes' velocity, and Option (Ctrl elsewhere) drags copies of them.
-                    velocityDrag = bypassesGrid (e.mods) && ! e.mods.isShiftDown() && ! e.mods.isPopupMenu();
-                    copyDrag = ! velocityDrag && copiesOnDrag (e.mods) && ! e.mods.isPopupMenu(); copied = false;
-                    resizeNote = ! velocityDrag && e.x >= noteBounds (note).getRight() - 8;
-                    if (e.mods.isPopupMenu()) { showNoteMenu(); return; }
-                    sync(); return;
-                }
+                if (noteBounds (*it).contains (e.position)) { pressNote (*clip, *it, e, draw, second); return; }
             if (e.mods.isShiftDown() && ! e.mods.isPopupMenu())
             {
                 // Keep direct drawing on ordinary clicks. Shift-drag adds a box
@@ -9271,6 +9277,34 @@ private:
             // A click places the insert marker, and a drag selects the notes it encloses.
             insertionBeat = juce::jlimit (0.0, contentEndBeat (*clip), std::round (beatAt (e.x) / snapBeats()) * snapBeats());
             marquee = true; marqueeBase.clear(); dragOrigin = e.position; dragClipId = clip->id; marqueeBounds = {}; repaint();
+        }
+        // A press on one of the edited clip's notes: Draw Mode or a double-click deletes it; otherwise it is selected
+        // (Shift adding or taking it out), and a drag moves, resizes, copies or changes the velocity of the selection.
+        void pressNote (const Session::ClipInfo& clip, Session::MidiNoteInfo note, const juce::MouseEvent& e, bool draw, bool second)
+        {
+            if (draw || second)
+            {
+                // The note goes; in Draw Mode, so do those the drag goes on to cross.
+                owner.session.beginEditGesture ("Delete MIDI notes"); gesture = true;
+                dragClipId = clip.id; erasing = draw; eraseAt (e.position);
+                return;
+            }
+            if (e.mods.isShiftDown() && ! e.mods.isPopupMenu())
+            {
+                if (selectedNoteIds.contains (note.id)) { selectedNoteIds.erase (note.id); sync(); return; }
+                selectedNoteIds.insert (note.id);
+            }
+            else if (! selectedNoteIds.contains (note.id)) selectOnly (note.id);
+            selectedNoteId = note.id; original = note; originalNotes = selectedNotes(); otherOriginals = otherSelectedNotes();
+            previewDelta = 0; if (! e.mods.isPopupMenu()) sound ({ { note.pitch, note.velocity } });
+            dragOrigin = e.position; dragClipId = clip.id;
+            // As in the reference, Cmd (Alt elsewhere) held at the press makes a vertical drag change
+            // the selected notes' velocity, and Option (Ctrl elsewhere) drags copies of them.
+            velocityDrag = bypassesGrid (e.mods) && ! e.mods.isShiftDown() && ! e.mods.isPopupMenu();
+            copyDrag = ! velocityDrag && copiesOnDrag (e.mods) && ! e.mods.isPopupMenu(); copied = false;
+            resizeNote = ! velocityDrag && e.x >= noteBounds (note).getRight() - 8;
+            if (e.mods.isPopupMenu()) { showNoteMenu(); return; }
+            sync();
         }
         void mouseDrag (const juce::MouseEvent& e) override
         {
@@ -9345,6 +9379,9 @@ private:
                                                                            juce::jmax (dragOrigin.x, e.position.x), juce::jmax (dragOrigin.y, e.position.y)).getIntersection (gridBounds().toFloat());
                 selectedNoteIds = marqueeBase;
                 for (const auto& note : clip->notes) if (marqueeBounds.intersects (noteBounds (note))) selectedNoteIds.insert (note.id);
+                if (! focusMode)
+                    for (const auto* other : owner.extraMidiClips())
+                        for (const auto& ghost : ghostNotes (*other)) if (marqueeBounds.intersects (ghostRect (ghost))) selectedNoteIds.insert (ghost.note->id);
                 // The drag selects its timespan too, on the note grid unless snapping is bypassed, as the reference's does.
                 const auto snapped = [&] (double beat) { return juce::jlimit (0.0, contentEndBeat (*clip), snapsNotes (e.mods) ? std::round (beat / snapBeats()) * snapBeats() : beat); };
                 const auto from = snapped (std::min (beatAt (dragOrigin.x), beatAt (e.position.x))), to = snapped (std::max (beatAt (dragOrigin.x), beatAt (e.position.x)));
@@ -9399,7 +9436,7 @@ private:
                 // Rows, not semitones: folded, a note moves to the next row shown.
                 const auto rowDelta = (int) std::round ((e.y - dragOrigin.y) / rowHeight);
                 const auto pitchDelta = rowIndex[(size_t) original.pitch] < 0 ? -rowDelta : pitchAtRow (rowIndex[(size_t) original.pitch] + rowDelta) - original.pitch;
-                moveNotes (dragClipId, originalNotes, beatDelta, pitchDelta);
+                moveSelection (originalNotes, otherOriginals, beatDelta, pitchDelta);
                 if (pitchDelta != previewDelta)
                 {
                     // Moved to another pitch, the dragged note sounds there.
@@ -9509,7 +9546,7 @@ private:
                 if (code == juce::KeyPress::rightKey) beatDelta = snapBeats();
                 if (code == juce::KeyPress::upKey) pitchDelta = key.getModifiers().isShiftDown() ? 12 : 1;
                 if (code == juce::KeyPress::downKey) pitchDelta = key.getModifiers().isShiftDown() ? -12 : -1;
-                moveNotes (clip->id, selectedNotes(), beatDelta, pitchDelta);
+                moveSelection (selectedNotes(), otherSelectedNotes(), beatDelta, pitchDelta);
                 if (pitchDelta != 0)
                 {
                     // Transposed notes sound briefly.
@@ -9686,12 +9723,22 @@ private:
             if (clip == nullptr) return;
             const auto clipId = clip->id;
             const auto notes = selectedNotes();
-            if (notes.empty()) return;
+            const auto others = otherSelectedNotes();
+            if (notes.empty() && others.empty()) return;
             endGesture();
-            juce::StringArray ids; for (const auto& note : notes) ids.add (note.id);
-            const auto result = owner.session.removeMidiNotes (clipId, ids);
-            owner.report (result);
-            if (result.wasOk()) clearSelection();
+            // With Focus off the other shown clips' selected notes go too, in the same step.
+            if (! others.empty()) owner.session.beginEditGesture ("Remove MIDI notes");
+            bool removed = true;
+            const auto remove = [&] (const juce::String& id, const std::vector<Session::MidiNoteInfo>& list)
+            {
+                juce::StringArray ids; for (const auto& note : list) ids.add (note.id);
+                const auto result = owner.session.removeMidiNotes (id, ids);
+                owner.report (result); removed = removed && result.wasOk();
+            };
+            if (! notes.empty()) remove (clipId, notes);
+            for (const auto& [id, list] : others) remove (id, list);
+            if (! others.empty()) owner.session.endEditGesture();
+            if (removed) clearSelection();
             owner.refresh();
         }
     private:
@@ -10252,7 +10299,7 @@ private:
         juce::TextButton gridButton;
         int nameWidth = 225, nameX = 12, infoX = 1210;
         std::array<int, 4> labelX { 244, 352, 488, 810 };
-        juce::TextButton noteTools { "Note tools" }, scaleButton { "Scale" }, foldButton { "Fold" };
+        juce::TextButton noteTools { "Note tools" }, scaleButton { "Scale" }, foldButton { "Fold" }, focusButton { "Focus" };
         void editScale()
         {
             const auto* clip = owner.currentMidiClip(); if (! clip) return;
@@ -10265,6 +10312,8 @@ private:
         Session::MidiNoteInfo original;
         std::unordered_set<juce::String> selectedNoteIds, marqueeBase;
         std::vector<Session::MidiNoteInfo> originalNotes, noteClipboard;
+        // The other shown clips' notes selected when a drag began, by clip id (Focus off).
+        std::vector<std::pair<juce::String, std::vector<Session::MidiNoteInfo>>> otherOriginals;
         juce::Point<float> dragOrigin;
         juce::Rectangle<float> marqueeBounds;
         double viewBeat = 0, pixelsPerBeat = 60, insertionBeat = 0;
@@ -10651,6 +10700,81 @@ private:
         }
         void clearSelection() { selectedNoteIds.clear(); selectedNoteId.clear(); }
         void selectOnly (const juce::String& id) { clearSelection(); selectedNoteIds.insert (id); selectedNoteId = id; }
+    public:
+        // Multi-clip editing's Focus, as the reference's (its manual, section 10.8.1): on, only the edited clip's notes
+        // edit, the other shown clips' showing grey; off, the notes of every shown clip select and edit together, each
+        // in its clip's colour. N switches it, and held a while switches it back when let go.
+        bool focusMode = false;
+        bool noteSelected (const juce::String& id) const { return selectedNoteIds.contains (id); }
+        void setFocusMode (bool on)
+        {
+            focusMode = on; focusButton.setToggleState (on, juce::dontSendNotification);
+            // With Focus on only the edited clip's notes stay selected.
+            if (const auto* clip = owner.currentMidiClip(); on && clip != nullptr)
+            {
+                std::unordered_set<juce::String> own;
+                for (const auto& n : clip->notes) if (selectedNoteIds.contains (n.id)) own.insert (n.id);
+                selectedNoteIds = std::move (own);
+            }
+            repaint();
+        }
+        // The other shown clips' selected notes while Focus is off, by clip id, each in its own clip's beats.
+        using ClipNotes = std::vector<std::pair<juce::String, std::vector<Session::MidiNoteInfo>>>;
+        ClipNotes otherSelectedNotes() const
+        {
+            ClipNotes result;
+            if (focusMode) return result;
+            for (const auto* other : owner.extraMidiClips())
+            {
+                std::vector<Session::MidiNoteInfo> notes;
+                for (const auto& n : other->notes) if (selectedNoteIds.contains (n.id)) notes.push_back (n);
+                if (! notes.empty()) result.push_back ({ other->id, std::move (notes) });
+            }
+            return result;
+        }
+        // The edited clip or another shown one, by id.
+        const Session::ClipInfo* shownClip (const juce::String& id) const
+        {
+            if (const auto* clip = owner.currentMidiClip(); clip != nullptr && clip->id == id) return clip;
+            for (const auto* other : owner.extraMidiClips()) if (other->id == id) return other;
+            return nullptr;
+        }
+        // Moves the edited clip's notes and the other shown clips' by the same beats and semitones, every note staying
+        // inside its clip, as one edit (the drag's gesture, or one of its own).
+        void moveSelection (std::vector<Session::MidiNoteInfo> notes, ClipNotes others, double beatDelta, int pitchDelta)
+        {
+            const auto* clip = owner.currentMidiClip();
+            if (clip == nullptr || (notes.empty() && others.empty())) return;
+            double lowBeat = -std::numeric_limits<double>::max(), highBeat = std::numeric_limits<double>::max();
+            int lowPitch = -127, highPitch = 127;
+            const auto bound = [&] (const Session::ClipInfo& on, const std::vector<Session::MidiNoteInfo>& list)
+            {
+                for (const auto& note : list)
+                {
+                    lowBeat = juce::jmax (lowBeat, -note.startBeat);
+                    highBeat = juce::jmin (highBeat, contentEndBeat (on) - note.startBeat - note.lengthBeats);
+                    lowPitch = juce::jmax (lowPitch, -note.pitch); highPitch = juce::jmin (highPitch, 127 - note.pitch);
+                }
+            };
+            bound (*clip, notes);
+            for (auto it = others.begin(); it != others.end();)
+                if (const auto* on = shownClip (it->first)) { bound (*on, it->second); ++it; }
+                else it = others.erase (it);
+            // Loaded clips may retain offscreen notes. An impossible interval
+            // must not turn a group edit into per-note clamping or partial repair.
+            if (lowBeat > highBeat || ! std::isfinite (lowBeat) || ! std::isfinite (highBeat)) return;
+            beatDelta = juce::jlimit (lowBeat, highBeat, beatDelta);
+            pitchDelta = juce::jlimit (lowPitch, highPitch, pitchDelta);
+            const auto shift = [&] (std::vector<Session::MidiNoteInfo>& list) { for (auto& note : list) { note.startBeat += beatDelta; note.pitch += pitchDelta; } };
+            const auto clipId = clip->id;
+            const bool ownGesture = ! gesture;
+            if (ownGesture) owner.session.beginEditGesture ("Move MIDI notes");
+            if (! notes.empty()) { shift (notes); owner.report (owner.session.updateMidiNotes (clipId, notes)); }
+            for (auto& [id, list] : others) { shift (list); owner.report (owner.session.updateMidiNotes (id, list)); }
+            if (ownGesture) owner.session.endEditGesture();
+            owner.refresh();
+        }
+    private:
         std::vector<Session::MidiNoteInfo> selectedNotes() const
         {
             std::vector<Session::MidiNoteInfo> notes;
@@ -10675,15 +10799,33 @@ private:
         {
             const auto* clip = owner.currentMidiClip();
             const auto notes = selectedNotes();
-            if (clip == nullptr || notes.empty()) return;
-            const auto start = noteExtent (notes).first;
-            auto copied = normalisedNotes (notes);
+            const auto others = otherSelectedNotes();
+            if (clip == nullptr || (notes.empty() && others.empty())) return;
+            // With Focus off the other shown clips' selected notes come too, where they show against the edited clip.
+            auto all = notes;
+            for (const auto& [id, list] : others)
+                if (const auto* on = shownClip (id))
+                    for (const auto& note : list)
+                        for (const auto& ghost : ghostNotes (*on))
+                            if (ghost.note->id == note.id) { auto placed = note; placed.startBeat = ghost.beat; all.push_back (placed); break; }
+            if (all.empty()) return;
+            const auto start = noteExtent (all).first;
+            auto copied = normalisedNotes (all);
             if (cut)
             {
-                juce::StringArray ids; for (const auto& note : notes) ids.add (note.id);
-                const auto result = owner.session.removeMidiNotes (clip->id, ids);
+                const auto clipId = clip->id;
+                if (! others.empty()) owner.session.beginEditGesture ("Remove MIDI notes");
+                auto result = juce::Result::ok();
+                const auto remove = [&] (const juce::String& id, const std::vector<Session::MidiNoteInfo>& list)
+                {
+                    juce::StringArray ids; for (const auto& note : list) ids.add (note.id);
+                    if (result.wasOk() && ! ids.isEmpty()) result = owner.session.removeMidiNotes (id, ids);
+                };
+                remove (clipId, notes);
+                for (const auto& [id, list] : others) remove (id, list);
+                if (! others.empty()) owner.session.endEditGesture();
                 if (result.failed()) { owner.report (result); owner.refresh(); return; }
-                insertionBeat = start; clearSelection();
+                insertionBeat = juce::jlimit (0.0, contentEndBeat (*clip), start); clearSelection();
             }
             noteClipboard = std::move (copied);
             owner.report (juce::Result::ok(), juce::String ((int) noteClipboard.size())
@@ -12794,7 +12936,7 @@ private:
             session.computerKeyboardNote (event.note, 0, false);
     }
     bool keyStateChanged (bool) override { releaseComputerKeys(); releaseMappedKeys(); releaseLatches(); return false; }
-    // Momentary latching, as the reference's: A, B, S, Z, Tab and F1 to F8 act when pressed; held for
+    // Momentary latching, as the reference's: A, B, N, S, Z, Tab and F1 to F8 act when pressed; held for
     // about 500 ms, letting go returns what they changed (Z zooming back). Their repeats while held do
     // nothing. The key state and clock can be stood in for by the tests.
     struct Latch { int code = 0, keyCode = 0; juce::uint32 pressedAt = 0; juce::KeyPress press; };
@@ -12809,7 +12951,7 @@ private:
         if (replayingLatch || key.getModifiers().isAnyModifierKeyDown()) return std::nullopt;
         const auto keyCode = key.getKeyCode();
         const auto code = keyCode < 256 ? (int) juce::CharacterFunctions::toUpperCase ((juce::juce_wchar) keyCode) : keyCode;
-        if (! (code == 'A' || code == 'B' || code == 'S' || code == 'Z' || code == juce::KeyPress::tabKey || (code >= juce::KeyPress::F1Key && code <= juce::KeyPress::F8Key)))
+        if (! (code == 'A' || code == 'B' || code == 'N' || code == 'S' || code == 'Z' || code == juce::KeyPress::tabKey || (code >= juce::KeyPress::F1Key && code <= juce::KeyPress::F8Key)))
             return std::nullopt;
         for (auto* focused = juce::Component::getCurrentlyFocusedComponent(); focused; focused = focused->getParentComponent())
             if (dynamic_cast<juce::TextEditor*> (focused)) return std::nullopt;
@@ -23041,6 +23183,54 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
             const auto ghost = pianoRoll.ghostBounds (*earlier, earlier->notes.front()).getCentre();
             check (std::abs (pianoRoll.visibleStartBeat() + 4) < 1e-9 && getComponentAt (getLocalPoint (&pianoRoll, ghost.toInt())) == &pianoRoll,
                    "Fit shows the clip before the edited one too, the view starting four beats before it");
+        }
+        {
+            // With Focus off, as at first, the notes of every shown clip select and edit together (the reference's manual,
+            // section 10.8.1); N turns Focus on, and then only the edited clip's notes edit.
+            const auto press = [&] (juce::Point<float> at, int modifiers, juce::Point<float> to)
+            {
+                const auto now = juce::Time::getCurrentTime();
+                const auto mouse = [&] (juce::Point<float> p, bool dragged)
+                { return juce::MouseEvent (juce::Desktop::getInstance().getMainMouseSource(), p, juce::ModifierKeys (juce::ModifierKeys::leftButtonModifier | modifiers), 1.0f, 0, 0, 0, 0,
+                                           &pianoRoll, &pianoRoll, now, at, now, 1, dragged); };
+                pianoRoll.mouseDown (mouse (at, false));
+                if (to != at) pianoRoll.mouseDrag (mouse (to, true));
+                pianoRoll.mouseUp (mouse (to, to != at)); refresh();
+            };
+            const auto noteOf = [&] (const juce::String& clipId) { const auto [t, c] = locateClip (clipId); return state.tracks[(size_t) t].clips[(size_t) c].notes.front(); };
+            check (! pianoRoll.focusMode && currentMidiClip()->id == secondId, "Focus is off at first, the second clip edited");
+            const auto second = noteOf (secondId), first = noteOf (firstId);
+            const auto at = pianoRoll.shownNoteBounds (second).getCentre();
+            press (at, 0, at);
+            press (pianoRoll.ghostBounds (*extraMidiClips().front(), first).getCentre(), juce::ModifierKeys::shiftModifier, pianoRoll.ghostBounds (*extraMidiClips().front(), first).getCentre());
+            check (currentMidiClip()->id == firstId && pianoRoll.noteSelected (first.id) && pianoRoll.noteSelected (second.id),
+                   "Shift-clicking the other clip's note edits that clip and adds the note, both clips' notes selected");
+            const auto steps = session.undoSteps().size();
+            pianoRoll.keyPressed (juce::KeyPress (juce::KeyPress::upKey));
+            check (noteOf (firstId).pitch == first.pitch + 1 && noteOf (secondId).pitch == second.pitch + 1 && session.undoSteps().size() == steps + 1,
+                   "Up raises the selected notes of both clips a semitone, one undo step");
+            session.undo(); refresh();
+            check (noteOf (firstId).pitch == first.pitch && noteOf (secondId).pitch == second.pitch, "one undo lowers both again");
+            const auto from = pianoRoll.shownNoteBounds (noteOf (firstId)).getCentre();
+            press (from, 0, from.translated ((float) pianoRoll.beatWidth(), 0));
+            check (std::abs (noteOf (firstId).startBeat - (first.startBeat + 1)) < 1e-9 && std::abs (noteOf (secondId).startBeat - (second.startBeat + 1)) < 1e-9,
+                   "dragging one of them a beat later moves both clips' selected notes a beat");
+            session.undo(); refresh();
+            handleKey (juce::KeyPress (juce::KeyPress::deleteKey)); refresh();
+            const auto [ft, fc] = locateClip (firstId); const auto [st, sc] = locateClip (secondId);
+            check (state.tracks[(size_t) ft].clips[(size_t) fc].notes.empty() && state.tracks[(size_t) st].clips[(size_t) sc].notes.empty(), "Delete removes both");
+            session.undo(); refresh();
+            check (! state.tracks[(size_t) ft].clips[(size_t) fc].notes.empty() && ! state.tracks[(size_t) st].clips[(size_t) sc].notes.empty(), "and one undo brings both back");
+            check (handleKey (juce::KeyPress ('n')) && pianoRoll.focusMode, "N turns Focus on");
+            const auto edited = noteOf (currentMidiClip()->id);
+            press (pianoRoll.shownNoteBounds (edited).getCentre(), 0, pianoRoll.shownNoteBounds (edited).getCentre());
+            const auto otherId = extraMidiClips().front()->id;
+            const auto other = noteOf (otherId);
+            const auto ghost = pianoRoll.ghostBounds (*extraMidiClips().front(), other).getCentre();
+            press (ghost, juce::ModifierKeys::shiftModifier, ghost);
+            check (currentMidiClip()->id == otherId && pianoRoll.noteSelected (other.id) && ! pianoRoll.noteSelected (edited.id),
+                   "with Focus on, clicking the other clip's note edits that clip with only that note selected");
+            check (handleKey (juce::KeyPress ('n')) && ! pianoRoll.focusMode, "N turns Focus off again");
         }
         clipClick (firstId, 0);
         check (currentMidiClip()->id == firstId && extraMidiClipIds.empty() && extraMidiClips().empty(), "a plain click edits one clip again");

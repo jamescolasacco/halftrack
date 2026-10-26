@@ -482,6 +482,10 @@ The static reading of the reference's binary left these open, and Halftrack take
 - **Overlapping notes.** Generated notes do not otherwise replace the existing notes they overlap; the reference's manual says generated notes replace the notes they overlap, and its merge works "per key".
 - **The interface.** The tools open as windows applied with a button, not the reference's Clip View panels with Auto Apply.
 
+### Multi-clip Focus
+
+The reference's manual describes Focus but not its default, nor which edits besides copy, cut, paste and delete reach every shown clip with it off. Halftrack starts with Focus off, and with it off moves (by dragging and by the arrows) as well as deletes and copies the selected notes of every shown clip; resizing, velocity and copy drags stay with the edited clip.
+
 ### Stops, time commands and switches
 
 The static reading of the reference's code left these open, and Halftrack takes the simplest reasonable default for each:

@@ -2960,3 +2960,7 @@ Engine and UI areas. MIDI files dropped on a MIDI track's Session slot now go in
 
 UI area. In multi-clip editing, the notes of the other shown clips now show where the Arrangement plays them: from each clip's start marker, and at each pass of a looped clip's loop. Before, each note showed once at its content beat. Clicking any of them still edits its clip with the note selected, keeping it under the pointer. The view now scrolls back over shown clips that start before the edited one, and Fit covers them all.
 
+## Multi-clip Focus and cross-clip editing — 2026-10-25
+
+UI area. As the reference's manual describes (section 10.8.1), the note editor has a Focus button, and N switches it (held, back when let go). With Focus off, as at first, the notes of every shown clip show in their clip's colour, select together (click, Shift-click, drag), and move, delete and copy together in one undo step. With it on, the other clips' notes are grey and only the edited clip's edit. Switching the edited clip among the shown ones now keeps the view and, with Focus off, the selection.
+
