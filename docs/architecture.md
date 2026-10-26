@@ -500,6 +500,8 @@ Live Clips (`saveLiveClip`, `readLiveClip`, `loadLiveClip`, `loadLiveClipToSlot`
 
 `ClipInfo::warp` (`WarpSettings { mode, bpm }`) and `canWarp` describe whether an audio clip follows the project tempo. `setAudioClipWarp` maps to the engine's auto-tempo, Signalsmith stretch mode and loop-info beat count in one undo transaction; tempo changes then remap warped clips in beats. Session slots always follow the tempo. See the [warp contract](research/warp-contract.md) and the [stretch alignment patch](dependencies.md#tracktion-time-stretch-alignment-patch).
 
+Warp markers are written by `setAudioClipWarpMarkers`, which replaces the list; `moveWarpMarkers` and `deleteWarpMarkers` find markers by their source seconds, apply the reference's limits and deletion rule, and write through it in one undo step. Deleting the last marker can change the clip's tempo alone, through the loop info's beat count, before the kept markers are written at it. The audio clip view keeps its marker selection as source seconds, which moves keep, and drops markers that are gone at each sync.
+
 ## Audio clip editing interface
 
 `ClipInfo` carries `isAudio`, `audio` (gain, fade durations and curve types), source length and `canEditAudioRange` / `canEditAudioFades`. Stable clip IDs resolve both arrangement and Session clips for `setAudioClipSettings`. Values validate before the native undo transaction; explicit manual fades disable automatic crossfade. The engine owns graph updates and clip-level DSP; this does not introduce another audio thread or claim its internals meet the stricter owned-callback contract. Invalid serialized gain/fade data rejects before constructing a candidate edit.

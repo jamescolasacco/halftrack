@@ -3023,3 +3023,7 @@ Engine and UI areas. As the reference's manual describes, new MIDI clips (drawn,
 ## Warp commands after the reference's code — 2026-10-26
 
 Engine and UI areas. After a static reading of the reference's sample display: Warp From Here (Straight) now puts its marker exactly at the point (the right-clicked marker, or the grid beat under the pointer) and its tempo on a 0.02 BPM grid; Warp N BPM From Here warps from the point at the project's tempo; Warp as Loop takes the whole sample, loops it, and offers the reference's lengths (1, 2, 4, 8 bars, multiples of 8, whole bars, or beats under a bar). Undoing a clip's first warp markers no longer breaks its next marker edit.
+
+## Warp marker selection and Seg. BPM — 2026-10-26
+
+Engine and UI areas. After a static reading of the reference's sample display, warp markers select with click, Cmd-click and Shift-click, and drags and the arrow keys move the selection, each segment beside a marker that stays held within 5–999 BPM (`Session::moveWarpMarkers`). Delete deletes the selected markers, and deleting the last keeps the tempo up to it after the new last marker (`Session::deleteWarpMarkers`). Seg. BPM shows and sets the segment up to the selected marker. The audio clip view now takes the keys when clicked, and Delete there no longer reaches the Arrangement. The :2 and ×2 tooltips had their effect backwards. Warp and UI suites pass.

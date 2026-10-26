@@ -13971,6 +13971,81 @@ Result Session::warpAsLoop (const String& id, int count, bool inBeats)
     if (auto r = setClipLoop (id, { true, 0, beats }, 0); r.failed()) return r;
     impl->changed(); return Result::ok();
 }
+// The markers at the given source seconds, by index, in order; the start at (0, 0) is not among them.
+static std::vector<size_t> markersAtSeconds (const std::vector<Session::WarpMarker>& markers, const std::vector<double>& seconds)
+{
+    std::vector<size_t> found;
+    for (size_t i = 0; i < markers.size(); ++i)
+        if (! (i == 0 && markers[i].beat == 0 && markers[i].sourceSeconds == 0)
+            && std::any_of (seconds.begin(), seconds.end(), [&] (double s) { return std::abs (s - markers[i].sourceSeconds) < 1e-7; }))
+            found.push_back (i);
+    return found;
+}
+Result Session::moveWarpMarkers (const String& id, const std::vector<double>& seconds, double delta)
+{
+    auto* clip = impl->audioClip (id); if (! clip) return Result::fail ("Audio clip not found.");
+    if (! std::isfinite (delta)) return Result::fail ("Warp markers move by a finite number of beats.");
+    auto markers = warpMarkers (*clip);
+    const auto moving = markersAtSeconds (markers, seconds);
+    // The engine keeps a marker's beat as seconds at the clip's tempo, so a beat read back can differ in its last digits.
+    const auto nothing = [] (double beats) { return std::abs (beats) < 1e-9; };
+    if (moving.empty() || nothing (delta)) return Result::ok();
+    // As the reference limits a move (static reading of its code): from the first moved marker to the last, each beside
+    // one that stays narrows the move so the segment between them spans 5 to 999 BPM of its audio.
+    const auto moves = [&] (size_t i) { return std::binary_search (moving.begin(), moving.end(), i); };
+    for (const auto i : moving)
+    {
+        auto beat = markers[i].beat + delta;
+        if (i > 0 && ! moves (i - 1))
+        {
+            const auto span = markers[i].sourceSeconds - markers[i - 1].sourceSeconds;
+            beat = std::clamp (beat, markers[i - 1].beat + span * 5 / 60, markers[i - 1].beat + span * 999 / 60);
+        }
+        if (i + 1 < markers.size() && ! moves (i + 1))
+        {
+            const auto span = markers[i + 1].sourceSeconds - markers[i].sourceSeconds;
+            beat = std::clamp (beat, markers[i + 1].beat - span * 999 / 60, markers[i + 1].beat - span * 5 / 60);
+        }
+        delta = beat - markers[i].beat;
+        if (nothing (delta)) return Result::ok();
+    }
+    for (const auto i : moving) markers[i].beat += delta;
+    const OneUndoStep step (*this, true, impl->gesture != nullptr, "Move warp marker");
+    return setAudioClipWarpMarkers (id, markers);
+}
+Result Session::deleteWarpMarkers (const String& id, const std::vector<double>& seconds)
+{
+    if (auto frozen = impl->unfrozen (impl->trackOfClip (id)); frozen.failed()) return frozen;
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    if (impl->edit->getTransport().isRecording()) return Result::fail ("Stop recording before editing warp markers.");
+    auto* clip = impl->audioClip (id); if (! clip) return Result::fail ("Audio clip not found.");
+    const auto before = describeClip (*clip);
+    if (before.warp.mode == WarpMode::off || before.warp.mode == WarpMode::repitch) return Result::fail ("Warp markers need a clip warped in a stretching mode.");
+    const auto& markers = before.warpMarkers;
+    const auto doomed = markersAtSeconds (markers, seconds);
+    if (doomed.empty()) return Result::ok();
+    std::vector<WarpMarker> kept;
+    for (size_t i = 0; i < markers.size(); ++i) if (! std::binary_search (doomed.begin(), doomed.end(), i)) kept.push_back (markers[i]);
+    // The reference deletes back to front, and the last marker's going puts its end marker after the new last one at the
+    // tempo up to the deleted one: after a run of deleted markers at the end, the tempo up to the run's first.
+    std::optional<double> tail;
+    if (doomed.back() == markers.size() - 1)
+    {
+        auto first = doomed.size() - 1;
+        while (first > 0 && doomed[first - 1] + 1 == doomed[first]) --first;
+        const auto k = doomed[first];
+        if (const auto span = markers[k].sourceSeconds - markers[k - 1].sourceSeconds; span > 0)
+            tail = juce::jlimit (20.0, 999.0, 60 * (markers[k].beat - markers[k - 1].beat) / span);
+    }
+    const OneUndoStep step (*this, true, impl->gesture != nullptr, doomed.size() > 1 ? "Delete warp markers" : "Delete warp marker");
+    if (tail && std::abs (*tail - before.warp.bpm) > 1e-9)
+    {
+        // The clip's tempo alone: the markers kept are written at it below, so the clip keeps its place and loop in beats.
+        impl->transaction ("Delete warp markers");
+        clip->getLoopInfo().setNumBeats (*tail * before.sourceLength / 60);
+    }
+    return setAudioClipWarpMarkers (id, kept);
+}
 std::vector<double> Session::audioClipTransients (const String& id)
 {
     auto* clip = impl->audioClip (id);

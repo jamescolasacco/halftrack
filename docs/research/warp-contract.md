@@ -33,11 +33,11 @@ The clip view draws a warped clip in its beats, each segment of the warp map ove
 
 - **Adding.** Double-clicking the waveform adds a marker at that beat, pinned to the source point already playing there, so nothing moves until it is dragged.
 - **Removing.** Double-clicking a marker removes it; removing the last movable marker removes the markers altogether.
-- **Dragging** a marker moves its beat between its neighbours, on a grid that follows the zoom (the coarsest power-of-two fraction of a beat at least 12 pixels wide) unless Alt is held. Each drag is one undo step.
+- **Dragging** a marker moves its beat, on a grid that follows the zoom (the coarsest power-of-two fraction of a beat at least 12 pixels wide) unless the grid is bypassed. Each drag is one undo step. Since 2026-10-26 a drag moves the selected markers within the reference's 5–999 BPM limits ([marker selection](#marker-selection-moves-and-seg-bpm-2026-10-26)).
 
 The main UI suite checks adding, a drag onto the grid, its undo, and removal.
 
-Missing: automatic markers at transients, segment BPM display, quantizing markers, and multi-marker selection (see [Warp commands](#warp-commands-2026-10-22-revised-2026-10-26) for what the reference's code shows of them).
+Missing: automatic markers at transients and quantizing markers (see [Warp commands](#warp-commands-2026-10-22-revised-2026-10-26) for what the reference's code shows of them).
 
 ## Tempo and transient analysis (2026-10-22)
 
@@ -130,7 +130,61 @@ The UI suite checks the menu's one-bar suggestion for two seconds at 120 BPM. It
 Missing, from the same reading:
 - Warp From Here (with tempo changes) and Warp From Here (Start at the project tempo), which need the reference's beat tracker: markers on every bar from the whole beat at or below the point.
 - Set 1.1.1 Here, Warp Selection as N-Bar Loop, and the menu's Insert Warp Marker, Delete and Quantize.
-- Selecting several warp markers (Cmd and Shift), moving them with the arrow keys, the 5–999 BPM limit on a dragged segment, and the Seg. BPM field.
+
+## Marker selection, moves and Seg. BPM (2026-10-26)
+
+After the same static reading of the reference's code, the clip view selects, moves and deletes warp markers as the reference's sample display does.
+
+- **Selecting.** A click on a marker selects it alone.
+  - Cmd-click (Ctrl on Windows and Linux) adds or removes one.
+  - Shift-click, with markers selected, selects the run from the clicked marker to an anchor. The anchor is the end of the selection farther from the click, and further Shift-clicks keep it.
+  - A click on a marker already selected selects it alone at the release, unless the selection was dragged, so several markers drag together.
+  - A click on the waveform away from the markers, or Escape, deselects them. Showing another clip does too.
+  - A marker made by double-clicking is selected, or added to the selection with Cmd or Shift. Selected markers are drawn white.
+- **Dragging.** Pressing a marker and moving more than 3 pixels drags the selected markers by the beats the grabbed one moves, on the grid unless the grid is bypassed. Shift at the press does not drag them; the reference then moves the waveform, which was not read. Each drag is one undo step.
+- **Moves.** `Session::moveWarpMarkers (clipId, sourceSeconds, deltaBeats)` moves the markers at those source seconds, keeping their audio.
+  - As the reference's limiter does, from the first moved marker to the last, each one beside a marker that stays cuts the move so the segment between them spans 5 to 999 BPM.
+  - A move cut to nothing changes nothing. The start at (0, 0) does not move.
+- **Keys**, with the clip view focused, as a click gives it:
+  - Left and Right move the selection to the next grid line from its rightmost marker, or by a pixel's beats with the grid's snapping off.
+  - Shift+Left and Right add the marker before or after the selection.
+  - Cmd+Left and Right select that marker alone, wrapping round the ends; with several selected, they leave the leftmost or rightmost.
+  - Delete and Backspace delete the selected markers. With none selected they delete nothing else from the clip view.
+- **Deleting.** `Session::deleteWarpMarkers (clipId, sourceSeconds)` deletes markers in one undo step, as the reference's Delete does.
+  - The reference deletes back to front, and deleting the last marker puts its end marker after the new last one, at the tempo up to the deleted marker.
+  - So after a run of deleted markers at the end, the audio after the new last marker keeps the tempo it had up to the first of them. That becomes the clip's tempo, within Halftrack's 20–999 BPM.
+  - The clip keeps its place, length and loop in beats. Double-clicking a marker deletes it the same way.
+- **Seg. BPM** shows the tempo of the segment up to the marker selected last: 60 times its beats over its seconds.
+  - Typing or dragging a value moves that marker alone. Its segment takes the tempo (5–999 BPM) as far as the next segment's 5 to 999 BPM allow.
+  - With no marker selected, it shows and sets the clip's tempo after its last marker, as before.
+- **:2 and ×2** halve and double the clip's tempo: halved, the clip plays twice as fast over half the beats. Their tooltips had said the opposite.
+
+Differences from the reference:
+- Halftrack's start marker at (0, 0) is fixed and not drawn. The reference's first marker, whose Seg. BPM is the tempo after it, corresponds to Halftrack's empty selection.
+- The reference's clip view has a time selection and an insert marker. A click on a marker moves the insert marker there, and Return selects the markers in the time selection. Halftrack's audio clip view has neither.
+- Marker beats are not rounded to the reference's 1/3843840 beat.
+- Not implemented: transient pseudo markers (shown on hover, converted by Cmd-dragging), Shift-dragging the waveform or a transient, and audio preview while the arrow keys move markers.
+
+Evidence:
+- `tests/WarpTests.cpp`, on markers every second at 120 BPM:
+  - a one-beat move moves one marker, in one undo step;
+  - moves are held at 5 BPM after and before a marker, and at 999 BPM with nothing after the last marker;
+  - a move cut to nothing adds no undo step;
+  - two markers moved together keep the segment between them;
+  - the start does not move.
+- Deleting, on segments of 120, 180 and 60 BPM:
+  - deleting a marker before others keeps the clip's tempo;
+  - deleting the last two leaves 180 BPM after the remaining marker, in one undo step, and the clip keeps its 8 beats;
+  - rendered, the clicks after the marker sound 0.75 s apart within 1 ms. They are 6.5 ms early, evenly, as the stretcher places clicks it slows;
+  - undo restores the markers and the tempo.
+- The UI suite, on the click fixture:
+  - a new marker is selected and Seg. BPM shows 120.00; typing 60 moves the marker so its segment plays at 60 BPM, the clip's tempo staying;
+  - Right moves the marker to the next grid line;
+  - a Cmd-double-click adds a second marker to the selection, and a click without a drag selects one alone;
+  - Shift+Right adds the next marker, and Cmd+Right leaves the rightmost and then wraps to the first;
+  - Escape deselects;
+  - with both selected by Cmd-clicks, a drag far left stops the first where its segment from the start plays at 5 BPM, keeping their spacing, in one undo step;
+  - Delete deletes both in one undo step, the clip's tempo staying 120, and with none selected deletes nothing.
 
 ## First play of a warped clip (2026-10-24)
 

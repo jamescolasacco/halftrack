@@ -1365,6 +1365,16 @@ public:
     // of 8 up to 64, then whole bars; in beats when that is shorter than a bar.
     struct LoopLength { int count = 1; bool beats = false; bool operator== (const LoopLength&) const = default; };
     static LoopLength loopLengthFor (double beats, double beatsPerBar);
+    // Moves a warped clip's markers, found by their source seconds, by a number of beats, as the reference's drags and
+    // arrow keys move them (static reading of its code): their audio stays, and the move is cut short so that each
+    // segment between a moved marker and one that stays plays at 5 to 999 BPM; a move cut to nothing changes nothing.
+    // The start at (0, 0) does not move. One undo step, or part of the current gesture.
+    juce::Result moveWarpMarkers (const juce::String& clipId, const std::vector<double>& sourceSeconds, double deltaBeats);
+    // Deletes a warped clip's markers, found by their source seconds, as the reference's Delete does (static reading of
+    // its code): when the last goes, the audio after the new last marker keeps the tempo it had up to the deleted one,
+    // which becomes the clip's tempo (within 20 to 999 BPM). The clip keeps its place, length and loop in beats. One
+    // undo step.
+    juce::Result deleteWarpMarkers (const juce::String& clipId, const std::vector<double>& sourceSeconds);
     juce::Result setAudioClipRange (const juce::String& clipId, double startSeconds, double lengthSeconds, double sourceOffsetSeconds);
     // Where a MIDI or warped audio clip's content starts and its loop, in content beats. Looping,
     // the content plays from the start into the loop and round it for as long as the clip lasts;

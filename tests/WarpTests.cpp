@@ -200,6 +200,75 @@ int runWarpTests (const juce::File& artifacts)
             ok (m.exportWav (out), "render after removing them");
             check (onGrid (onsets (read (out)), .5, 8, .003, worst), "without markers the clicks are back on the beat grid");
             juce::ignoreUnused (before);
+            // Moving markers, as the reference's drags and arrow keys do: their audio stays, and each segment beside a
+            // marker that stays keeps within 5 to 999 BPM.
+            const auto marked = clip (m).id;
+            const auto near = [] (double a, double b) { return std::abs (a - b) < 1e-6; };
+            const auto markedAs = [&] (const std::vector<Session::WarpMarker>& expected)
+            {
+                const auto shown = clip (m).warpMarkers;
+                return shown.size() == expected.size()
+                    && std::equal (shown.begin(), shown.end(), expected.begin(), [&] (const auto& a, const auto& b) { return near (a.sourceSeconds, b.sourceSeconds) && near (a.beat, b.beat); });
+            };
+            const auto beatOf = [&] (double seconds)
+            {
+                for (const auto& w : clip (m).warpMarkers) if (near (w.sourceSeconds, seconds)) return w.beat;
+                return -1.0;
+            };
+            ok (m.setAudioClipWarpMarkers (marked, { { 0, 0 }, { 1, 2 }, { 2, 4 }, { 3, 6 } }), "markers on every second, straight");
+            auto steps = m.undoSteps().size();
+            ok (m.moveWarpMarkers (marked, { 2 }, 1), "move the second second's marker a beat later");
+            check (near (beatOf (2), 5) && near (beatOf (1), 2) && near (beatOf (3), 6) && m.undoSteps().size() == steps + 1 && m.undoSteps()[0] == "Move warp marker",
+                   "it alone moves, its audio staying, one undo step");
+            ok (m.moveWarpMarkers (marked, { 2 }, 2), "two beats more");
+            check (near (beatOf (2), 6 - 5.0 / 60), "the segment after it is held at 5 BPM");
+            steps = m.undoSteps().size();
+            ok (m.moveWarpMarkers (marked, { 2 }, 1), "on, against the limit");
+            check (near (beatOf (2), 6 - 5.0 / 60) && m.undoSteps().size() == steps, "a move cut to nothing changes nothing");
+            ok (m.moveWarpMarkers (marked, { 2 }, -10), "ten beats back");
+            check (near (beatOf (2), 2 + 5.0 / 60), "the segment before it is held at 5 BPM");
+            ok (m.moveWarpMarkers (marked, { 3 }, 100), "the last marker a hundred beats on");
+            check (near (beatOf (3), 2 + 5.0 / 60 + 999.0 / 60), "its segment is held at 999 BPM, nothing after it limiting it");
+            ok (m.setAudioClipWarpMarkers (marked, { { 0, 0 }, { 1, 2 }, { 2, 4 }, { 3, 6 } }), "straight again");
+            ok (m.moveWarpMarkers (marked, { 1, 2 }, 10), "the first two markers together, ten beats on");
+            check (near (beatOf (1), 2 + 2 - 5.0 / 60) && near (beatOf (2), 6 - 5.0 / 60) && near (beatOf (3), 6),
+                   "they move as far as the segment to the marker that stays allows, keeping their own segment");
+            ok (m.moveWarpMarkers (marked, { 0 }, 1), "try to move the start");
+            check (clip (m).warpMarkers.front() == Session::WarpMarker { 0, 0 }, "the start stays");
+            // Deleting markers, as the reference's Delete does: when the last goes, the audio after the new last keeps the
+            // tempo it had up to the deleted one.
+            ok (m.setAudioClipWarpMarkers (marked, { { 0, 0 }, { 1, 2 }, { 2, 5 }, { 3, 6 } }), "120, 180 and 60 BPM, then the clip's 120");
+            ok (m.deleteWarpMarkers (marked, { 1 }), "delete the first marker");
+            check (markedAs ({ { 0, 0 }, { 2, 5 }, { 3, 6 } }) && near (clip (m).warp.bpm, 120) && m.undoSteps()[0] == "Delete warp marker",
+                   "deleting a marker before others leaves the clip's tempo");
+            m.undo();
+            steps = m.undoSteps().size();
+            ok (m.deleteWarpMarkers (marked, { 2, 3 }), "delete the last two");
+            check (markedAs ({ { 0, 0 }, { 1, 2 } }) && near (clip (m).warp.bpm, 180)
+                       && m.undoSteps().size() == steps + 1 && m.undoSteps()[0] == "Delete warp markers",
+                   "deleting the last markers keeps the tempo up to the first of them, 180 BPM, after the new last, one undo step");
+            check (near (clip (m).lengthBeats, 8) && near (clip (m).length, 4), "the clip keeps its place and length");
+            {
+                ok (m.exportWav (out), "render after deleting them");
+                const auto found = onsets (read (out));
+                const std::vector<double> expected { 0, .5, 1, 1.75, 2.5, 3.25 };
+                // The stretcher places the clicks it slows a few milliseconds early, evenly: their spacing is the tempo.
+                worst = found.size() >= expected.size() ? 0.0 : 1e9;
+                double spacing = worst;
+                for (size_t i = 0; i < expected.size() && i < found.size(); ++i)
+                {
+                    worst = std::max (worst, std::abs (found[i] - expected[i]));
+                    if (i > 3) spacing = std::max (spacing, std::abs ((found[i] - found[i - 1]) - (expected[i] - expected[i - 1])));
+                }
+                juce::String list; for (auto t : found) list << juce::String (t, 4) << " ";
+                std::cout << "  onsets: " << list << std::endl;
+                check (worst <= .008 && spacing <= .001, "the clicks after the marker play at 180 BPM (worst " + juce::String (worst * 1000, 2) + " ms, spacing "
+                                                             + juce::String (spacing * 1000, 2) + " ms)");
+            }
+            m.undo();
+            check (markedAs ({ { 0, 0 }, { 1, 2 }, { 2, 5 }, { 3, 6 } }) && near (clip (m).warp.bpm, 120), "one undo restores them and the tempo");
+            ok (m.deleteWarpMarkers (marked, { 0, 4 }), "delete the start, and a marker the clip lacks");
+            check (clip (m).warpMarkers.size() == 4, "which changes nothing");
         }
         std::cout << "Warp passed: " << root.getFullPathName() << std::endl; return 0;
     }
