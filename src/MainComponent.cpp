@@ -34,6 +34,7 @@
 #include <filesystem>
 #include <cmath>
 #include <map>
+#include <numeric>
 #include <mutex>
 #include <optional>
 #include <thread>
@@ -9173,6 +9174,7 @@ private:
             const auto* clip = owner.currentMidiClip();
             if (clip == nullptr) return { 0.0, 16.0 };
             double low = 0, high = contentEndBeat (*clip);
+            if (sessionClips()) return { low, std::max (high, clip->loop.start + sessionSpan()) };
             for (const auto* other : owner.extraMidiClips())
             {
                 const auto from = other->startBeat - clip->startBeat + clip->contentStartBeat;
@@ -9292,18 +9294,27 @@ private:
                 g.setColour (bar ? themes::colour (0xff6e6e6e) : themes::colour (0xff434343));
                 g.drawVerticalLine (x, (float) gridTop, (float) grid.getBottom());
             }
-            // Content the clip does not play is dimmed: before its start (or loop) and after its end.
-            const auto clipEnd = (float) (keysWidth + (contentEndBeat (*clip) - viewBeat) * pixelsPerBeat);
+            // Content the clip does not play is dimmed: before its start (or loop) and after its end, or with Session clips
+            // shown together after the passes they take to come round together.
+            const auto shownEnd = sessionClips() ? std::max (contentEndBeat (*clip), clip->loop.start + sessionSpan()) : contentEndBeat (*clip);
+            const auto clipEnd = (float) (keysWidth + (shownEnd - viewBeat) * pixelsPerBeat);
             if (clipEnd < grid.getRight()) { g.setColour (background.withAlpha (0.7f)); g.fillRect (clipEnd, (float) gridTop, grid.getRight() - clipEnd, (float) grid.getHeight()); }
             const auto played = clip->loop.on ? std::min (clip->loop.start, clip->contentStartBeat) : clip->contentStartBeat;
             const auto clipStart = (float) (keysWidth + (played - viewBeat) * pixelsPerBeat);
             if (clipStart > keysWidth) { g.setColour (background.withAlpha (0.7f)); g.fillRect ((float) keysWidth, (float) gridTop, clipStart - keysWidth, (float) grid.getHeight()); }
             g.reduceClipRegion (grid);
             // Other shown clips' notes, dimmed, where they play against this clip.
+            // The edited clip's later passes round its loop, dimmed, with Session clips shown together.
+            for (const auto& pass : sessionClips() ? loopPasses (*clip, 1) : std::vector<GhostNote> {})
+            {
+                g.setColour (themes::colour (0xff8cc4b5).withAlpha (pass.note->active ? 0.3f : 0.15f)); g.fillRect (ghostRect (pass));
+                g.setColour (themes::colour (0xff203d36).withAlpha (0.6f)); g.drawRect (ghostRect (pass), 1.0f);
+            }
             for (const auto* other : owner.extraMidiClips())
             {
-                const auto from = (float) (keysWidth + (other->startBeat - clip->startBeat + clip->contentStartBeat - viewBeat) * pixelsPerBeat);
-                g.setColour (themes::colour (0xffffffff).withAlpha (0.035f)); g.fillRect (from, (float) gridTop, (float) (other->lengthBeats * pixelsPerBeat), (float) grid.getHeight());
+                const auto span = sessionClips() ? std::pair { clip->loop.start, sessionSpan() } : std::pair { other->startBeat - clip->startBeat + clip->contentStartBeat, other->lengthBeats };
+                const auto from = (float) (keysWidth + (span.first - viewBeat) * pixelsPerBeat);
+                g.setColour (themes::colour (0xffffffff).withAlpha (0.035f)); g.fillRect (from, (float) gridTop, (float) (span.second * pixelsPerBeat), (float) grid.getHeight());
                 for (const auto& ghost : ghostNotes (*other))
                 {
                     const auto r = ghostRect (ghost);
@@ -11223,11 +11234,44 @@ private:
         // Where another shown clip's notes play against the edited clip, in its beats, as the Arrangement plays them: from
         // the clip's start marker, and for a looped clip round its loop at each pass until the clip ends.
         struct GhostNote { const Session::MidiNoteInfo* note; double beat; };
+        // In the Session, shown clips loop together from their loop starts, as the reference's editor shows them (its
+        // manual, section 10.8): over the passes they take to come round together again, the least common multiple of
+        // their loops (on a 960th of a beat), at most 64 times the longest.
+        bool sessionClips() const { return owner.selectedLauncherClipId.isNotEmpty() && ! owner.extraMidiClips().empty(); }
+        double sessionSpan() const
+        {
+            const auto* clip = owner.currentMidiClip();
+            if (clip == nullptr) return 0;
+            std::vector<double> loops { clip->loop.length };
+            for (const auto* other : owner.extraMidiClips()) loops.push_back (other->loop.length);
+            double longest = 0;
+            for (const auto length : loops) longest = std::max (longest, length);
+            long long span = 1;
+            for (const auto length : loops)
+            {
+                span = std::lcm (span, std::max (1LL, (long long) std::llround (length * 960)));
+                if (span > (long long) std::llround (longest * 960 * 64)) return longest * 64;
+            }
+            return (double) span / 960;
+        }
+        // A clip's notes at each pass round its loop, from `from` passes in, until the Session span ends.
+        std::vector<GhostNote> loopPasses (const Session::ClipInfo& looped, int from) const
+        {
+            std::vector<GhostNote> result;
+            const auto* clip = owner.currentMidiClip();
+            if (clip == nullptr || looped.loop.length <= 1.0 / 64) return result;
+            const auto span = sessionSpan(), loopEnd = looped.loop.start + looped.loop.length;
+            for (auto pass = from * looped.loop.length; pass < span - 1e-9 && result.size() < 20000; pass += looped.loop.length)
+                for (const auto& n : looped.notes)
+                    if (n.startBeat >= looped.loop.start - 1e-9 && n.startBeat < loopEnd - 1e-9) result.push_back ({ &n, clip->loop.start + pass + n.startBeat - looped.loop.start });
+            return result;
+        }
         std::vector<GhostNote> ghostNotes (const Session::ClipInfo& other) const
         {
             std::vector<GhostNote> result;
             const auto* clip = owner.currentMidiClip();
             if (clip == nullptr) return result;
+            if (sessionClips()) return loopPasses (other, 0);
             const auto shown = clip->contentStartBeat - clip->startBeat; // An Arrangement beat's place in the edited clip, less the beat.
             const auto end = other.startBeat + other.lengthBeats;
             constexpr size_t most = 20000;
@@ -14610,7 +14654,19 @@ private:
     {
         std::vector<const Session::ClipInfo*> result;
         const auto* focused = currentMidiClip();
-        if (focused == nullptr || selectedLauncherClipId.isNotEmpty()) return result;
+        if (focused == nullptr) return result;
+        if (selectedLauncherClipId.isNotEmpty())
+        {
+            // In the Session, the other selected MIDI clips, looped as the edited one must be, up to eight in all: by
+            // track, then scene, as the reference stacks them (its manual, section 10.8).
+            if (! focused->loop.on) return result;
+            auto refs = selectedSlotClips();
+            std::sort (refs.begin(), refs.end(), [] (const auto& a, const auto& b) { return a.track != b.track ? a.track < b.track : a.scene < b.scene; });
+            for (const auto& ref : refs)
+                if (const auto& clip = state.tracks[(size_t) ref.track].slots[(size_t) ref.scene].clip; clip.isMidi && clip.loop.on && clip.id != focused->id && result.size() < 7)
+                    result.push_back (&clip);
+            return result;
+        }
         for (const auto& id : extraMidiClipIds)
             if (const auto [t, c] = locateClip (id); t >= 0 && id != focused->id)
                 if (const auto& clip = state.tracks[(size_t) t].clips[(size_t) c]; clip.isMidi) result.push_back (&clip);
@@ -14638,6 +14694,19 @@ private:
     }
     void focusMidiClip (const juce::String& id)
     {
+        if (selectedLauncherClipId.isNotEmpty())
+        {
+            // In the Session, the clip's slot becomes the edited one, the selection kept.
+            for (const auto& ref : selectedSlotClips())
+                if (state.tracks[(size_t) ref.track].slots[(size_t) ref.scene].clip.id == id)
+                {
+                    const auto kept = selectedSlots;
+                    selectLauncherSlot (ref.track, ref.scene);
+                    selectedSlots = kept;
+                    refresh(); return;
+                }
+            return;
+        }
         const auto [t, c] = locateClip (id);
         if (t < 0) return;
         if (const auto* focused = currentMidiClip(); focused != nullptr && focused->id != id && ! isExtraMidiClip (focused->id)) extraMidiClipIds.push_back (focused->id);
@@ -23496,6 +23565,30 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         clipClick (firstId, 0);
         check (currentMidiClip()->id == firstId && extraMidiClipIds.empty() && extraMidiClips().empty(), "a plain click edits one clip again");
         closeClipView();
+        {
+            // Session clips edit together too, as the reference's do (its manual, section 10.8): the selected looped clips,
+            // their notes over the passes their loops take to come round together.
+            const auto trackId = state.tracks[(size_t) lane].id;
+            check (session.addMidiClipToSlot (trackId, 0, 4).wasOk() && session.addMidiClipToSlot (trackId, 1, 6).wasOk(), "Session clips of four and six beats"); refresh();
+            const auto four = state.tracks[(size_t) lane].slots[0].clip, six = state.tracks[(size_t) lane].slots[1].clip;
+            check (four.loop.on && six.loop.on && session.addMidiNote (four.id, 60, 0, .5f, .8f).wasOk() && session.addMidiNote (six.id, 64, 0, .5f, .8f).wasOk(), "a note at the start of each");
+            refresh(); showSessionView(); selectLauncherSlot (lane, 0);
+            selectedSlots = { { lane, 0 }, { lane, 1 } }; openPianoRoll(); refresh();
+            check (currentMidiClip()->id == four.id && extraMidiClips().size() == 1 && extraMidiClips().front()->id == six.id, "selecting both shows the second with the first");
+            std::vector<double> beats;
+            for (const auto& ghost : pianoRoll.ghostNotes (*extraMidiClips().front())) beats.push_back (ghost.beat);
+            check (beats == std::vector<double> { 0, 6 } && std::abs (pianoRoll.sessionSpan() - 12) < 1e-9 && pianoRoll.shownSpan().second >= 12 - 1e-9,
+                   "the six-beat clip's note shows at each of its passes over the twelve beats the loops take to come round together");
+            beats.clear();
+            for (const auto& pass : pianoRoll.loopPasses (*currentMidiClip(), 1)) beats.push_back (pass.beat);
+            check (beats == std::vector<double> { 4, 8 }, "and the edited clip's own note at its later passes");
+            focusMidiClip (six.id);
+            check (currentMidiClip()->id == six.id && extraMidiClips().size() == 1 && extraMidiClips().front()->id == four.id && selectedSlots.size() == 2,
+                   "making the other clip the edited one keeps both shown");
+            selectedSlots.clear(); selectLauncherSlot (lane, 0); refresh();
+            check (extraMidiClips().empty(), "one clip selected edits alone again");
+            closeClipView(); showArrangementView(); refresh();
+        }
         check (session.removeTrack (lane).wasOk(), "remove the multi-clip track"); refresh();
         selectTrack (previousTrack); refresh();
     }

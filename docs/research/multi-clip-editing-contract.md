@@ -17,7 +17,12 @@ Halftrack's multi-clip editing follows the reference's MIDI editor showing sever
     - dragging a selected note moves the selected notes of every shown clip, as the arrow keys do, each staying inside its clip;
     - Delete removes them, and Copy and Cut take them where they show against the edited clip, in one undo step each.
   - Resizing, velocity drags, copy drags, the velocity and chance lanes and the note tools act on the edited clip alone, as the reference's velocity and chance editors do.
-- **Scope.** Only Arrangement clips are shown together; a Session clip is edited alone. Shown clips can be on different tracks.
+- **Session clips** (2026-10-26), as the manual describes them (section 10.8):
+  - Selecting several Session slots holding looped MIDI clips shows up to eight together, ordered by track, then scene. The edited clip is the one clicked last. A clip that is not looped is left out, and an edited clip that is not looped shows alone.
+  - The clips loop together from their loop starts. The editor shows the passes they take to come round together again: the least common multiple of their loop lengths, on a 960th of a beat, and at most 64 times the longest loop.
+  - The other clips' notes show at each pass round their loops, and the edited clip's later passes show dimmed.
+  - Clicking another shown clip's note edits that clip and keeps the selection. Focus works as in the Arrangement.
+- **Scope.** Shown clips can be on different tracks.
 
 ## Evidence
 
@@ -31,9 +36,10 @@ The UI suite:
 - fits the view with the shown clip starting four beats before the edited one and finds the view starting there, the earlier clip's note in view;
 - with Focus off, Shift-clicks the other clip's note, both notes then selected, and raises both a semitone with Up, drags both a beat later and deletes both, each one undo step;
 - turns Focus on with N, finds a click on the other clip's note selecting only that note, and turns it off again;
-- checks that a plain click returns to one clip.
+- checks that a plain click returns to one clip;
+- selects a four-beat and a six-beat Session clip, each with a note at its start, and finds the six-beat clip's note at beats 0 and 6 over a twelve-beat span, the edited clip's own note dimmed at beats 4 and 8, the other clip becoming the edited one with both still shown, and one selected clip editing alone again.
 
 ## Not yet covered
 
-- The reference's per-clip loop bars, its limit of eight clips, and Fold to Notes over every shown clip are missing.
-- Session multi-clip editing is missing.
+- The reference's per-clip loop bars, its limit of eight Arrangement tracks, and Fold to Notes over every shown clip are missing.
+- Neither the shading of each clip's area outside its loop in Session multi-clip editing nor its loop markers on hover is drawn.
