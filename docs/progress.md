@@ -3043,3 +3043,7 @@ Engine and UI areas. As the reference's MIDI Ports do, each input port has a Rem
 ## The sample display's time selection — 2026-10-26
 
 UI and engine areas. After the same reading of the reference's sample display, a warped clip's waveform takes a time selection and an insert marker. Cmd+I inserts warp markers at the transients in the selection (or its edges, or the insert marker), Delete deletes the markers in it, Return selects them, Cmd+L loops the clip over it, and Escape ends it. The menu follows the reference's order with these commands, and Warp Selection as N-Bar Loop plays the selection as a loop at the tempo that fits it (`Session::warpSelectionAsLoop`). UI, tempo analysis and warp suites pass.
+
+## Inputs' Track switches — 2026-10-26
+
+Engine and UI areas. MIDI Ports now shows each input's Track, Sync, Remote and MPE switches in the reference's order. Track, on by default, switched off makes the port play no track, directly or through All MIDI Ins, and takes it from the tracks' input choices, while its mappings still act. MIDI mapping, MIDI input, Capture MIDI, MPE, Mackie, MIDI ports and UI suites pass.

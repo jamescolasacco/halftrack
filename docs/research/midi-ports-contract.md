@@ -108,6 +108,6 @@ Systems that cannot make virtual ports skip it. The UI suite switches an input's
 - Sync delay, and clock loss while playing (the transport plays on at the last tempo).
 - MTC.
 - Ableton Link.
-- MIDI To another track's instrument, the inputs' Track switches, and the outputs' Remote and MPE switches. The inputs' Remote switches are in the [MIDI mapping contract](midi-mapping-contract.md).
+- MIDI To another track's instrument, and the outputs' Remote and MPE switches. The inputs' Track and Remote switches are in the [MIDI mapping contract](midi-mapping-contract.md).
 - The External Instrument device (a stock device, deferred).
 - Physical hardware timing measurements.

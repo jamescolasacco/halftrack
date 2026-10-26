@@ -19664,19 +19664,23 @@ private:
                     switches.push_back (button); return button;
                 };
                 int y = 0;
+                // The reference's columns: a port's name, then its switches.
+                constexpr int nameWidth = 150, column = 52;
+                const auto at = [] (int c) { return nameWidth + c * column + 8; };
                 const auto header = [&] (const juce::String& title, const juce::StringArray& columns)
                 {
-                    addLabel (title, true)->setBounds (0, y, 170, 20);
-                    for (int c = 0; c < columns.size(); ++c) addLabel (columns[c], true)->setBounds (170 + c * 60, y, 60, 20);
+                    addLabel (title, true)->setBounds (0, y, nameWidth, 20);
+                    for (int c = 0; c < columns.size(); ++c) addLabel (columns[c], true)->setBounds (nameWidth + c * column, y, column, 20);
                     y += 22;
                 };
-                header ("Input Ports", { "Sync", "Remote", "MPE" });
+                header ("Input Ports", { "Track", "Sync", "Remote", "MPE" });
                 for (const auto& name : inputs)
                 {
-                    addLabel (name, false)->setBounds (0, y, 170, 22);
-                    addSwitch ("Input sync " + name, [this, name] (bool on) { owner.report (owner.session.setMidiInputSync (name, on)); owner.refresh(); owner.resized(); })->setBounds (178, y, 40, 22);
-                    addSwitch ("Input remote " + name, [this, name] (bool on) { owner.report (owner.session.setMidiInputRemote (name, on)); })->setBounds (238, y, 40, 22);
-                    addSwitch ("Input MPE " + name, [this, name] (bool on) { owner.report (owner.session.setMidiInputMpe (name, on)); })->setBounds (298, y, 40, 22);
+                    addLabel (name, false)->setBounds (0, y, nameWidth, 22);
+                    addSwitch ("Input track " + name, [this, name] (bool on) { owner.report (owner.session.setMidiInputTrack (name, on)); owner.refresh(); })->setBounds (at (0), y, 36, 22);
+                    addSwitch ("Input sync " + name, [this, name] (bool on) { owner.report (owner.session.setMidiInputSync (name, on)); owner.refresh(); owner.resized(); })->setBounds (at (1), y, 36, 22);
+                    addSwitch ("Input remote " + name, [this, name] (bool on) { owner.report (owner.session.setMidiInputRemote (name, on)); })->setBounds (at (2), y, 36, 22);
+                    addSwitch ("Input MPE " + name, [this, name] (bool on) { owner.report (owner.session.setMidiInputMpe (name, on)); })->setBounds (at (3), y, 36, 22);
                     y += 24;
                 }
                 if (inputs.isEmpty()) { addLabel ("No MIDI inputs", false)->setBounds (0, y, 300, 22); y += 24; }
@@ -19684,9 +19688,9 @@ private:
                 header ("Output Ports", { "Track", "Sync" });
                 for (const auto& name : outputs)
                 {
-                    addLabel (name, false)->setBounds (0, y, 170, 22);
-                    addSwitch ("Output track " + name, [this, name] (bool on) { setPort (name, on, std::nullopt); })->setBounds (178, y, 40, 22);
-                    addSwitch ("Output sync " + name, [this, name] (bool on) { setPort (name, std::nullopt, on); })->setBounds (238, y, 40, 22);
+                    addLabel (name, false)->setBounds (0, y, nameWidth, 22);
+                    addSwitch ("Output track " + name, [this, name] (bool on) { setPort (name, on, std::nullopt); })->setBounds (at (0), y, 36, 22);
+                    addSwitch ("Output sync " + name, [this, name] (bool on) { setPort (name, std::nullopt, on); })->setBounds (at (1), y, 36, 22);
                     y += 24;
                 }
                 if (outputs.isEmpty()) { addLabel ("No MIDI outputs", false)->setBounds (0, y, 300, 22); y += 24; }
@@ -19699,6 +19703,7 @@ private:
                 bool on = false;
                 if (name.startsWith ("Input sync ")) on = owner.session.isMidiInputSync (name.fromFirstOccurrenceOf ("Input sync ", false, false));
                 else if (name.startsWith ("Input remote ")) on = owner.session.isMidiInputRemote (name.fromFirstOccurrenceOf ("Input remote ", false, false));
+                else if (name.startsWith ("Input track ")) on = owner.session.isMidiInputTrack (name.fromFirstOccurrenceOf ("Input track ", false, false));
                 else if (name.startsWith ("Input MPE ")) on = owner.session.isMidiInputMpe (name.fromFirstOccurrenceOf ("Input MPE ", false, false));
                 else for (const auto& port : outputPorts)
                 {
@@ -30766,8 +30771,15 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
                     auto* sync = findNamed (setup, "Input sync " + inputs[0]);
                     auto* remote = findNamed (setup, "Input remote " + inputs[0]);
                     auto* mpe = findNamed (setup, "Input MPE " + inputs[0]);
-                    check (sync != nullptr && remote != nullptr && mpe != nullptr && sync->getX() < remote->getX() && remote->getX() < mpe->getX() && ! session.isMidiInputRemote (inputs[0]),
-                           "an input's Remote switch sits between Sync and MPE, off, as the reference's");
+                    auto* track = findNamed (setup, "Input track " + inputs[0]);
+                    check (track != nullptr && sync != nullptr && remote != nullptr && mpe != nullptr && track->getX() < sync->getX() && sync->getX() < remote->getX()
+                               && remote->getX() < mpe->getX() && mpe->getRight() <= setup.getWidth() - 16 && ! session.isMidiInputRemote (inputs[0]) && session.isMidiInputTrack (inputs[0]),
+                           "an input's switches are Track, Sync, Remote and MPE, as the reference's, Track on and Remote off, within the page");
+                    const bool offered = session.inputNames (true).contains (inputs[0]);
+                    setup.sync(); flip ("Input track " + inputs[0]);
+                    check (! session.isMidiInputTrack (inputs[0]) && ! session.inputNames (true).contains (inputs[0]), "switching Track off takes the input from the tracks' choices");
+                    setup.sync(); flip ("Input track " + inputs[0]);
+                    check (session.isMidiInputTrack (inputs[0]) && session.inputNames (true).contains (inputs[0]) == offered, "and on, offers it as before");
                     setup.sync(); flip ("Input remote " + inputs[0]);
                     check (session.isMidiInputRemote (inputs[0]), "switching it on makes the input a remote control");
                     setup.sync(); flip ("Input remote " + inputs[0]);

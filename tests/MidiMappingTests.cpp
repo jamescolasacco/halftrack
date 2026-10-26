@@ -298,6 +298,14 @@ int runMidiMappingTests (const juce::File& artifacts)
             check (live.snapshot().tracks[0].mute && ! live.hasCapturedMidi(), "the mapped note switches the activator and does not reach the track");
             note (60, 100); note (60, 0);
             check (live.hasCapturedMidi(), "an unmapped note still plays the track");
+            // With Track off the input plays no track, though its mappings still act.
+            check (live.isMidiInputTrack (name), "an input's Track switch is on by default, as the reference's is");
+            ok (live.setMidiInputTrack (name, false), "switch the controller's Track off");
+            check (! live.inputNames (true).contains (name), "tracks are not offered it");
+            note (64, 100); note (64, 0);
+            note (62, 100); note (62, 0);
+            check (! live.snapshot().tracks[0].mute, "its mapped note still switches the activator back on");
+            ok (live.setMidiInputTrack (name, true), "switch its Track on again");
             juce::StringArray created;
             ok (live.captureMidi (Session::CaptureDestination::arrangement, created), "capture what the track received");
             const auto snapshot = live.snapshot();

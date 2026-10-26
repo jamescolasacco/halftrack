@@ -1209,6 +1209,10 @@ public:
     // the engine's settings. handleMidiControl and handleMidiNote apply what they are given, whatever its input.
     juce::Result setMidiInputRemote (const juce::String& port, bool remote);
     bool isMidiInputRemote (const juce::String& port) const;
+    // An input port's Track switch, as the reference's (on by default): off, the port plays no track, directly or through
+    // All MIDI Ins, and tracks are not offered it as an input. Kept with the engine's settings.
+    juce::Result setMidiInputTrack (const juce::String& port, bool track);
+    bool isMidiInputTrack (const juce::String& port) const;
     juce::Result setExternalSync (bool);
     bool isExternalSync() const;
     struct ExternalClock { bool receiving = false; double bpm = 0; };

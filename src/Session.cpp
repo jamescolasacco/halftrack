@@ -2988,36 +2988,40 @@ private:
     void valueTreeChildRemoved (juce::ValueTree& parent, juce::ValueTree& child, int) override { if (inPool (parent) || child.hasType (groovePoolType)) restart(); }
 };
 
-// MIDI remote control: every MIDI input of the Edit with its Remote switch on acts as a remote, except the computer
-// keyboard and the inputs that gather others (All MIDI Ins), which each source input already serves. On the
-// input's MIDI thread the remote takes the mapped notes and controllers, and every note and
-// controller while a mapping is being learned, so they stop acting as track input, and copies
-// them into a fixed ring for the message thread, where the Session applies its mappings.
-class MidiRemote final : public te::MidiInputDevice::RemoteControl, private juce::AsyncUpdater
+// MIDI remote control: every MIDI input of the Edit follows its MIDI Ports switches, except the computer keyboard and
+// the inputs that gather others (All MIDI Ins), which each source input already serves. On the input's MIDI thread,
+// with Remote on, the remote takes the mapped notes and controllers, and every note and controller while a mapping is
+// being learned, so they stop acting as track input, and copies them into a fixed ring for the message thread, where the
+// Session applies its mappings. With Track off it takes everything the input sends, so it plays no track.
+class MidiRemote final : private juce::AsyncUpdater
 {
 public:
     using Handler = std::function<void (int channel, int number, int value, bool note, const juce::String& port)>;
+    struct Switches { bool remote = false, track = true; };
     MidiRemote (Handler handler, juce::String keyboardName) : handle (std::move (handler)), computerKeyboard (std::move (keyboardName)) {}
     ~MidiRemote() override { detach(); cancelPendingUpdate(); }
-    // Message thread: serve every MIDI input of the Edit whose Remote switch is on, and only those.
-    void attach (te::Edit* edit, const std::function<bool (const juce::String&)>& remoteOn)
+    // Message thread: serve the MIDI inputs of the Edit with Remote on or Track off, each by a control holding its
+    // switches. The engine stops calling a control it replaces, so the old ones go only after their inputs have others.
+    void attach (te::Edit* edit, const std::function<Switches (const juce::String&)>& switches)
     {
-        std::vector<std::shared_ptr<te::MidiInputDevice>> wanted;
+        std::vector<std::unique_ptr<Port>> next;
         if (edit != nullptr)
             for (auto device : edit->engine.getDeviceManager().getMidiInDevices())
             {
                 const auto* gathering = dynamic_cast<te::VirtualMidiInputDevice*> (device.get());
                 if (device->getName() == computerKeyboard || (gathering != nullptr && (gathering->useAllInputs || ! gathering->getMIDIInputSourceDevices().isEmpty()))) continue;
-                if (! remoteOn (device->getName())) continue;
+                const auto own = switches (device->getName());
+                if (! own.remote && own.track) continue;
                 for (auto* in : edit->getAllInputDevices())
-                    if (&in->getInputDevice() == device.get()) { wanted.push_back (device); break; }
+                    if (&in->getInputDevice() == device.get()) { next.push_back (std::make_unique<Port> (*this, device, own)); break; }
             }
-        for (auto& weak : served)
-            if (auto device = weak.lock(); device != nullptr && std::find (wanted.begin(), wanted.end(), device) == wanted.end()) device->setRemoteControl (nullptr);
-        served.clear();
-        for (auto& device : wanted) { device->setRemoteControl (this); served.push_back (device); }
+        for (auto& port : next) if (auto device = port->device.lock()) device->setRemoteControl (port.get());
+        for (auto& port : ports)
+            if (auto device = port->device.lock())
+                if (std::none_of (next.begin(), next.end(), [&] (const auto& kept) { return kept->device.lock() == device; })) device->setRemoteControl (nullptr);
+        ports = std::move (next);
     }
-    void detach() { for (auto& weak : served) if (auto device = weak.lock()) device->setRemoteControl (nullptr); served.clear(); }
+    void detach() { for (auto& port : ports) if (auto device = port->device.lock()) device->setRemoteControl (nullptr); ports.clear(); }
     // Message thread: the notes and controllers that are mapped, and whether a mapping is being learned.
     void publish (const std::vector<Session::MidiMapping>& mappings, bool isLearning)
     {
@@ -3031,15 +3035,24 @@ public:
         learning.store (isLearning);
     }
 private:
+    // One input's control, with its switches as they were when it was attached.
+    struct Port final : te::MidiInputDevice::RemoteControl
+    {
+        Port (MidiRemote& r, const std::shared_ptr<te::MidiInputDevice>& d, Switches s) : remote (r), device (d), switches (s) {}
+        bool takeMidiMessage (te::MidiInputDevice& input, const juce::MidiMessage& m) override { return remote.take (input, m, switches); }
+        MidiRemote& remote;
+        std::weak_ptr<te::MidiInputDevice> device;
+        const Switches switches;
+    };
     struct Message { int channel = 1, number = 0, value = 0; bool note = false; const te::MidiInputDevice* device = nullptr; };
     static size_t index (bool note, int channel, int number) { return (size_t) ((note ? 16 * 128 : 0) + (channel - 1) * 128 + number); }
-    bool takeMidiMessage (te::MidiInputDevice& device, const juce::MidiMessage& m) override
+    bool take (te::MidiInputDevice& device, const juce::MidiMessage& m, Switches switches)
     {
         const bool note = m.isNoteOnOrOff();
-        if (! note && ! m.isController()) return false;
+        if (! switches.remote || (! note && ! m.isController())) return ! switches.track;
         const int number = note ? m.getNoteNumber() : m.getControllerNumber();
         // A note-off comes here only when its note-on was taken.
-        if (! m.isNoteOff() && ! learning.load() && ! mapped[index (note, m.getChannel(), number)].load (std::memory_order_relaxed)) return false;
+        if (! m.isNoteOff() && ! learning.load() && ! mapped[index (note, m.getChannel(), number)].load (std::memory_order_relaxed)) return ! switches.track;
         {
             const juce::SpinLock::ScopedLockType lock (mutex);
             if (count < ring.size()) ring[(head + count++) % ring.size()] = { m.getChannel(), number, note ? (m.isNoteOn() ? m.getVelocity() : 0) : m.getControllerValue(), note, &device };
@@ -3059,7 +3072,7 @@ private:
         {
             // The input by its name, which outlasts the device object as it comes and goes.
             juce::String port;
-            for (auto& weak : served) if (auto device = weak.lock(); device.get() == batch[i].device) port = device->getName();
+            for (auto& served : ports) if (auto device = served->device.lock(); device.get() == batch[i].device) port = device->getName();
             handle (batch[i].channel, batch[i].number, batch[i].value, batch[i].note, port);
         }
     }
@@ -3070,7 +3083,7 @@ private:
     std::atomic<bool> learning { false };
     Handler handle;
     const juce::String computerKeyboard;
-    std::vector<std::weak_ptr<te::MidiInputDevice>> served;
+    std::vector<std::unique_ptr<Port>> ports;
 };
 
 // Capture MIDI: one per MIDI input instance, timing the notes it receives for the message thread.
@@ -6078,7 +6091,7 @@ struct Session::Impl
     bool mappingCurrent (const juce::ValueTree& m) const
     { return ! m.hasProperty (parameterIdProperty) || externalParameterId (m["target"].toString()) == m[parameterIdProperty].toString(); }
     // The remote serves the Edit's MIDI inputs and takes the mapped notes and controllers.
-    void attachRemote() { remote.attach (edit.get(), [this] (const juce::String& name) { return remoteOn (name); }); publishRemote(); }
+    void attachRemote() { remote.attach (edit.get(), [this] (const juce::String& name) { return MidiRemote::Switches { remoteOn (name), trackOn (name) }; }); publishRemote(); }
     void publishRemote()
     {
         std::vector<Session::MidiMapping> mappings;
@@ -7547,6 +7560,8 @@ struct Session::Impl
     int ticksSinceFollow = 0;
     static juce::String syncItem (const juce::String& port) { return "halftrackSync " + port; }
     static juce::String remoteItem (const juce::String& port) { return "halftrackRemote " + port; }
+    static juce::String trackItem (const juce::String& port) { return "halftrackTrack " + port; }
+    bool trackOn (const juce::String& port) const { return static_cast<bool> (engine.getPropertyStorage().getPropertyItem (te::SettingID::midiin, trackItem (port), true)); }
     bool remoteOn (const juce::String& port) const { return static_cast<bool> (engine.getPropertyStorage().getPropertyItem (te::SettingID::midiin, remoteItem (port), false)); }
     bool syncOn (const juce::String& port) const { return static_cast<bool> (engine.getPropertyStorage().getPropertyItem (te::SettingID::midiin, syncItem (port), false)); }
     void closeClockInputs()
@@ -12696,19 +12711,32 @@ Result Session::setMidiInputSync (const String& port, bool on)
     sendChangeMessage(); return Result::ok();
 }
 bool Session::isMidiInputSync (const String& port) const { return impl->syncOn (port); }
+// An input port, or an input of the engine's own (a virtual one) other than the computer keyboard.
+static bool knownMidiInput (const Session& session, te::Engine& engine, const String& port)
+{
+    if (session.midiInputPorts().contains (port)) return true;
+    for (auto device : engine.getDeviceManager().getMidiInDevices())
+        if (! device->isTrackDevice() && device->getName() == port && port != Session::computerKeyboardName) return true;
+    return false;
+}
 Result Session::setMidiInputRemote (const String& port, bool on)
 {
-    // An input port, or an input of the engine's own (a virtual one) other than the computer keyboard.
-    bool known = midiInputPorts().contains (port);
-    for (auto device : impl->engine.getDeviceManager().getMidiInDevices())
-        if (! device->isTrackDevice() && device->getName() == port && port != computerKeyboardName) known = true;
-    if (! known) return Result::fail ("The MIDI input \"" + port + "\" is not available.");
+    if (! knownMidiInput (*this, impl->engine, port)) return Result::fail ("The MIDI input \"" + port + "\" is not available.");
     if (impl->remoteOn (port) == on) return Result::ok();
     impl->engine.getPropertyStorage().setPropertyItem (te::SettingID::midiin, Impl::remoteItem (port), on);
     impl->attachRemote();
     sendChangeMessage(); return Result::ok();
 }
 bool Session::isMidiInputRemote (const String& port) const { return impl->remoteOn (port); }
+Result Session::setMidiInputTrack (const String& port, bool on)
+{
+    if (! knownMidiInput (*this, impl->engine, port)) return Result::fail ("The MIDI input \"" + port + "\" is not available.");
+    if (impl->trackOn (port) == on) return Result::ok();
+    impl->engine.getPropertyStorage().setPropertyItem (te::SettingID::midiin, Impl::trackItem (port), on);
+    impl->attachRemote();
+    sendChangeMessage(); return Result::ok();
+}
+bool Session::isMidiInputTrack (const String& port) const { return impl->trackOn (port); }
 Result Session::setExternalSync (bool on)
 {
     impl->endNudge();
@@ -17113,8 +17141,9 @@ juce::StringArray Session::inputNames (bool midi) const
     juce::StringArray names;
     if (midi)
     {
+        // An input with Track off plays no track, so tracks are not offered it.
         for (auto device : impl->engine.getDeviceManager().getMidiInDevices())
-            if (!device->isTrackDevice()) names.add (device->getName());
+            if (!device->isTrackDevice() && impl->trackOn (device->getName())) names.add (device->getName());
     }
     else for (auto* device : impl->engine.getDeviceManager().getWaveInputDevices()) names.add (device->getName());
     return names;
