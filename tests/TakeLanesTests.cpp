@@ -1,4 +1,5 @@
 #include "Session.h"
+#include <algorithm>
 #include <set>
 #include <cmath>
 #include <iostream>
@@ -356,7 +357,40 @@ int runTakeLanesTests (const juce::File& artifacts)
             s.undo();
             const auto before = pitchesOf();
             check (before == std::set<int> { 64 }, "one undo takes the overdub back");
+            // The take's notes win over the earlier ones of their key, as recorded notes do in the reference: the
+            // earlier note ends where the take's starts.
+            s.seek (12); ok (s.record(), "record the last pass's key a little later with Arrangement Overdub on");
+            pumpSyntheticTestDevice (s, blocksPerSecond / 4 + blocksPerSecond / 10);
+            ok (s.computerKeyboardNote (64, .8f, true), "play it");
+            pumpSyntheticTestDevice (s, blocksPerSecond / 4);
+            ok (s.computerKeyboardNote (64, 0, false), "release it");
+            pumpSyntheticTestDevice (s, blocksPerSecond);
+            s.stop(); pumpSyntheticTestDevice (s, 8);
+            {
+                const auto track = s.snapshot().tracks[(size_t) keys];
+                std::vector<Session::MidiNoteInfo> same;
+                for (const auto& c : track.clips) for (const auto& n : c.notes) if (n.pitch == 64) same.push_back (n);
+                std::sort (same.begin(), same.end(), [] (const auto& a, const auto& b) { return a.startBeat < b.startBeat; });
+                check (same.size() == 2 && same[0].startBeat + same[0].lengthBeats <= same[1].startBeat + 1e-9 && same[0].lengthBeats < .4 && same[1].lengthBeats > .3,
+                       "the earlier note of the key ends where the take's starts (" + [&] { juce::String d; for (const auto& n : same) d << n.startBeat << "+" << n.lengthBeats << " "; return d.trim(); }() + ")");
+            }
+            s.undo();
             s.setArrangementOverdub (false);
+            {
+                // With it off, a take over the main lane's clip replaces the notes it records over, and is kept in a take lane.
+                const auto lanesBefore = s.snapshot().tracks[(size_t) keys].takeLanes.size();
+                s.seek (12); ok (s.record(), "record over the main lane's clip with Arrangement Overdub off");
+                pumpSyntheticTestDevice (s, blocksPerSecond / 4 + blocksPerSecond / 10);
+                ok (s.computerKeyboardNote (65, .8f, true), "play another key");
+                pumpSyntheticTestDevice (s, blocksPerSecond / 4);
+                ok (s.computerKeyboardNote (65, 0, false), "release it");
+                pumpSyntheticTestDevice (s, blocksPerSecond);
+                s.stop(); pumpSyntheticTestDevice (s, 8);
+                check (pitchesOf() == std::set<int> { 65 } && s.snapshot().tracks[(size_t) keys].takeLanes.size() == lanesBefore + 1,
+                       "the take replaces the notes it records over and gets a take lane of its own");
+                s.undo();
+                check (pitchesOf() == std::set<int> { 64 } && s.snapshot().tracks[(size_t) keys].takeLanes.size() == lanesBefore, "one undo takes it back");
+            }
             ok (s.setTrackArmed (keys, false), "disarm Keys");
         }
         std::cout << "Take lanes passed: " << root.getFullPathName() << std::endl; return 0;

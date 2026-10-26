@@ -61,7 +61,7 @@ Each capability with partial implementation (a PARTIAL row of the [capability le
 | MID-003 | note-chance, ui |  |
 | MID-004 | ui |  |
 | MID-005 | midi-controllers |  |
-| MID-006 | session, stuck-notes |  |
+| MID-006 | note-overlaps, session, session-record, stuck-notes, take-lanes |  |
 | MID-007 | midi-tools |  |
 | MID-008 | midi-tools |  |
 | MID-009 | mpe, ui |  |

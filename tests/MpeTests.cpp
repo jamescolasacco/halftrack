@@ -133,8 +133,9 @@ int runMpeTests (const juce::File& artifacts)
         check (s.setMidiNoteExpression (clipId, bendId, Expression::pressure, { { 1, .5f }, { .5, .2f } }).failed(), "unordered points are refused");
         check (s.setMidiNoteExpression (clipId, "nothing", Expression::pressure, { { 0, .5f } }).failed() && notes()[0].pitchBend == octave, "an unknown note is refused");
 
-        // Copies keep their expression; saved and reopened, and a malformed file refused.
-        auto copy = notes()[0]; copy.startBeat = 4; copy.lengthBeats = 2;
+        // Copies keep their expression; saved and reopened, and a malformed file refused. The copy goes on G4 to sound with
+        // the note: on C4 it would cut the note short, as an added note does.
+        auto copy = notes()[0]; copy.pitch = 67; copy.startBeat = 4; copy.lengthBeats = 2;
         ok (s.addMidiNotes (clipId, { copy }, ids), "copy the note");
         check (notes().size() == 2 && notes()[1].pitchBend == octave, "the copy keeps the bend");
         ok (s.setMidiNoteExpression (clipId, notes()[0].id, Expression::slide, { { 0, .25f } }), "give it a slide");

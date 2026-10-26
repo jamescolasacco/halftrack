@@ -100,6 +100,17 @@ int runSessionRecordTests (const juce::File& artifacts)
         s.undo();
         check (slot (keys, 0).clip.notes.size() == 1 && slot (keys, 0).clip.notes[0].pitch == 60, "one undo removes the overdub");
         s.redo();
+        // A note overdubbed over one of its key wins, as recorded notes do in the reference: the earlier ends where it starts.
+        ok (s.sessionRecord (0), "overdub again");
+        for (int i = 0; i < 800 && std::abs (slot (keys, 0).playPositionBeats - (at + .2)) > .02; ++i) pumpSyntheticTestDevice (s, 1);
+        controller.play (64, .25);
+        pumpSyntheticTestDevice (s, blocksPerSecond / 2);
+        ok (s.sessionRecord (0), "stop overdubbing");
+        notes = sorted (slot (keys, 0).clip.notes);
+        check (notes.size() == 3 && notes[1].pitch == 64 && notes[2].pitch == 64 && notes[1].startBeat + notes[1].lengthBeats <= notes[2].startBeat + 1e-9
+                   && notes[1].lengthBeats < .3 && notes[2].lengthBeats > .3,
+               "the earlier note of the key ends where the overdubbed one starts (" + juce::String ((int) notes.size()) + " notes)");
+        s.undo();
 
         // A stopped clip launches to overdub, beside a new audio take.
         s.stop();

@@ -1056,7 +1056,15 @@ public:
     static std::vector<std::pair<juce::String, ClipQuantisation>> clipQuantisations();
     juce::Result addMidiNote (const juce::String& clipId, int pitch, double startBeat, double lengthBeats, float velocity);
     // Input IDs are ignored. Successful insertion replaces insertedIds in input order; failure leaves it unchanged.
-    juce::Result addMidiNotes (const juce::String& clipId, const std::vector<MidiNoteInfo>& notes, juce::StringArray& insertedIds);
+    // The added notes win over notes of the same pitch they overlap, as the reference's do (see setSelectedNotes),
+    // unless winOverlaps is false (a copy drag's copies, left where the dragged notes were).
+    juce::Result addMidiNotes (const juce::String& clipId, const std::vector<MidiNoteInfo>& notes, juce::StringArray& insertedIds, bool winOverlaps = true);
+    // The editor's selection of a MIDI clip's notes. As in the reference (static reading; see the note overlaps
+    // contract), notes added or edited win over the notes of the same pitch they overlap: a note starting before one
+    // and sounding past its start ends there, and one starting at or inside it goes. While the same notes stay selected
+    // and are edited again, what they cut short or took away comes back first, and deleting them brings it back; a
+    // change of this selection, any other edit, and undo keep what was resolved.
+    void setSelectedNotes (const juce::String& clipId, const juce::StringArray& noteIds);
     juce::Result updateMidiNote (const juce::String& clipId, const juce::String& noteId,
                                  int pitch, double startBeat, double lengthBeats, float velocity);
     juce::Result updateMidiNotes (const juce::String& clipId, const std::vector<MidiNoteInfo>& notes);

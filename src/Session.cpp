@@ -3242,7 +3242,13 @@ struct Session::Impl
         if (undo.getCurrentTransactionName() != "Overdub") transaction ("Overdub");
         auto* added = clip->getSequence().addNote (m.getNoteNumber(), te::BeatPosition::fromBeats (note.position), te::BeatDuration::fromBeats (duration),
                                                   juce::jlimit (1, 127, juce::roundToInt (note.velocity * 127)), 0, &undo);
-        if (added != nullptr) added->state.setProperty (midiNoteIDProperty, juce::Uuid().toString(), &undo);
+        if (added != nullptr)
+        {
+            const auto id = juce::Uuid().toString();
+            added->state.setProperty (midiNoteIDProperty, id, &undo);
+            // The recorded note wins over the clip's notes of its pitch it overlaps, as the reference's recording does.
+            resolveOverlaps (*clip, { id }, &undo); floating.erase (clip->itemID.toString());
+        }
         changed();
     }
     te::Scene* scene (const String& id) const
@@ -4857,9 +4863,69 @@ struct Session::Impl
         // Any other edit ends a controller's gesture, so it is an undo step of its own.
         if (remoteGesture && ! applyingRemote) { remoteGesture = false; owner.endEditGesture(); }
         flushStructuralUpdates();
+        if (! keepFloating) floating.clear(); // Any other edit ends the floating notes' sessions.
         if (! gesture && ! composite) edit->getUndoManager().beginNewTransaction (name);
     }
     bool composite = false; // A command made of other edits keeps them in its one undo step.
+    // Same-pitch overlaps, resolved as the reference resolves them (static reading; see the note overlaps contract): per
+    // pitch, the notes just added or edited (the floating notes) win. A note of the same pitch starting before one and
+    // sounding past its start ends there, losing its tail; one starting at or after its start and before its end goes,
+    // as one starting with it does. Notes that only touch do not overlap. While the same floating notes are edited
+    // again, what an earlier edit cut short or took away comes back first, so a note dragged across another leaves it
+    // as it was; deleting them brings it back too. Any other edit, undo, and a change of the editor's selection
+    // (setSelectedNotes) end that, keeping what was resolved.
+    struct FloatingNotes
+    {
+        std::set<String> ids;
+        std::vector<juce::ValueTree> removed;             // The states of the notes taken away.
+        std::vector<std::pair<String, double>> shortened; // Notes cut short, with their lengths before.
+    };
+    std::map<String, FloatingNotes> floating; // By clip id.
+    bool keepFloating = false;                // While a floating edit starts its transaction.
+    static String noteIdOf (const te::MidiNote& note) { return note.state.getProperty (midiNoteIDProperty).toString(); }
+    // Puts back what a floating session cut short or took away.
+    static void restoreFloating (te::MidiClip& clip, const FloatingNotes& session, juce::UndoManager* undo)
+    {
+        auto& sequence = clip.getSequence();
+        for (const auto& [id, length] : session.shortened)
+            for (auto* note : sequence.getNotes())
+                if (noteIdOf (*note) == id) { note->setStartAndLength (note->getStartBeat(), te::BeatDuration::fromBeats (length), undo); break; }
+        for (const auto& state : session.removed) sequence.state.addChild (state.createCopy(), -1, undo);
+    }
+    void resolveOverlaps (te::MidiClip& clip, const std::set<String>& ids, juce::UndoManager* undo)
+    {
+        const auto clipId = clip.itemID.toString();
+        if (const auto found = floating.find (clipId); found != floating.end() && found->second.ids == ids) restoreFloating (clip, found->second, undo);
+        auto& session = floating[clipId];
+        session = { ids, {}, {} };
+        if (ids.empty()) return;
+        auto& sequence = clip.getSequence();
+        std::map<int, std::vector<te::MidiNote*>> winners, others;
+        for (auto* note : sequence.getNotes()) (ids.count (noteIdOf (*note)) != 0 ? winners : others)[note->getNoteNumber()].push_back (note);
+        for (auto& [pitch, mine] : winners)
+        {
+            const auto ground = others.find (pitch);
+            if (ground == others.end()) continue;
+            std::sort (mine.begin(), mine.end(), [] (const te::MidiNote* a, const te::MidiNote* b) { return a->getStartBeat() < b->getStartBeat(); });
+            for (auto* note : ground->second)
+            {
+                const auto start = note->getStartBeat().inBeats(), end = start + note->getLengthBeats().inBeats();
+                for (const auto* winner : mine)
+                {
+                    const auto from = winner->getStartBeat().inBeats(), to = from + winner->getLengthBeats().inBeats();
+                    if (to <= start || from >= end) continue;
+                    // Halftrack's notes last at least a 960th of a beat, so one cut shorter goes instead.
+                    if (start >= from || from - start < 1.0 / 960) { session.removed.push_back (note->state.createCopy()); sequence.removeNote (*note, undo); }
+                    else
+                    {
+                        session.shortened.push_back ({ noteIdOf (*note), note->getLengthBeats().inBeats() });
+                        note->setStartAndLength (note->getStartBeat(), te::BeatDuration::fromBeats (from - start), undo);
+                    }
+                    break;
+                }
+            }
+        }
+    }
     // The audio output a track plays to directly, other than the master's, if any.
     String externalOutput (const te::AudioTrack& t) const { return externalOutput (t.getOutput()); }
     String externalOutput (const te::TrackOutput& output) const
@@ -5747,6 +5813,14 @@ struct Session::Impl
             if (splittableAt (t, at).wasOk()) splitTrackAt (t, at, undo);
         const auto clips = t.getClips(); // Removing clips changes the track's list.
         auto* into = merge ? dynamic_cast<te::MidiClip*> (&above) : nullptr;
+        // The take's own notes win over the earlier notes it takes in, as recorded notes do in the reference.
+        std::set<String> recorded;
+        if (into != nullptr)
+            for (auto* note : into->getSequence().getNotes())
+            {
+                if (noteIdOf (*note).isEmpty()) note->state.setProperty (midiNoteIDProperty, juce::Uuid().toString(), undo);
+                recorded.insert (noteIdOf (*note));
+            }
         for (auto* c : clips)
             if (c != &above && c->getClipSlot() == nullptr && earlier.count (c->itemID.toString()) != 0
                 && c->getPosition().getStart() >= range.getStart() - te::TimeDuration::fromSeconds (1e-6) && c->getPosition().getEnd() <= range.getEnd() + te::TimeDuration::fromSeconds (1e-6))
@@ -5756,14 +5830,20 @@ struct Session::Impl
                     // Where each plays, in the take's own beats: both start their content at their starts.
                     const auto shift = (beneath->getStartBeat() - beneath->getOffsetInBeats()) - (into->getStartBeat() - into->getOffsetInBeats());
                     auto& sequence = into->getSequence();
+                    // Whole notes, with their release velocity, chance and expression, under fresh identities.
                     for (auto* note : beneath->getSequence().getNotes())
-                        if (auto* added = sequence.addNote (note->getNoteNumber(), note->getStartBeat() + shift, note->getLengthBeats(), note->getVelocity(), note->getColour(), undo))
-                        { added->setMute (note->isMute(), undo); added->state.setProperty (midiNoteIDProperty, juce::Uuid().toString(), undo); }
+                    {
+                        auto copy = note->state.createCopy();
+                        copy.setProperty (te::IDs::b, (note->getStartBeat() + shift).inBeats(), nullptr);
+                        copy.setProperty (midiNoteIDProperty, juce::Uuid().toString(), nullptr);
+                        sequence.state.addChild (copy, -1, undo);
+                    }
                     for (auto* event : beneath->getSequence().getControllerEvents())
                         sequence.addControllerEvent (event->getBeatPosition() + shift, event->getType(), event->getControllerValue(), event->getMetadata(), undo);
                 }
                 c->removeFromParent();
             }
+        if (into != nullptr && ! recorded.empty()) { resolveOverlaps (*into, recorded, undo); floating.erase (into->itemID.toString()); }
     }
     // A recorded pass goes into the first take lane with nothing at or after its start, or a new one.
     void keepTake (te::AudioTrack& t, te::Clip& recorded)
@@ -10658,7 +10738,7 @@ Result Session::addMidiNote (const String& clipId, int pitch, double start, doub
     juce::StringArray insertedIds;
     return addMidiNotes (clipId, { { {}, pitch, start, length, velocity } }, insertedIds);
 }
-Result Session::addMidiNotes (const String& clipId, const std::vector<MidiNoteInfo>& notes, juce::StringArray& insertedIds)
+Result Session::addMidiNotes (const String& clipId, const std::vector<MidiNoteInfo>& notes, juce::StringArray& insertedIds, bool winOverlaps)
 {
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
     auto* clip = impl->midiClip (clipId); if (! clip) return Result::fail ("MIDI clip not found.");
@@ -10706,8 +10786,14 @@ Result Session::addMidiNotes (const String& clipId, const std::vector<MidiNoteIn
                 writeNoteExpression (note->state, kind, points, undo);
     }
     updateMpeMode (*clip);
+    if (winOverlaps) impl->resolveOverlaps (*clip, std::set<String> (newIds.begin(), newIds.end()), undo);
     insertedIds = std::move (newIds);
     impl->changed(); return Result::ok();
+}
+void Session::setSelectedNotes (const String& clipId, const juce::StringArray& noteIds)
+{
+    const auto found = impl->floating.find (clipId);
+    if (found != impl->floating.end() && found->second.ids != std::set<String> (noteIds.begin(), noteIds.end())) impl->floating.erase (found);
 }
 Result Session::updateMidiNote (const String& clipId, const String& noteId, int pitch, double start, double length, float velocity)
 {
@@ -10746,7 +10832,7 @@ Result Session::updateMidiNotes (const String& clipId, const std::vector<MidiNot
     }
     // Resolve and validate the whole batch before touching native state or undo.
     if (changes.empty()) return Result::ok();
-    impl->transaction ("Edit MIDI notes");
+    { const juce::ScopedValueSetter<bool> keep (impl->keepFloating, true); impl->transaction ("Edit MIDI notes"); }
     auto* undo = &impl->edit->getUndoManager();
     for (const auto& change : changes)
     {
@@ -10755,6 +10841,7 @@ Result Session::updateMidiNotes (const String& clipId, const std::vector<MidiNot
                                         te::BeatDuration::fromBeats (change.value.lengthBeats), undo);
         change.note->setVelocity (change.velocity, undo);
     }
+    impl->resolveOverlaps (*clip, requested, undo);
     impl->changed(); return Result::ok();
 }
 Result Session::setMidiNotesActive (const String& clipId, const juce::StringArray& ids, bool active)
@@ -10780,7 +10867,12 @@ Result Session::setMidiNotesActive (const String& clipId, const juce::StringArra
         if (found->second->isMute() == active) changes.push_back (found->second);
     }
     if (changes.empty()) return Result::ok();
-    impl->transaction (active ? "Activate MIDI notes" : "Deactivate MIDI notes");
+    {
+        // Muted floating notes still win, as the reference's do, so (de)activating them keeps their session.
+        const auto found = impl->floating.find (clipId);
+        const juce::ScopedValueSetter<bool> keep (impl->keepFloating, found != impl->floating.end() && found->second.ids == requested);
+        impl->transaction (active ? "Activate MIDI notes" : "Deactivate MIDI notes");
+    }
     for (auto* note : changes) note->setMute (!active, &impl->edit->getUndoManager());
     impl->changed();
     return Result::ok();
@@ -11028,6 +11120,58 @@ std::optional<Session::NoteToolContext> Session::noteToolContext (const String& 
         }
     return context;
 }
+namespace
+{
+// Quantize's own rule among the notes it moves (static reading of the reference; see the note overlaps contract): per
+// pitch in start order, of two notes where one holds the other the longer stays (the later when they are as long),
+// and where they only overlap the earlier ends where the later starts. `removed` gets the notes that go.
+std::vector<Session::MidiNoteInfo> quantizedOverlaps (std::vector<Session::MidiNoteInfo> notes, std::set<String>& removed)
+{
+    std::stable_sort (notes.begin(), notes.end(), [] (const auto& a, const auto& b) { return a.pitch != b.pitch ? a.pitch < b.pitch : a.startBeat < b.startBeat; });
+    std::vector<Session::MidiNoteInfo> kept;
+    for (const auto& m : notes)
+    {
+        if (kept.empty() || kept.back().pitch != m.pitch) { kept.push_back (m); continue; }
+        auto& p = kept.back();
+        const auto pEnd = p.startBeat + p.lengthBeats, mEnd = m.startBeat + m.lengthBeats;
+        if ((p.startBeat <= m.startBeat && mEnd <= pEnd) || (m.startBeat <= p.startBeat && pEnd <= mEnd))
+        {
+            if (p.lengthBeats > m.lengthBeats) removed.insert (m.id);
+            else { removed.insert (p.id); p = m; }
+        }
+        else if (p.startBeat < mEnd && m.startBeat < pEnd)
+        {
+            // Halftrack's notes last at least a 960th of a beat, so one cut shorter goes.
+            if (m.startBeat - p.startBeat < 1.0 / 960) { removed.insert (p.id); p = m; }
+            else { p.lengthBeats = m.startBeat - p.startBeat; kept.push_back (m); }
+        }
+        else kept.push_back (m);
+    }
+    return kept;
+}
+// A tool's notes put in one after another in (start, pitch) order, each winning over the earlier ones of its pitch it
+// overlaps, as the reference's note buffer takes them (static reading).
+std::vector<Session::MidiNoteInfo> insertedInOrder (const std::vector<Session::MidiNoteInfo>& notes)
+{
+    std::map<int, std::vector<Session::MidiNoteInfo>> byPitch;
+    for (const auto& n : notes)
+    {
+        auto& list = byPitch[n.pitch];
+        const auto end = n.startBeat + n.lengthBeats;
+        std::erase_if (list, [&] (const auto& e) { return e.startBeat >= n.startBeat && e.startBeat < end; });
+        if (! list.empty() && list.back().startBeat + list.back().lengthBeats > n.startBeat)
+        {
+            if (n.startBeat - list.back().startBeat < 1.0 / 960) list.pop_back();
+            else list.back().lengthBeats = n.startBeat - list.back().startBeat;
+        }
+        list.push_back (n);
+    }
+    std::vector<Session::MidiNoteInfo> result;
+    for (auto& [pitch, list] : byPitch) result.insert (result.end(), list.begin(), list.end());
+    std::stable_sort (result.begin(), result.end(), [] (const auto& a, const auto& b) { return a.startBeat != b.startBeat ? a.startBeat < b.startBeat : a.pitch < b.pitch; });
+    return result;
+}
+}
 Result Session::applyNoteTool (const String& clipId, const juce::StringArray& ids, const NoteToolSettings& settings, juce::StringArray& resultIds, double gridBeats,
                                std::optional<std::pair<double, double>> timeRange)
 {
@@ -11063,18 +11207,25 @@ Result Session::applyNoteTool (const String& clipId, const juce::StringArray& id
         // Quantize and Time Warp move the notes themselves, so they keep their identities, chance and expression.
         for (const auto& note : result)
             if (auto valid = impl->validateNote (*clip, note.pitch, note.startBeat, note.lengthBeats, note.velocity); valid.failed()) return valid;
+        // Quantize first settles the notes it moved among themselves, by its own rule.
+        std::set<String> dropped;
+        const auto settled = settings.tool == NoteTool::quantize ? quantizedOverlaps (result, dropped) : result;
         impl->transaction (String (notetools::name (settings.tool)));
         auto* undo = &impl->edit->getUndoManager();
         std::map<String, const MidiNoteInfo*> moved;
-        for (const auto& note : result) moved[note.id] = &note;
+        for (const auto& note : settled) moved[note.id] = &note;
         resultIds.clear();
+        std::set<String> kept;
         for (auto* note : originals)
         {
             const auto id = note->state.getProperty (midiNoteIDProperty).toString();
+            if (dropped.count (id) != 0) { clip->getSequence().removeNote (*note, undo); continue; }
             if (const auto found = moved.find (id); found != moved.end())
                 note->setStartAndLength (te::BeatPosition::fromBeats (found->second->startBeat), te::BeatDuration::fromBeats (found->second->lengthBeats), undo);
-            resultIds.add (id);
+            resultIds.add (id); kept.insert (id);
         }
+        // Then they win over the other notes of their pitches, for good: the tool's edit ends there.
+        impl->resolveOverlaps (*clip, kept, undo); impl->floating.erase (clipId);
         impl->changed(); return Result::ok();
     }
     // A tool that passes the chosen notes through (Shape with no keys to play, say) changes nothing.
@@ -11083,21 +11234,29 @@ Result Session::applyNoteTool (const String& clipId, const juce::StringArray& id
         resultIds = ids;
         return Result::ok();
     }
-    // Rhythm also clears the notes of its key that start in the range, as the reference's does.
-    juce::Array<te::MidiNote*> cleared = originals;
+    // Rhythm also clears its key in the range, as the reference's does (static reading): a note sounding into the range
+    // from before ends at its start, and one starting inside it goes.
+    juce::Array<te::MidiNote*> cleared = originals, shortened;
     if (settings.tool == NoteTool::rhythm)
         for (auto* note : clip->getSequence().getNotes())
-            if (const auto start = note->getStartBeat().inBeats(); note->getNoteNumber() == (int) settings.values[7] && start >= context.start && start < context.end && ! cleared.contains (note))
-                cleared.add (note);
-    if (result.size() > 16384 || clip->getSequence().getNumNotes() - cleared.size() + (int) result.size() > 100000)
+            if (const auto start = note->getStartBeat().inBeats(), end = start + note->getLengthBeats().inBeats();
+                note->getNoteNumber() == (int) settings.values[7] && end > context.start && start < context.end && ! cleared.contains (note))
+            {
+                if (start < context.start && context.start - start >= 1.0 / 960) shortened.add (note);
+                else cleared.add (note);
+            }
+    // The tool's notes go in one after another, each winning over the earlier ones of its pitch it overlaps.
+    const auto placed = insertedInOrder (result);
+    if (placed.size() > 16384 || clip->getSequence().getNumNotes() - cleared.size() + (int) placed.size() > 100000)
         return Result::fail ("The result has too many notes.");
-    for (const auto& note : result)
+    for (const auto& note : placed)
         if (auto valid = impl->validateNote (*clip, note.pitch, note.startBeat, note.lengthBeats, note.velocity); valid.failed()) return valid;
     impl->transaction (String (notetools::name (settings.tool)));
     auto* undo = &impl->edit->getUndoManager();
     for (auto* note : cleared) clip->getSequence().removeNote (*note, undo);
+    for (auto* note : shortened) note->setStartAndLength (note->getStartBeat(), te::BeatDuration::fromBeats (context.start - note->getStartBeat().inBeats()), undo);
     resultIds.clear();
-    for (const auto& value : result)
+    for (const auto& value : placed)
     {
         auto* note = clip->getSequence().addNote (value.pitch, te::BeatPosition::fromBeats (value.startBeat), te::BeatDuration::fromBeats (value.lengthBeats),
                                                  juce::jlimit (1, 127, juce::roundToInt (value.velocity * 127)), 0, undo);
@@ -11108,6 +11267,8 @@ Result Session::applyNoteTool (const String& clipId, const juce::StringArray& id
         if (value.releaseVelocity != 0) note->setNoteOffVelocity (juce::jlimit (0, 127, value.releaseVelocity), undo);
         resultIds.add (id);
     }
+    // They win over the other notes of their pitches, for good: the tool's edit ends there.
+    impl->resolveOverlaps (*clip, std::set<String> (resultIds.begin(), resultIds.end()), undo); impl->floating.erase (clipId);
     impl->changed(); return Result::ok();
 }
 const char* Session::scaleModeName (int mode) noexcept
@@ -11390,8 +11551,12 @@ Result Session::removeMidiNotes (const String& clipId, const juce::StringArray& 
             return Result::fail ("MIDI note not found or its identifier is ambiguous.");
         targets.push_back (found->second);
     }
+    // Deleting the floating notes brings back what they cut short or took away, as the reference's delete does.
+    std::optional<Impl::FloatingNotes> session;
+    if (const auto found = impl->floating.find (clipId); found != impl->floating.end() && found->second.ids == requested) session = found->second;
     impl->transaction (targets.size() == 1 ? "Remove MIDI note" : "Remove MIDI notes");
     for (auto* note : targets) clip->getSequence().removeNote (*note, &impl->edit->getUndoManager());
+    if (session) Impl::restoreFloating (*clip, *session, &impl->edit->getUndoManager());
     impl->changed(); return Result::ok();
 }
 Result Session::setSynthSettings (const String& trackId, const SynthSettings& settings)
@@ -15731,6 +15896,13 @@ void Session::finishRecording (bool stopTransport)
     // so the inputs are stopped unlooped here first.
     const auto loopRecording = recording ? impl->loopRecording : std::nullopt;
     impl->loopRecording.reset();
+    // The engine would merge a MIDI take into a clip it overlaps. Each take stays a clip of its own instead, kept in a take
+    // lane, and replaces or (with Arrangement Overdub) merges what it records over below (replaceUnder), so the engine's
+    // merging is off while it finishes the takes. Left on while recording, it keeps the track's clips playing.
+    std::vector<std::pair<std::shared_ptr<te::MidiInputDevice>, bool>> merging;
+    if (recording)
+        for (auto& device : impl->engine.getDeviceManager().getMidiInDevices())
+            if (device != nullptr) { merging.push_back ({ device, device->mergeRecordings }); device->mergeRecordings = false; }
     if (stopTransport)
     {
         if (loopRecording) transport.looping.setValue (false, nullptr);
@@ -15751,6 +15923,7 @@ void Session::finishRecording (bool stopTransport)
         }
         transport.stopRecording (false);
     }
+    for (const auto& [device, merge] : merging) device->mergeRecordings = merge;
     if (recording)
     {
         const auto grid=snapshot().recordQuantisation;
@@ -16399,6 +16572,7 @@ void Session::undo()
     const auto monitored=impl->monitoredMidiTracks();const auto clips=impl->clipActivationStates(); const auto follows=impl->followStates();
     impl->resetTapTempo();
     const auto automated = impl->automatedPluginParameters();
+    impl->floating.clear(); // As the reference's undo deselects every note, ending the floating notes' sessions.
     endEditGesture(); closePluginEditors(); impl->edit->getUndoManager().undo(); impl->refreshClipActivation(clips); impl->refreshFollowActions(follows); impl->refreshParameterValues();
     impl->restoreManualPluginValues (automated); // Plug-in parameters whose automation went return to their values set by hand.
     impl->applyCue(); // A cue volume or switch undone, in either mode.
@@ -16414,6 +16588,7 @@ void Session::redo()
     const auto monitored=impl->monitoredMidiTracks();const auto clips=impl->clipActivationStates(); const auto follows=impl->followStates();
     impl->resetTapTempo();
     const auto automated = impl->automatedPluginParameters();
+    impl->floating.clear();
     endEditGesture(); closePluginEditors();
     {
         auto& history = impl->edit->getUndoManager();

@@ -8,6 +8,9 @@ Halftrack's take lanes follow the reference's [comping chapter](https://www.able
 - **Recording.** Stopping an Arrangement recording, for each pass on an armed track:
   - keeps a copy, with fresh identities, in the first take lane holding nothing at or after the pass's start, or in a new lane named "Take N";
   - replaces the main lane's earlier material under the pass, splitting it at the pass's edges. With Options > Arrangement Overdub on, a MIDI pass first takes the notes and controller points of the MIDI clips beneath it, so they play on with the new notes, as the reference's Arrangement Overdub merges MIDI (`Session::arrangementOverdub`, kept with the project, off at first). The control bar's MIDI Arrangement Overdub switch, a plus between Record and Automation Arm as in the reference, shows and sets it too.
+    - The notes taken in keep everything but their identities: release velocity, chance and expression come too. The pass's own notes win over them where they overlap on a key, as recorded notes do ([note overlaps contract](note-overlaps-contract.md)).
+    - The reference's manual says that with overdub on, "new MIDI clips contain a mix" of the track's material and the new input (section 19.3.1, read 2026-10-25), and that recording over clips adds a take lane for each pass (section 21.3).
+    - Until 2026-10-25 the engine merged a single MIDI take into the clip it overlapped, keeping no take and replacing nothing, with Arrangement Overdub off as well. That merging is now off while takes finish.
 
   Both are part of the take's undo step.
 - **Comping.** `compTake (laneId, start, end)` splits the main lane at the range's edges, removes its material inside, and copies each lane clip's part of the range into it at its own timing (start and offset adjusted). The copies record their source lane. It is one undo step.
@@ -34,7 +37,11 @@ Halftrack's take lanes follow the reference's [comping chapter](https://www.able
 - cycling back from a fresh pass reaching Take 1, and one undo restoring Take 2;
 - both takes in use, an inserted empty lane unused and deleted alone, and two undo steps restoring it and undoing the insert;
 - inserting, renaming, deleting and undoing lanes;
-- that saving puts every take's audio in the assets and the lanes reopen with it.
+- that saving puts every take's audio in the assets and the lanes reopen with it;
+- with Arrangement Overdub on, a MIDI take keeping the notes beneath it, and a note recorded on a key a little after an earlier note there cutting that note where it starts;
+- with it off, a single MIDI take over the main lane's clip replacing its notes and getting a take lane, one undo taking it back.
+
+The MIDI input suite overdubs a recorded controller stream with Arrangement Overdub on and checks that the new clip holds the earlier note with its release velocity, that one undo brings the earlier clip back, and that removing the new note leaves the earlier events byte for byte.
 
 Auditioning, captured from the synthetic device's output with the track disarmed, is also checked:
 

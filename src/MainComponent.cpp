@@ -8910,7 +8910,25 @@ private:
             scaleButton.setToggleState (scale.enabled, juce::dontSendNotification);
             scaleRoot.setSelectedId (scale.root + 1, juce::dontSendNotification); scaleMode.setSelectedId (scale.mode + 1, juce::dontSendNotification);
             for (auto* c : std::initializer_list<juce::Component*> { &scaleButton, &scaleRoot, &scaleMode }) c->setEnabled (active);
+            reportSelection();
             updateScroll(); repaint(); laneView.repaint();
+        }
+        // The selection, by clip, told to the Session, whose edits of the selected notes resolve overlaps as one session
+        // while it lasts (see Session::setSelectedNotes).
+        std::map<juce::String, std::set<juce::String>> reportedSelection;
+        void reportSelection()
+        {
+            std::map<juce::String, std::set<juce::String>> now;
+            if (const auto* clip = owner.currentMidiClip())
+            {
+                for (const auto& note : clip->notes) if (selectedNoteIds.contains (note.id)) now[clip->id].insert (note.id);
+                for (const auto* other : owner.extraMidiClips()) for (const auto& note : other->notes) if (selectedNoteIds.contains (note.id)) now[other->id].insert (note.id);
+            }
+            const auto tell = [this] (const juce::String& clipId, const std::set<juce::String>& ids)
+            { juce::StringArray list; for (const auto& id : ids) list.add (id); owner.session.setSelectedNotes (clipId, list); };
+            for (const auto& [clipId, ids] : now) if (const auto was = reportedSelection.find (clipId); was == reportedSelection.end() || was->second != ids) tell (clipId, ids);
+            for (const auto& [clipId, ids] : reportedSelection) if (now.count (clipId) == 0) tell (clipId, {});
+            reportedSelection = std::move (now);
         }
         void zoom (double factor)
         {
@@ -9408,7 +9426,8 @@ private:
                 auto copies = originalNotes;
                 for (auto& note : copies) note.id.clear();
                 juce::StringArray inserted;
-                owner.report (owner.session.addMidiNotes (dragClipId, copies, inserted));
+                // Left where the dragged notes were, the copies keep out of the way until those move off them.
+                owner.report (owner.session.addMidiNotes (dragClipId, copies, inserted, false));
             }
             double beatDelta = (e.x - dragOrigin.x) / pixelsPerBeat;
             if (resizeNote)
@@ -9427,7 +9446,15 @@ private:
                 if (minimum > maximum || ! std::isfinite (minimum) || ! std::isfinite (maximum)) return;
                 const auto lengthDelta = juce::jlimit (minimum, maximum, length - original.lengthBeats);
                 auto notes = originalNotes;
-                for (auto& note : notes) note.lengthBeats += lengthDelta;
+                for (size_t i = 0; i < notes.size(); ++i)
+                {
+                    auto& note = notes[i];
+                    note.lengthBeats += lengthDelta;
+                    // A lengthened note stops at the next selected note of its pitch, as the reference's does.
+                    const auto end = originalNotes[i].startBeat + originalNotes[i].lengthBeats;
+                    for (const auto& next : originalNotes)
+                        if (next.pitch == note.pitch && next.startBeat >= end) note.lengthBeats = juce::jmin (note.lengthBeats, next.startBeat - note.startBeat);
+                }
                 updateNotes (dragClipId, notes, "Resize MIDI notes");
             }
             else
@@ -10538,7 +10565,7 @@ private:
         }
         // Draw Mode's drawing, after the reference's: a note on each grid step from the first one to the
         // pointer's, at the pitch the pointer had on it, or with Alt all at the first note's pitch. Steps
-        // the pointer goes back over lose their notes, and a drawn note replaces those it covers at its pitch.
+        // the pointer goes back over lose their notes, and a drawn note wins over those it overlaps at its pitch.
         void drawNotes (const juce::MouseEvent& e, bool first)
         {
             const auto* clip = owner.currentMidiClip();
@@ -10584,13 +10611,9 @@ private:
             const auto length = juce::jmin (grid, contentEndBeat (clip) - start);
             const auto found = drawn.find (step);
             if (found != drawn.end() && found->second.second == pitch) return;
-            juce::StringArray replaced;
-            if (found != drawn.end()) { replaced.add (found->second.first); drawn.erase (found); }
-            for (const auto& note : clip.notes)
-                if (note.pitch == pitch && note.startBeat < start + length - 1.0e-9 && note.startBeat + note.lengthBeats > start + 1.0e-9 && ! replaced.contains (note.id)
-                    && std::none_of (drawn.begin(), drawn.end(), [&] (const auto& d) { return d.second.first == note.id; }))
-                    replaced.add (note.id);
-            if (! replaced.isEmpty()) owner.report (owner.session.removeMidiNotes (clip.id, replaced));
+            // The note drawn on this step at another pitch goes; the new one wins over the notes of its pitch it
+            // overlaps, as every added note does (see Session::setSelectedNotes).
+            if (found != drawn.end()) { owner.report (owner.session.removeMidiNotes (clip.id, { found->second.first })); drawn.erase (found); }
             juce::StringArray inserted;
             if (const auto result = owner.session.addMidiNotes (clip.id, { newNote (pitch, start, length) }, inserted); result.wasOk() && inserted.size() == 1)
                 drawn[step] = { inserted[0], pitch };
@@ -20622,6 +20645,20 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
             pianoRoll.keyPressed (undo);
             check (only (noteId) && notes().front().startBeat == 1.25, "one undo takes the copy back");
             pianoRoll.keyPressed (juce::KeyPress (juce::KeyPress::escapeKey));
+            {
+                // Lengthened together, a selected note stops at the next selected note of its key, as the reference's does.
+                juce::StringArray later;
+                check (session.addMidiNotes (currentMidiClip()->id, { { {}, 64, 4.0, 1, .8f } }, later).wasOk(), "a later note on the same key"); refresh();
+                pianoRoll.keyPressed (juce::KeyPress ('A', juce::ModifierKeys (juce::ModifierKeys::commandModifier), 0));
+                const auto edge = point (3.25, 64) - juce::Point<float> (2.0f, 0.0f), past = edge + juce::Point<float> ((float) (2 * beatWidth), 0.0f);
+                pianoRoll.mouseDown (event (edge, edge)); pianoRoll.mouseDrag (event (past, edge, true)); pianoRoll.mouseUp (event (past, edge, true));
+                const auto lengthOf = [&] (const juce::String& id) { for (const auto& n : notes()) if (n.id == id) return n.lengthBeats; return -1.0; };
+                check (notes().size() == 2 && lengthOf (noteId) == 2.75 && lengthOf (later[0]) == 3,
+                       "lengthened with a later selected note of its key, a note stops where that one starts (" + juce::String (lengthOf (noteId)) + ")");
+                pianoRoll.keyPressed (undo); session.undo(); refresh();
+                check (only (noteId) && notes().front().lengthBeats == 2, "undo takes the resize and the note back");
+                pianoRoll.keyPressed (juce::KeyPress (juce::KeyPress::escapeKey));
+            }
             // Edit > Select Loop in the clip view selects the notes starting inside the clip's loop brace.
             check (session.addMidiNote (currentMidiClip()->id, 70, 6, .5f, .8f).wasOk() && session.setClipLoop (currentMidiClip()->id, { true, 0, 4 }, 0).wasOk(), "a note outside a four-beat loop"); refresh();
             clickedArea = Area::notes; headerFocus = false;

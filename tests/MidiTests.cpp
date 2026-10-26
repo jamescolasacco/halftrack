@@ -230,16 +230,21 @@ void insertRemoveBatchTests (const juce::File& directory)
     ok (session.addMidiNotes (clipId, expected, copies), "insert copied values into current reopened clip");
     check (copies.size() == 2 && copies[0] != copies[1] && ! ids.contains (copies[0]) && ! ids.contains (copies[1]),
            "reopened clip gets fresh IDs distinct from source and existing notes");
+    // Added on top of the notes they copy, the copies take their places, as added notes win over the notes of their pitch.
+    const auto copiesOnly = [&] { const auto now = current(); return now.size() == 2 && copies.contains (now[0].id) && copies.contains (now[1].id); };
+    check (copiesOnly(), "the copies replace the notes they cover");
     session.undo(); check (sameNotes (current(), expected) && ! session.canUndo(), "one undo removes reopened batch only");
     rejectRemove ({ ids[0], "missing" }, "invalid removal preserves pending insertion redo");
-    session.redo(); check (current().size() == 4, "actual insertion redo survives failed removal"); session.undo();
+    session.redo(); check (copiesOnly(), "actual insertion redo survives failed removal"); session.undo();
     ok (session.removeMidiNotes (clipId, { ids[1], ids[0] }), "remove multiple current notes in requested order");
     check (current().empty(), "valid removal removes whole selected group");
     session.undo(); check (sameNotes (current(), expected) && ! session.canUndo(), "one undo restores removed group identities and values");
     session.redo(); check (current().empty(), "redo removes whole group"); session.undo();
 
     session.beginEditGesture ("Clipboard edit gesture");
-    ok (session.addMidiNotes (clipId, source, copies), "insert within existing gesture");
+    auto later = source; // A beat later, off the notes they copy.
+    for (auto& note : later) note.startBeat += 1;
+    ok (session.addMidiNotes (clipId, later, copies), "insert within existing gesture");
     ok (session.removeMidiNotes (clipId, ids), "remove within existing gesture");
     session.endEditGesture();
     const auto gestureResult = current();

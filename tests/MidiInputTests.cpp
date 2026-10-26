@@ -814,16 +814,17 @@ void recordingQuantisation(const juce::File& root)
     ok(session.addMidiClip(track,0,4),"prepare overdub target");const auto clipId=session.snapshot().tracks[2].clips[0].id;
     ok(session.addMidiNote(clipId,48,.137,.28,.6f),"prepare deliberately off-grid existing note");const auto oldNote=session.snapshot().tracks[2].clips[0].notes[0];
     ok(session.setRecordQuantisation(Session::RecordQuantisation::quarter),"select quarter-note overdub grid");ok(session.setTrackArmed(2,true),"arm quantized overdub");
+    session.setArrangementOverdub(true); // An overdub: the take takes in the notes it records over, as copies.
     session.setLoop(true,0,2);check(session.record().failed()&&!session.snapshot().recording,"unsupported loop quantization fails before capture");session.setLoop(false,0,2);
     session.seek(0);ok(session.record(),"record quantized overdub");const auto origin=f.devices.getCurrentStreamTime()+256.0/48000;pumpSyntheticTestDevice(session,4);
     f.send(juce::MidiMessage::noteOn(1,65,(juce::uint8)100),origin+.375);f.send(juce::MidiMessage::noteOff(1,65),origin+.5);
     pumpSyntheticTestDevice(session,150);session.stop();const auto notes=session.snapshot().tracks[2].clips[0].notes;
     check(notes.size()==2,"quantized overdub adds only the new note");
-    const auto old=std::find_if(notes.begin(),notes.end(),[&](const auto& note){return note.id==oldNote.id;});
+    const auto old=std::find_if(notes.begin(),notes.end(),[&](const auto& note){return note.pitch==oldNote.pitch;});
     const auto added=std::find_if(notes.begin(),notes.end(),[](const auto& note){return note.pitch==65;});
     check(old!=notes.end()&&old->startBeat==oldNote.startBeat&&old->lengthBeats==oldNote.lengthBeats,"recording grid leaves existing overdub notes untouched");
     check(added!=notes.end()&&std::abs(added->startBeat-1)<1e-9&&std::abs(added->lengthBeats-.25)<1e-9,"new overdub note alone is quantized");
-    session.undo();check(session.snapshot().tracks[2].clips[0].notes.size()==1&&session.snapshot().tracks[2].clips[0].notes[0].id==oldNote.id,"undo removes only quantized overdub");
+    session.undo();check(session.snapshot().tracks[2].clips[0].notes.size()==1&&session.snapshot().tracks[2].clips[0].notes[0].id==oldNote.id,"undo removes only quantized overdub");session.setArrangementOverdub(false);
     GeneratedInput boundary;auto& edge=boundary.session;
     ok(edge.setRecordQuantisation(Session::RecordQuantisation::quarter),"set boundary recording grid");ok(edge.setTrackArmed(2,true),"arm boundary recording");
     edge.seek(.1);ok(edge.record(),"record from an off-grid position");const auto edgeOrigin=boundary.devices.getCurrentStreamTime()+256.0/48000;pumpSyntheticTestDevice(edge,4);
@@ -862,9 +863,10 @@ void controllersAndOverdub (const juce::File& root)
     auto state=session.snapshot(); check(state.tracks[2].clips.size()==1,"controller take creates one clip");
     const auto captured=state.tracks[2].clips[0];
     const auto midiFile=root.getChildFile("controllers.mid");
-    auto verifyEvents=[&]
+    // The clip's events: those played, in order, byte for byte, at their musical times.
+    auto verifyEvents=[&](const juce::String& clipId,double startBeat)
     {
-        ok(session.exportMidiClip(captured.id,midiFile),"export captured controller stream");
+        ok(session.exportMidiClip(clipId,midiFile),"export captured controller stream");
         auto input=midiFile.createInputStream();juce::MidiFile file;
         check(input && file.readFrom(*input) && file.getNumTracks()==1,"read captured Standard MIDI File");
         std::vector<juce::MidiMessage> actual;
@@ -874,11 +876,13 @@ void controllersAndOverdub (const juce::File& root)
         {
             const auto& a=actual[i];const auto& b=events[i];
             check(a.getRawDataSize()==b.getRawDataSize() && std::equal(a.getRawData(),a.getRawData()+a.getRawDataSize(),b.getRawData())
-                && std::abs(a.getTimeStamp()/file.getTimeFormat()-(times[i]*2-captured.startBeat))<1.1/file.getTimeFormat(),
+                && std::abs(a.getTimeStamp()/file.getTimeFormat()-(times[i]*2-startBeat))<1.1/file.getTimeFormat(),
                 "capture preserves event bytes and musical timestamp at event "+juce::String((int)i));
         }
     };
-    verifyEvents();
+    verifyEvents(captured.id,captured.startBeat);
+    // With Arrangement Overdub on, as the reference's, the overdub is a new clip holding the earlier material with the new.
+    session.setArrangementOverdub(true);
     session.seek(0);ok(session.record(),"record overlapping overdub");
     const auto secondOrigin=f.devices.getCurrentStreamTime()+256.0/48000;
     pumpSyntheticTestDevice(session,4);
@@ -886,18 +890,24 @@ void controllersAndOverdub (const juce::File& root)
     f.send(juce::MidiMessage::noteOff(1,72),secondOrigin+.35);
     pumpSyntheticTestDevice(session,160);session.stop();
     state=session.snapshot();
-    check(state.tracks[2].clips.size()==1 && state.tracks[2].clips[0].id==captured.id
-        && state.tracks[2].clips[0].notes.size()==2,"overdub merges notes into the existing overlapping clip");
+    check(state.tracks[2].clips.size()==1 && state.tracks[2].clips[0].id!=captured.id
+        && state.tracks[2].clips[0].notes.size()==2,"the overdub is a new clip holding the earlier note with the new one");
     const auto overdub=state.tracks[2].clips[0];
-    check(overdub.notes[0].id==captured.notes[0].id && overdub.notes[1].id.isNotEmpty()
-        && overdub.notes[0].id!=overdub.notes[1].id,"overdub retains original identity and assigns a new note identity");
-    session.undo();check(session.snapshot().tracks[2].clips[0].notes.size()==1,"one undo removes only the overdub");
-    verifyEvents();session.redo();
-    check(session.snapshot().tracks[2].clips[0].notes[1].id==overdub.notes[1].id,"overdub redo restores the same editable note");
+    const auto pitched=[&](int pitch){return *std::find_if(overdub.notes.begin(),overdub.notes.end(),[&](const auto& n){return n.pitch==pitch;});};
+    const auto earlier=pitched(69),played=pitched(72);
+    check(earlier.id!=captured.notes[0].id && played.id.isNotEmpty() && earlier.id!=played.id
+        && earlier.releaseVelocity==captured.notes[0].releaseVelocity,"each note has an identity of its own, the earlier keeping its release velocity");
+    session.undo();check(session.snapshot().tracks[2].clips.size()==1 && session.snapshot().tracks[2].clips[0].id==captured.id
+        && session.snapshot().tracks[2].clips[0].notes.size()==1,"one undo removes the overdub, bringing the earlier clip back");
+    verifyEvents(captured.id,captured.startBeat);session.redo();
+    const auto holds=[&](const juce::String& id){const auto clip=session.snapshot().tracks[2].clips[0];return std::any_of(clip.notes.begin(),clip.notes.end(),[&](const auto& n){return n.id==id;});};
+    check(holds(played.id),"overdub redo restores the same editable note");
     const auto project=root.getChildFile("controllers.halftrack");ok(session.saveProject(project),"save controller take plus overdub");
     ok(session.loadProject(project),"reopen controller take plus overdub");
-    check(session.snapshot().tracks[2].clips[0].notes[1].id==overdub.notes[1].id,"overdub identity persists after reopen");
-    ok(session.removeMidiNote(captured.id,overdub.notes[1].id),"remove reopened overdub independently");verifyEvents();
+    check(holds(played.id),"overdub identity persists after reopen");
+    ok(session.removeMidiNote(overdub.id,played.id),"remove reopened overdub independently");
+    verifyEvents(overdub.id,overdub.startBeat); // The earlier events came across whole.
+    session.setArrangementOverdub(false);
 }
 
 }

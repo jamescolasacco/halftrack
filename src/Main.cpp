@@ -50,6 +50,7 @@ int runMidiControllerTests (const juce::File&);
 int runRangeEditTests (const juce::File&);
 int runTimeSignatureTests (const juce::File&);
 int runMidiToolTests (const juce::File&);
+int runNoteOverlapTests (const juce::File&);
 int runRecoveryTests (const juce::File&);
 int runPresetTests (const juce::File&);
 int runTempoMapTests (const juce::File&);
@@ -776,6 +777,12 @@ public:
         {
             const int i = args.indexOf ("--self-test-midi-tools");
             setApplicationReturnValue (runMidiToolTests (juce::File (args[i + 1])));
+            quit(); return;
+        }
+        if (args.contains ("--self-test-note-overlaps"))
+        {
+            const int i = args.indexOf ("--self-test-note-overlaps");
+            setApplicationReturnValue (runNoteOverlapTests (juce::File (args[i + 1])));
             quit(); return;
         }
         if (args.contains ("--self-test-time-signature"))
