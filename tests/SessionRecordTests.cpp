@@ -263,6 +263,28 @@ int runSessionRecordTests (const juce::File& artifacts)
             ok (s.setTrackGain (0, -1), "a move with Session Record off");
             check (volumeEnvelope (0, 0) && near (volumeEnvelope (0, 0)->points.back().value, -3, 1e-3), "records nothing");
             all.sessionAutomationArmedOnly = true; ok (s.setPreferences (all), "back to armed tracks");
+            s.stop(); pumpSyntheticTestDevice (s, 40);
+
+            // A new take records them too: the fader moves at once, and the take's clip gets the envelope when it ends.
+            ok (s.setTrackGain (keys, 0), "the MIDI track's volume at 0 dB");
+            check (! slot (keys, 6).hasClip, "scene 7's slot is empty");
+            ok (s.sessionRecord (6), "Session Record a new take in scene 7");
+            for (int i = 0; i < 400 && ! slot (keys, 6).recording; ++i) pumpSyntheticTestDevice (s, 1);
+            check (slot (keys, 6).recording, "the armed MIDI track records a take");
+            pumpSyntheticTestDevice (s, blocksPerSecond / 2);
+            s.beginEditGesture ("Change volume");
+            ok (s.setTrackGain (keys, -10), "drag the volume during the take");
+            check (near (s.snapshot().tracks[(size_t) keys].gainDb, -10, .01), "the fader moves at once");
+            pumpSyntheticTestDevice (s, blocksPerSecond / 4);
+            ok (s.setTrackGain (keys, -4), "and up");
+            s.endEditGesture();
+            ok (s.sessionRecord (6), "end the take");
+            for (int i = 0; i < 800 && ! (slot (keys, 6).hasClip && slot (keys, 6).playing); ++i) pumpSyntheticTestDevice (s, 1);
+            envelope = volumeEnvelope (keys, 6);
+            check (slot (keys, 6).hasClip && envelope && envelope->points.size() == 5 && near (envelope->points[0].value, 0, 1e-3)
+                       && near (envelope->points[2].beat, 1, .15) && near (envelope->points[2].value, -10, 1e-3) && near (envelope->points[3].value, -4, 1e-3)
+                       && near (envelope->points[4].value, 0, 1e-3),
+                   "the take's clip holds the drag where it was made, back at 0 dB after release (" + describe (envelope) + ")");
             ok (s.setAutomationArm (false), "switch Automation Arm off");
             s.stop();
         }

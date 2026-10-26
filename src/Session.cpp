@@ -3855,14 +3855,14 @@ struct Session::Impl
         auto* t = track (trackId);
         auto* slot = te::findClipSlotForID (*edit, slotId);
         if (t != nullptr) if (auto* in = input (*t)) [[maybe_unused]] auto removed = in->removeTarget (slotId, nullptr);
-        if (t == nullptr || slot == nullptr) { owner.sendChangeMessage(); return; }
+        if (t == nullptr || slot == nullptr) { writeTakeAutomation (slotId, nullptr); owner.sendChangeMessage(); return; }
         // The take covers whole beats from punch-in to the grid stop; an empty MIDI take is still a clip.
         const auto length = std::max (1.0, std::round ((edit->tempoSequence.toBeats (end) - edit->tempoSequence.toBeats (start)).inBeats() * 960.0) / 960.0);
         const te::BeatRange beats { te::BeatPosition(), te::BeatPosition::fromBeats (length) };
         auto* clip = slot->getClip();
         if (clip == nullptr && static_cast<bool> (t->state.getProperty (midiTrackProperty, false)))
             if ((clip = te::insertMIDIClip (*slot, "MIDI clip", edit->tempoSequence.toTime (beats)).get()) != nullptr) applyLaunchDefaults (*clip);
-        if (clip == nullptr) { changed(); return; }
+        if (clip == nullptr) { writeTakeAutomation (slotId, nullptr); changed(); return; }
         auto* undo = &edit->getUndoManager();
         giveDefaultFades (*clip, undo); // Kept for when it reaches the Arrangement.
         colourNewClip (*clip, true);
@@ -3880,6 +3880,7 @@ struct Session::Impl
             wave->setLoopInfo (info); wave->setAutoTempo (true); wave->setAutoPitch (false); wave->setUsesProxy (false);
             wave->setLoopRangeBeats (beats);
         }
+        writeTakeAutomation (slotId, clip);
         if (playTake) queueTrack (*t, clip, boundary);
         changed();
     }
@@ -6475,6 +6476,7 @@ struct Session::Impl
         for (auto it = sessionPasses.begin(); it != sessionPasses.end();)
             if (! touchOnly || it->second.touch) { writeSessionPass (it->second, true); it = sessionPasses.erase (it); }
             else ++it;
+        for (auto& [key, take] : takePasses) if (take.touch) take.ended = true;
         if (! touchOnly) captureTransaction = false;
     }
     // Session automation recording, as the reference's manual describes it (its automation chapter, read 2026-10-26): with
@@ -6484,9 +6486,10 @@ struct Session::Impl
     // envelope the clip had returns after it; others hold their value to the loop's end. The loop coming round ends a pass.
     struct SessionPass { te::EditItemID clip; Session::EnvelopeTarget target; std::vector<AutomationPoint> original, recorded; bool touch = false; };
     std::map<String, SessionPass> sessionPasses; // By lane key.
-    // The Session clip a control's moves go into, with the control as an envelope names it: a track's volume or pan, or a
-    // control of a device directly on the track.
-    std::optional<std::pair<te::Clip*, Session::EnvelopeTarget>> sessionCaptureTarget (const String& key) const
+    // Where a control's moves go: the Session clip it overdubs or plays, or the take its track records into a slot, with
+    // the control as an envelope names it (a track's volume or pan, or a control of a device directly on the track).
+    struct SessionTarget { te::Clip* clip = nullptr; const SlotRecording* take = nullptr; te::AudioTrack* host = nullptr; Session::EnvelopeTarget target; };
+    std::optional<SessionTarget> sessionCaptureTarget (const String& key) const
     {
         if (! automationArmed() || (overdubs.empty() && slotRecordings.empty())) return std::nullopt;
         const auto parts = juce::StringArray::fromTokens (key, ":", "");
@@ -6504,12 +6507,58 @@ struct Session::Impl
             target = { parts[1], parts[2].getIntValue() };
         }
         if (host == nullptr || host->isFrozen (te::Track::anyFreeze) || envelopeParameter (*host, target) == nullptr) return std::nullopt;
-        for (const auto& o : overdubs) if (o.trackId == host->itemID) if (auto* clip = te::findClipForID (*edit, o.clipId)) return std::pair { clip, target };
+        for (const auto& o : overdubs) if (o.trackId == host->itemID) if (auto* clip = te::findClipForID (*edit, o.clipId)) return SessionTarget { clip, nullptr, host, target };
+        for (const auto& r : slotRecordings) if (r.trackId == host->itemID.toString() && ! r.stopping) return SessionTarget { nullptr, &r, host, target };
         if (prefs.sessionAutomationArmedOnly) return std::nullopt;
         for (auto* slot : host->getClipSlotList().getClipSlots())
             if (auto* clip = slot->getClip())
-                if (auto handle = clip->getLaunchHandle(); handle && handle->getPlayingStatus() == te::LaunchHandle::PlayState::playing) return std::pair { clip, target };
+                if (auto handle = clip->getLaunchHandle(); handle && handle->getPlayingStatus() == te::LaunchHandle::PlayState::playing) return SessionTarget { clip, nullptr, host, target };
         return std::nullopt;
+    }
+    // Moves during a new take wait for its clip, which exists once the take ends: a pass per stretch of moves, in order,
+    // with the control's value before it. No clip plays them meanwhile, so the control moves itself.
+    struct TakePass { te::EditItemID slot; Session::EnvelopeTarget target; std::vector<AutomationPoint> recorded; float before = 0; bool touch = false, ended = false; };
+    std::vector<std::pair<String, TakePass>> takePasses; // With their lane keys.
+    void takeCapture (const String& key, const SessionTarget& found, float value)
+    {
+        te::Plugin* device = nullptr;
+        auto* parameter = envelopeParameter (*found.host, found.target, &device);
+        if (parameter == nullptr) return;
+        const auto [low, high] = envelopeRange (found.target, Session::EnvelopeMode::automation, device);
+        value = juce::jlimit (low, high, value);
+        const double beat = (edit->tempoSequence.toBeats (unloopedTime (std::nullopt)) - edit->tempoSequence.toBeats (found.take->start)).inBeats();
+        if (beat < 0) return; // Still counting in.
+        if (! gesture && ! captureTransaction) { transaction ("Record automation"); captureTransaction = true; }
+        TakePass* pass = nullptr;
+        for (auto& [k, p] : takePasses) if (k == key && p.slot == found.take->slotId && ! p.ended) pass = &p;
+        if (pass == nullptr)
+        {
+            const auto before = juce::jlimit (low, high, curveToEnvelope (found.target, Session::EnvelopeMode::automation, device, parameter->getCurrentValue()));
+            pass = &takePasses.emplace_back (key, TakePass { found.take->slotId, found.target, {}, before, gesture != nullptr }).second;
+        }
+        auto& recorded = pass->recorded;
+        if (! recorded.empty() && beat - recorded.back().beat < 1.0 / 64) recorded.back().value = value;
+        else if (recorded.size() < 4000) recorded.push_back ({ beat, value });
+        else recorded.back() = { beat, value };
+        parameter->setParameter (envelopeToCurve (found.target, Session::EnvelopeMode::automation, device, value), juce::sendNotification);
+    }
+    // A finished take's passes become its clip's automation envelopes, each over what those before it left.
+    void writeTakeAutomation (te::EditItemID slotId, te::Clip* clip)
+    {
+        if (clip != nullptr)
+        {
+            const auto length = clip->getLengthInBeats().inBeats();
+            for (const auto& [key, take] : takePasses)
+            {
+                if (take.slot != slotId) continue;
+                SessionPass pass { clip->itemID, take.target, {}, {}, take.touch };
+                for (const auto& existing : clipEnvelopes (*clip)) if (existing.target == take.target && existing.mode == Session::EnvelopeMode::automation) pass.original = existing.points;
+                if (pass.original.empty()) pass.original.push_back ({ 0.0, take.before });
+                for (const auto& point : take.recorded) if (point.beat <= length) pass.recorded.push_back (point);
+                writeSessionPass (pass, true);
+            }
+        }
+        std::erase_if (takePasses, [slotId] (const auto& entry) { return entry.second.slot == slotId; });
     }
     bool capturing (const String& key) const { return capturing() || sessionCaptureTarget (key).has_value(); }
     // Session Record stopping ends every Session pass, and the stretch of recording's undo step.
@@ -6564,7 +6613,8 @@ struct Session::Impl
     {
         const auto found = sessionCaptureTarget (key);
         if (! found) return;
-        auto* clip = found->first;
+        if (found->take != nullptr) { takeCapture (key, *found, value); return; }
+        auto* clip = found->clip;
         auto handle = clip->getLaunchHandle();
         const auto played = handle != nullptr && handle->getPlayingStatus() == te::LaunchHandle::PlayState::playing ? handle->getPlayedRange() : std::nullopt;
         if (! played) return;
@@ -6577,12 +6627,12 @@ struct Session::Impl
         auto beat = start + std::fmod (elapsed, length);
         // An unlinked envelope loops on its own length from the clip's launch.
         for (const auto& existing : clipEnvelopes (*clip))
-            if (existing.target == found->second && existing.mode == Session::EnvelopeMode::automation && existing.unlinked) beat = std::fmod (elapsed, existing.loopBeats);
+            if (existing.target == found->target && existing.mode == Session::EnvelopeMode::automation && existing.unlinked) beat = std::fmod (elapsed, existing.loopBeats);
         te::Plugin* device = nullptr;
         auto* host = dynamic_cast<te::AudioTrack*> (clip->getTrack());
-        auto* parameter = host != nullptr ? envelopeParameter (*host, found->second, &device) : nullptr;
+        auto* parameter = host != nullptr ? envelopeParameter (*host, found->target, &device) : nullptr;
         if (parameter == nullptr) return;
-        const auto [low, high] = envelopeRange (found->second, Session::EnvelopeMode::automation, device);
+        const auto [low, high] = envelopeRange (found->target, Session::EnvelopeMode::automation, device);
         value = juce::jlimit (low, high, value);
         // Moves inside an edit gesture join its transaction; others share one per stretch of recording.
         if (! gesture && ! captureTransaction) { transaction ("Record automation"); captureTransaction = true; }
@@ -6591,11 +6641,11 @@ struct Session::Impl
         { writeSessionPass (pass->second, true); sessionPasses.erase (pass); pass = sessionPasses.end(); }
         if (pass == sessionPasses.end())
         {
-            SessionPass fresh { clip->itemID, found->second, {}, {}, gesture != nullptr };
-            for (const auto& existing : clipEnvelopes (*clip)) if (existing.target == found->second && existing.mode == Session::EnvelopeMode::automation) fresh.original = existing.points;
+            SessionPass fresh { clip->itemID, found->target, {}, {}, gesture != nullptr };
+            for (const auto& existing : clipEnvelopes (*clip)) if (existing.target == found->target && existing.mode == Session::EnvelopeMode::automation) fresh.original = existing.points;
             // Without an envelope the clip had the control's value before the move, which a pass returns to.
             if (fresh.original.empty())
-                fresh.original.push_back ({ 0.0, juce::jlimit (low, high, curveToEnvelope (found->second, Session::EnvelopeMode::automation, device, parameter->getCurrentValue())) });
+                fresh.original.push_back ({ 0.0, juce::jlimit (low, high, curveToEnvelope (found->target, Session::EnvelopeMode::automation, device, parameter->getCurrentValue())) });
             pass = sessionPasses.emplace (key, fresh).first;
             // Recording re-enables the control's overridden clip envelopes.
             for (auto* curve : clipAutomationCurves (key)) if (curve->bypass.get()) curve->state.setProperty (te::IDs::bypass, false, &edit->getUndoManager());

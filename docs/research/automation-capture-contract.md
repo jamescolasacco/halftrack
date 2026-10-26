@@ -45,7 +45,8 @@ The playhead is the transport position on the message thread.
 
 As the reference's manual describes (its automation chapter, read 2026-10-26), Automation Arm also records into Session clips while Session Record runs:
 
-- **Which clips.** Moving a track's volume or pan, or a control of a device directly on the track, writes the automation envelope of the Session clip the track overdubs (an armed MIDI track whose slot held a clip). With Preferences' Session Automation Recording at All Tracks, the playing Session clip of any track takes the moves too. Armed Tracks is the default, as the reference's (static reading: `mpSessionAutomationRecordingInArmedTracksOnly`, on).
+- **Which clips.** Moving a track's volume or pan, or a control of a device directly on the track, writes the automation envelope of the Session clip the track overdubs (an armed MIDI track whose slot held a clip), or of the new take it records into an empty slot. With Preferences' Session Automation Recording at All Tracks, the playing Session clip of any track takes the moves too.
+- **New takes.** A take's clip exists once the take ends, so its moves wait for it: the control moves at once, and the clip gets them as its envelope, from the take's start. Armed Tracks is the default, as the reference's (static reading: `mpSessionAutomationRecordingInArmedTracksOnly`, on).
 - **Where.** At the clip's place in its loop, from the beats its launch has played; an unlinked envelope at its own loop's place.
 - **Touch.** A move inside an edit gesture (the mouse) records until release. The envelope the clip had resumes 1/960 beat later.
 - **Latch.** Other moves (a controller) hold their last value to the loop's end.
@@ -94,6 +95,7 @@ The session-record suite overdubs a MIDI clip with Automation Arm on and checks:
 - **Latch.** A controller's move to −20 dB holds to the loop's end.
 - **Undo.** Each pass is one undo step; redo brings them back. The clip's notes are untouched.
 - **Tracks not armed.** A playing audio clip on an unarmed track records nothing by default. With All Tracks it records the move from the volume the track had. With Session Record off, nothing is recorded.
+- **A new take.** A drag during a new MIDI take moves the fader at once, and the take's clip ends up with the drag a beat in, back at 0 dB after release.
 
 The preferences suite reads All Tracks back, and the UI suite finds Session Automation Recording on the Record page, at Armed Tracks, and switches it.
 
@@ -108,7 +110,6 @@ The capture suite also re-enables an overridden volume lane alone while a device
 
 ## Not implemented
 
-- Recording automation into the new clips Session Record makes. Only clips that already exist (overdubbing, or playing with All Tracks) take Session automation.
 - Session automation of sends and of controls inside racks, which clip envelopes do not take yet.
 - A hosted plug-in's own editor reports its move after the parameter has changed, so a Session clip without an envelope for it starts at the moved value.
 - Utility controls. (Third-party plug-ins' parameters are captured and overridden from their own editors as well as Halftrack's controls; see the [plug-in automation contract](plugin-automation-contract.md).)
