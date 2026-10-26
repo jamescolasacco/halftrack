@@ -13885,7 +13885,7 @@ double beatOfSource (const std::vector<Session::WarpMarker>& markers, double bpm
     return map.back().beat + (seconds - map.back().sourceSeconds) * bpm / 60;
 }
 }
-Result Session::warpFromHere (const String& id, double seconds)
+Result Session::warpFromHere (const String& id, double seconds, std::optional<double> bpm)
 {
     if (auto frozen = impl->unfrozen (impl->trackOfClip (id)); frozen.failed()) return frozen;
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
@@ -13893,18 +13893,23 @@ Result Session::warpFromHere (const String& id, double seconds)
     auto* clip = impl->audioClip (id); if (! clip) return Result::fail ("Audio clip not found.");
     const auto before = describeClip (*clip);
     if (before.warp.mode == WarpMode::off || before.warp.mode == WarpMode::repitch) return Result::fail ("Warp From Here needs a clip warped in a stretching mode.");
-    if (! std::isfinite (seconds) || seconds < 0 || seconds >= before.sourceLength - 1) return Result::fail ("Warp From Here needs a point at least a second before the audio ends.");
-    // The tempo from the point on, and the point moved onto the transient there.
-    std::unique_ptr<juce::AudioFormatReader> reader (impl->engine.getAudioFileFormatManager().readFormatManager.createReaderFor (before.file));
-    if (reader == nullptr) return Result::fail ("The clip's audio could not be read.");
-    tempo::OnsetCurve curve (reader->sampleRate);
-    if (! curve.add (*reader, 600, seconds)) return Result::fail ("The clip's audio could not be read.");
-    const auto found = tempo::estimate (curve);
-    if (! found) return Result::fail ("No steady beat was found from there.");
-    auto point = seconds;
-    double nearest = 0.03;
-    for (const auto t : impl->analyse (before.file)->transients)
-        if (std::abs (t - seconds) < nearest) { nearest = std::abs (t - seconds); point = t; }
+    if (! std::isfinite (seconds) || seconds < 0 || seconds >= before.sourceLength - (bpm ? 0.0 : 1.0))
+        return Result::fail (bpm ? "Warp From Here needs a point within the audio." : "Warp From Here needs a point at least a second before the audio ends.");
+    if (bpm && (! std::isfinite (*bpm) || *bpm < 20 || *bpm > 999)) return Result::fail ("Warp From Here needs a tempo of 20 to 999 BPM.");
+    // The tempo from the point on: the one given, or the one the content after the point has, on the reference's
+    // 0.02 BPM grid, halves up. The marker goes exactly at the point, as the reference's straight warps put it.
+    double tempoFrom = bpm.value_or (0);
+    if (! bpm)
+    {
+        std::unique_ptr<juce::AudioFormatReader> reader (impl->engine.getAudioFileFormatManager().readFormatManager.createReaderFor (before.file));
+        if (reader == nullptr) return Result::fail ("The clip's audio could not be read.");
+        tempo::OnsetCurve curve (reader->sampleRate);
+        if (! curve.add (*reader, 600, seconds)) return Result::fail ("The clip's audio could not be read.");
+        const auto found = tempo::estimate (curve);
+        if (! found) return Result::fail ("No steady beat was found from there.");
+        tempoFrom = std::floor (found->bpm / 0.02 + 0.5) * 0.02;
+    }
+    const auto point = seconds;
     // Markers before the point stay, and the point keeps the beat it plays on now.
     std::vector<WarpMarker> markers;
     for (const auto& m : before.warpMarkers) if (m.sourceSeconds < point - 1e-3) markers.push_back (m);
@@ -13913,7 +13918,7 @@ Result Session::warpFromHere (const String& id, double seconds)
     if (pinned.beat <= markers.back().beat + 1e-6) return Result::fail ("Warp From Here needs the point after the clip's earlier markers.");
     markers.push_back (pinned);
     const OneUndoStep step (*this, true, impl->gesture != nullptr, "Warp From Here");
-    auto settings = before.warp; settings.bpm = found->bpm;
+    auto settings = before.warp; settings.bpm = tempoFrom;
     if (auto r = setAudioClipWarp (id, settings); r.failed()) return r;
     if (auto r = setAudioClipWarpMarkers (id, markers); r.failed()) return r;
     // The clip keeps its place and length, ending with its audio if that now comes sooner.
@@ -13929,25 +13934,41 @@ Result Session::warpFromHere (const String& id, double seconds)
         }
     impl->changed(); return Result::ok();
 }
-Result Session::warpAsLoop (const String& id, int bars)
+Session::LoopLength Session::loopLengthFor (double beats, double beatsPerBar)
+{
+    // As the reference rounds it (static reading of its Warp as Loop label): 1, 2, 4 or 8, then multiples of 8 up to 64,
+    // then whole numbers.
+    const auto nice = [] (double v)
+    {
+        if (v <= 8) return v < 1.5 ? 1 : v < 3 ? 2 : v < 6 ? 4 : 8;
+        if (v <= 64) return (int) std::floor (v / 8 + 1e-10) * 8;
+        return (int) std::floor (v + 1e-10);
+    };
+    if (! std::isfinite (beats) || beats <= 0 || ! std::isfinite (beatsPerBar) || beatsPerBar <= 0) return {};
+    const auto x = beats / beatsPerBar;
+    if (const int inBeats = nice (x * beatsPerBar); inBeats < (int) beatsPerBar) return { inBeats, true };
+    return { nice (x), false };
+}
+Result Session::warpAsLoop (const String& id, int count, bool inBeats)
 {
     if (auto frozen = impl->unfrozen (impl->trackOfClip (id)); frozen.failed()) return frozen;
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
     auto* clip = impl->audioClip (id); if (! clip) return Result::fail ("Audio clip not found.");
     const auto before = describeClip (*clip);
     if (before.warp.mode == WarpMode::off) return Result::fail ("Warp as Loop needs a warped clip.");
-    if (bars < 1 || bars > 256) return Result::fail ("Choose 1 to 256 bars.");
-    // The source the clip plays, from its start for its length, in seconds of the source.
-    const auto from = before.warpMarkers.empty() ? before.contentStartBeat * 60 / before.warp.bpm : 0.0;
-    const auto to = before.warpMarkers.empty() ? (before.contentStartBeat + before.lengthBeats) * 60 / before.warp.bpm : before.sourceLength;
-    const auto seconds = std::min (before.sourceLength, to) - from;
+    if (count < 1 || count > (inBeats ? 1024 : 256)) return Result::fail (inBeats ? "Choose 1 to 1024 beats." : "Choose 1 to 256 bars.");
+    // As the reference's: the whole sample becomes the loop.
+    const auto seconds = before.sourceLength;
     if (! (seconds > 0)) return Result::fail ("The clip plays no audio.");
-    const auto bpm = bars * snapshot().timeSignature.beatsPerBar() * 60 / seconds;
-    if (bpm < 20 || bpm > 999) return Result::fail ("As " + String (bars) + " bars the clip would play at " + String (bpm, 2) + " BPM, outside 20-999.");
+    const auto beats = inBeats ? (double) count : count * snapshot().timeSignature.beatsPerBar();
+    const auto bpm = beats * 60 / seconds;
+    if (bpm < 20 || bpm > 999)
+        return Result::fail ("As " + String (count) + (inBeats ? " beats" : " bars") + " the clip would play at " + String (bpm, 2) + " BPM, outside 20-999.");
     const OneUndoStep step (*this, true, impl->gesture != nullptr, "Warp as loop");
     if (! before.warpMarkers.empty()) if (auto r = setAudioClipWarpMarkers (id, {}); r.failed()) return r;
     auto settings = before.warp; settings.bpm = bpm;
     if (auto r = setAudioClipWarp (id, settings); r.failed()) return r;
+    if (auto r = setClipLoop (id, { true, 0, beats }, 0); r.failed()) return r;
     impl->changed(); return Result::ok();
 }
 std::vector<double> Session::audioClipTransients (const String& id)
@@ -13995,6 +14016,10 @@ Result Session::setAudioClipWarpMarkers (const String& id, const std::vector<War
         impl->changed(); return Result::ok();
     }
     clip->setWarpTime (true);
+    // The engine's manager makes its marker trees as undoable edits the first time it is used, so undoing that edit
+    // left it holding a list the clip no longer had, and the next marker edit failed. Made here first, outside the undo
+    // history, they stay.
+    clip->state.getOrCreateChildWithName (te::IDs::WARPTIME, nullptr).getOrCreateChildWithName (te::IDs::WARPMARKERS, nullptr);
     auto& manager = clip->getWarpTimeManager();
     // The engine keeps a start marker at (0, 0); the clip's markers follow it, and Halftrack's end
     // marker keeps the clip's tempo after the last of them.

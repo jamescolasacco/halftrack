@@ -1352,15 +1352,19 @@ public:
     // the clip view shows them and a double-click pins a warp marker. The first ten minutes are read
     // once while the file is unchanged.
     std::vector<double> audioClipTransients (const juce::String& clipId);
-    // Warp From Here (Straight), after the reference: a warped clip's audio from a point of its source
-    // is taken as one steady tempo, found from its content. The clip keeps its markers before the
-    // point, takes one at the point (on the transient there when one is close) where its audio
-    // already plays, loses those after it, and plays at the found tempo from there. It keeps its
-    // place and length. Refused when no steady beat is found. One undo step.
-    juce::Result warpFromHere (const juce::String& clipId, double sourceSeconds);
-    // Warp as N-Bar Loop: the audio a warped clip plays, from its start for its length, is taken
-    // as that many bars of the project meter, with no markers. One undo step.
-    juce::Result warpAsLoop (const juce::String& clipId, int bars);
+    // Warp From Here (Straight) and Warp N BPM From Here, as the reference's (static reading of its code): from a point
+    // of a warped clip's source, the clip keeps its markers before the point, takes one exactly at the point where its
+    // audio already plays, loses those after it, and plays at one steady tempo from there: the tempo found from its
+    // content, on a 0.02 BPM grid, or with `bpm`, exactly that (the project's tempo for Warp N BPM From Here). It keeps
+    // its place and length. Refused when no steady beat is found. One undo step.
+    juce::Result warpFromHere (const juce::String& clipId, double sourceSeconds, std::optional<double> bpm = std::nullopt);
+    // Warp as N-Bar Loop, as the reference's: the whole sample becomes that many bars of the project meter (beats with
+    // inBeats), with no markers, looping from its start. One undo step.
+    juce::Result warpAsLoop (const juce::String& clipId, int count, bool inBeats = false);
+    // The length the reference's Warp as Loop offers for a sample of that many beats: 1, 2, 4 or 8 bars, then multiples
+    // of 8 up to 64, then whole bars; in beats when that is shorter than a bar.
+    struct LoopLength { int count = 1; bool beats = false; bool operator== (const LoopLength&) const = default; };
+    static LoopLength loopLengthFor (double beats, double beatsPerBar);
     juce::Result setAudioClipRange (const juce::String& clipId, double startSeconds, double lengthSeconds, double sourceOffsetSeconds);
     // Where a MIDI or warped audio clip's content starts and its loop, in content beats. Looping,
     // the content plays from the start into the loop and round it for as long as the clip lasts;

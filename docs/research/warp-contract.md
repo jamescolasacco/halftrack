@@ -37,7 +37,7 @@ The clip view draws a warped clip in its beats, each segment of the warp map ove
 
 The main UI suite checks adding, a drag onto the grid, its undo, and removal.
 
-Missing: automatic markers at transients, segment BPM display, quantizing markers, and multi-marker selection.
+Missing: automatic markers at transients, segment BPM display, quantizing markers, and multi-marker selection (see [Warp commands](#warp-commands-2026-10-22-revised-2026-10-26) for what the reference's code shows of them).
 
 ## Tempo and transient analysis (2026-10-22)
 
@@ -97,29 +97,40 @@ The import and its warping are one undo step. Shorter samples keep the length gu
 
 Missing: downbeat (bar) detection, tempo that varies through a recording, keeping analyses with the file between sessions, and a side-by-side comparison with the reference's own auto-warp results.
 
-## Warp commands (2026-10-22)
+## Warp commands (2026-10-22, revised 2026-10-26)
 
-Right-clicking a warped clip's waveform offers two of the reference's warp commands.
+Right-clicking a warped clip's waveform offers the reference's warp commands, after a static reading of its code on 2026-10-26 (Live 12.2.1, arm64 slice, sha256 b37cb738442bba7787457fe751b0e3f9fbdabc662d8d491d1d9aa46b120bd3fc; binary-assisted research, raw notes in the ignored `artifacts/` folder).
 
-**Warp From Here (Straight).** `Session::warpFromHere (clipId, sourceSeconds)` takes the audio from that point of the source as one steady tempo. It finds the tempo from the content after the point, with the same estimate as Auto-Warp.
+**The point** a command works from is the right-clicked warp marker's beat, or the beat under the pointer on the clip view's grid (unless the grid is bypassed), as the reference's menu takes it.
 
-- **Markers.** The clip keeps its markers before the point and takes one at the point, on the transient within 30 ms if there is one. The point keeps the beat where it already plays, so nothing before it moves. Markers after the point go.
+**Warp From Here (Straight).** `Session::warpFromHere (clipId, sourceSeconds)` takes the audio from the point as one steady tempo, found from the content after the point with the same estimate as Auto-Warp, and put on the reference's grid of 0.02 BPM.
+
+- **Markers.** The clip keeps its markers before the point and takes one exactly at the point, as the reference's straight warps place it. The point keeps the beat where it already plays, so nothing before it moves. Markers after the point go.
 - **Tempo.** From the point the clip plays at the found tempo. It keeps its place and length, ending with its audio if that now comes sooner.
 - **Refusals.** It needs a stretching warp mode, a point at least a second before the audio ends and after the earlier markers, and a steady beat from there. It is one undo step.
 
-**Warp as N-Bar Loop.** `Session::warpAsLoop (clipId, bars)` takes the audio the clip plays, from its start for its length, as that many bars of the project meter, and removes its markers. The menu offers the bar count the length suggests: the whole-bar guess, in 80–160 BPM. It takes 1 to 256 bars, refuses a tempo outside 20–999 BPM, and is one undo step.
+**Warp N BPM From Here.** `warpFromHere (clipId, sourceSeconds, bpm)` does the same at exactly the given tempo, without looking at the audio. The menu gives it the project's tempo, labelled with two decimals ("Warp 120.00 BPM From Here"), as the reference's does.
+
+**Warp as N-Bar Loop.** `Session::warpAsLoop (clipId, count, inBeats)` takes the whole sample as that many bars of the project meter (or beats), with no markers, and loops it from its start, as the reference's does. The menu offers the length the sample suggests (`Session::loopLengthFor`, from the whole-bar guess in 80–160 BPM), rounded as the reference rounds it: 1, 2, 4 or 8 bars, then multiples of 8 up to 64, then whole bars, and in beats when that is shorter than a bar ("Warp as 2-Beat Loop"). It takes 1 to 256 bars or 1 to 1024 beats, refuses a tempo outside 20–999 BPM, and is one undo step.
+
+**Undo.** The engine's warp marker list was made as an undoable edit the first time a clip took markers, so undoing that edit left the engine holding a list the clip no longer had, and the clip's next marker edit failed. The list is now made outside the undo history.
 
 Evidence (`tests/TempoAnalysisTests.cpp`):
 
-- A loop cut to four bars at 105 BPM, warped at 120 and then Warp as 4-Bar Loop, plays at 105 BPM over 16 beats.
-- 3.2 s of noise and then a loop at 97 BPM, warped at 120 in Beats, then Warp From Here (Straight) just after the loop begins:
-  - it finds 97 BPM and pins the loop's first hit at 3.2 s on beat 6.4, where it played;
-  - rendered, each later hit sounds a beat apart within 0.65 ms.
+- A loop cut to four bars at 105 BPM, warped at 120 and then Warp as 4-Bar Loop, plays at 105 BPM over 16 beats, looping them; as an 8-beat loop it plays at 52.5 BPM.
+- The loop lengths offered: 16 beats as 4 bars, 3 beats as 1 bar, 2.5 beats as 2 beats, 1.2 beats as 1 beat, 6 and 13 bars as 8, 40 bars as 40 and 70 bars as 70.
+- 3.2 s of noise and then a loop at 97 BPM, warped at 120 in Beats, then Warp From Here (Straight) at the loop's first hit:
+  - it finds 97 BPM on the 0.02 BPM grid and pins the point at 3.2 s on beat 6.4, where it played;
+  - rendered, each later hit sounds a beat apart within 3 ms.
+- Warp 100.00 BPM From Here at the same point plays exactly 100 BPM from it, after the earlier command was undone; a tempo under 20 BPM is refused.
 - Unwarped clips, 0 or 300 bars, and points in the last second or before the audio are refused, and each command undoes in one step.
 
 The UI suite checks the menu's one-bar suggestion for two seconds at 120 BPM. It also checks that Warp From Here reports finding no steady beat in two seconds of clicks, changing nothing.
 
-Missing: the reference's Warp From Here (with tempo changes), Warp From Here (Start at the project tempo), Warp N Bars From Here, and Set 1.1.1 Here.
+Missing, from the same reading:
+- Warp From Here (with tempo changes) and Warp From Here (Start at the project tempo), which need the reference's beat tracker: markers on every bar from the whole beat at or below the point.
+- Set 1.1.1 Here, Warp Selection as N-Bar Loop, and the menu's Insert Warp Marker, Delete and Quantize.
+- Selecting several warp markers (Cmd and Shift), moving them with the arrow keys, the 5–999 BPM limit on a dragged segment, and the Seg. BPM field.
 
 ## First play of a warped clip (2026-10-24)
 

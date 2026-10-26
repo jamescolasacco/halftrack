@@ -8839,34 +8839,38 @@ private:
             }
             owner.report (owner.session.setAudioClipWarpMarkers (clip.id, markers)); owner.refresh(); sync();
         }
-        // The warp commands, after the reference's sample display menu: Warp From Here (Straight) at
-        // the clicked point, and Warp as a loop of the bars its length suggests.
-        int loopBarsGuess() const
+        // The warp commands, after the reference's sample display menu (static reading of its code): Warp From Here
+        // (Straight) and Warp N BPM From Here at the right-clicked marker, or at the beat under the pointer on the grid,
+        // and Warp as a loop of the length the whole sample suggests.
+        Session::LoopLength loopLength() const
         {
-            const auto seconds = clip.sourceLength > 0 ? std::min (clip.sourceLength, clip.lengthBeats * 60 / std::max (1.0, clip.warp.bpm)) : 0.0;
-            const auto beats = Session::estimateClipTempo (seconds) * seconds / 60;
-            return juce::jmax (1, juce::roundToInt (beats / std::max (1.0, owner.state.timeSignature.beatsPerBar())));
+            const auto seconds = std::max (0.0, clip.sourceLength);
+            return Session::loopLengthFor (Session::estimateClipTempo (seconds) * seconds / 60, std::max (1.0, owner.state.timeSignature.beatsPerBar()));
         }
         void warpCommand (int item, double sourceSeconds)
         {
             if (item == 1) owner.report (owner.session.warpFromHere (clip.id, sourceSeconds), "Warped from here.");
-            else if (item == 2) owner.report (owner.session.warpAsLoop (clip.id, loopBarsGuess()));
+            else if (item == 3) owner.report (owner.session.warpFromHere (clip.id, sourceSeconds, (double) (float) owner.state.tempo), "Warped from here.");
+            else if (item == 2) { const auto length = loopLength(); owner.report (owner.session.warpAsLoop (clip.id, length.count, length.beats)); }
             owner.refresh(); sync();
         }
-        void showWarpMenu (float x)
+        void showWarpMenu (float x, juce::ModifierKeys mods)
         {
-            const auto at = sourceAt (xBeat (x));
+            const auto hit = markerAt (x);
+            const auto beat = hit >= 0 ? clip.warpMarkers[(size_t) hit].beat : snapsMarkers (mods) ? std::round (xBeat (x) / snapGrid()) * snapGrid() : xBeat (x);
+            const auto at = sourceAt (beat);
             juce::PopupMenu menu;
             menu.addItem (1, "Warp From Here (Straight)", markersEditable());
-            const int bars = loopBarsGuess();
-            menu.addItem (2, "Warp as " + juce::String (bars) + "-Bar Loop");
+            menu.addItem (3, "Warp " + juce::String ((float) owner.state.tempo, 2) + " BPM From Here", markersEditable());
+            const auto length = loopLength();
+            menu.addItem (2, "Warp as " + juce::String (length.count) + (length.beats ? "-Beat Loop" : "-Bar Loop"));
             auto safe = juce::Component::SafePointer<AudioClipView> (this);
             menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (this).withMousePosition(),
                                 [safe, at] (int chosen) { if (safe != nullptr && chosen > 0) safe->warpCommand (chosen, at); });
         }
         void mouseDown (const juce::MouseEvent& e) override
         {
-            if (e.mods.isPopupMenu() && clip.warp.mode != Session::WarpMode::off && waveBounds().contains (e.getPosition())) { showWarpMenu (e.position.x); return; }
+            if (e.mods.isPopupMenu() && clip.warp.mode != Session::WarpMode::off && waveBounds().contains (e.getPosition())) { showWarpMenu (e.position.x, e.mods); return; }
             // With an envelope shown, the waveform edits it instead of the warp markers.
             if (envelope.active() && waveBounds().contains (e.getPosition()))
             {
@@ -27508,7 +27512,7 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
                    "double-clicking beside a transient pins a warp marker on it");
             // The waveform's menu runs the warp commands: two seconds of clicks suggest a one-bar loop,
             // and are too short for Warp From Here to find a tempo, which it says.
-            check (audioClipView.loopBarsGuess() == 1, "Warp as Loop suggests one bar for two seconds at 120 BPM");
+            check (audioClipView.loopLength() == Session::LoopLength { 1, false }, "Warp as Loop suggests one bar for two seconds at 120 BPM");
             audioClipView.warpCommand (1, .75);
             check (status.contains ("No steady beat") && state.tracks[(size_t) clickTrack].clips[0].warp.bpm == 120, "Warp From Here says when it finds no steady beat, changing nothing");
             for (int step = 0; step < 4; ++step) session.undo();

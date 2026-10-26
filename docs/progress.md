@@ -3019,3 +3019,7 @@ Engine area. As the reference's manual describes, a Session clip's automation no
 ## The current scale — 2026-10-26
 
 Engine and UI areas. As the reference's manual describes, new MIDI clips (drawn, captured or recorded) now take the scale of the clip last in the foreground, kept as the project's current scale with the project and outside the undo history.
+
+## Warp commands after the reference's code — 2026-10-26
+
+Engine and UI areas. After a static reading of the reference's sample display: Warp From Here (Straight) now puts its marker exactly at the point (the right-clicked marker, or the grid beat under the pointer) and its tempo on a 0.02 BPM grid; Warp N BPM From Here warps from the point at the project's tempo; Warp as Loop takes the whole sample, loops it, and offers the reference's lengths (1, 2, 4, 8 bars, multiples of 8, whole bars, or beats under a bar). Undoing a clip's first warp markers no longer breaks its next marker edit.
