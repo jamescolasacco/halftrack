@@ -97,7 +97,10 @@ int runTransportTests (const juce::File& artifacts)
         const auto waiting = s.snapshot().position;
         check (waiting > 5 && waiting < 6, "playing on until it (" + juce::String (waiting, 3) + " s)");
         pumpSyntheticTestDevice (s, blocksPerSecond);
-        juce::Thread::sleep (250); // The transport keeps a jump's position for 200 ms before following the play head again.
+        // The transport keeps a jump's position for 200 ms before its timer follows the play head again; a slow machine's
+        // timer can come later still, so the check waits for it (up to a second) without playing on.
+        juce::Thread::sleep (250);
+        for (int i = 0; i < 100 && s.snapshot().position == 8.0; ++i) juce::MessageManager::getInstance()->runDispatchLoopUntil (10);
         pumpSyntheticTestDevice (s, 1);
         const auto jumped = s.snapshot().position;
         check (jumped > 8.1 && jumped < 8.26 + slack && near (s.snapshot().insertMarker, 8), "at the line it jumps to the bar scrubbed, keeping time (" + juce::String (jumped, 3) + " s)");
