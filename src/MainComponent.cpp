@@ -8689,6 +8689,15 @@ private:
                     g.setColour (themes::colour (0xffdadada)); g.fillPath (flag);
                 }
                 if (clip.follow.enabled && ! clip.follow.linked) drawFollowMarker (g, followMarkerX(), (float) wave.getBottom());
+                if (timeRange)
+                {
+                    const auto from = juce::jmax ((float) wave.getX(), beatX (timeRange->first)), to = juce::jmin ((float) wave.getRight(), beatX (timeRange->second));
+                    g.setColour (themes::colour (0xffffa63a).withAlpha (0.16f)); g.fillRect (juce::Rectangle<float>::leftTopRightBottom (from, (float) wave.getY(), to, (float) wave.getBottom()));
+                }
+                else if (hasKeyboardFocus (false))
+                {
+                    g.setColour (themes::colour (0xffdadada)); g.drawVerticalLine ((int) beatX (insertBeat), (float) wave.getY(), (float) wave.getBottom());
+                }
                 // Transients: short grey marks along the top, where a double-click pins a marker.
                 g.setColour (themes::colour (0xffa0a0a0));
                 for (const auto t : transients)
@@ -8891,6 +8900,7 @@ private:
         // The selection follows the clip shown: another clip's ends it, and markers gone (undone, say) leave it.
         void keepMarkerSelection()
         {
+            if (clip.id != selectionClip) { timeRange.reset(); insertBeat = 0; }
             if (clip.id != selectionClip || ! markersEditable()) { selectedMarkers.clear(); segmentMarker.reset(); markerAnchor.reset(); selectionClip = clip.id; return; }
             std::erase_if (selectedMarkers, [this] (double s) { return ! markerIndex (s).has_value(); });
             const auto kept = [this] (double s) { return std::any_of (selectedMarkers.begin(), selectedMarkers.end(), [s] (double t) { return std::abs (s - t) < 1e-7; }); };
@@ -8948,16 +8958,21 @@ private:
             const auto selected = selectedMarkerIndices();
             const bool plain = ! mods.isAnyModifierKeyDown();
             if (code == juce::KeyPress::escapeKey && plain && ! selected.empty()) { clearMarkerSelection(); sync(); return true; }
-            if ((code == juce::KeyPress::deleteKey || code == juce::KeyPress::backspaceKey) && plain)
+            if (code == juce::KeyPress::escapeKey && plain && timeRange) { timeRange.reset(); repaint(); return true; }
+            if ((code == juce::KeyPress::deleteKey || code == juce::KeyPress::backspaceKey) && plain) { deleteMarkers(); return true; }
+            // Return selects the markers in the time selection; Cmd+I inserts warp markers and Cmd+L loops the
+            // selection, as the reference's keys do in its sample display.
+            if (code == juce::KeyPress::returnKey && plain && timeRange && markersEditable())
             {
-                if (! selected.empty())
-                {
-                    std::vector<double> doomed;
-                    for (const auto i : selected) doomed.push_back (clip.warpMarkers[i].sourceSeconds);
-                    owner.report (owner.session.deleteWarpMarkers (clip.id, doomed)); owner.refresh(); sync();
-                }
-                return true;
+                selectedMarkers.clear();
+                for (size_t i = 0; i < clip.warpMarkers.size(); ++i)
+                    if (movableMarker (i) && clip.warpMarkers[i].beat >= timeRange->first && clip.warpMarkers[i].beat <= timeRange->second) selectedMarkers.push_back (clip.warpMarkers[i].sourceSeconds);
+                segmentMarker = selectedMarkers.empty() ? std::optional<double>() : selectedMarkers.back(); markerAnchor.reset();
+                sync(); return true;
             }
+            const bool cmdOnly = mods.isCommandDown() && ! mods.isShiftDown() && ! mods.isAltDown();
+            if (cmdOnly && (code == 'I' || code == 'i') && markersEditable()) { insertWarpMarkers(); return true; }
+            if (cmdOnly && (code == 'L' || code == 'l') && clip.canLoop) { loopSelection(); return true; }
             if ((code == juce::KeyPress::leftKey || code == juce::KeyPress::rightKey) && ! selected.empty() && ! mods.isAltDown() && ! mods.isCtrlDown())
             {
                 const bool right = code == juce::KeyPress::rightKey;
@@ -9025,26 +9040,117 @@ private:
             const auto seconds = std::max (0.0, clip.sourceLength);
             return Session::loopLengthFor (Session::estimateClipTempo (seconds) * seconds / 60, std::max (1.0, owner.state.timeSignature.beatsPerBar()));
         }
+        // The loop the time selection suggests, as the reference's Warp Selection as Loop rounds it: the whole-bar guess
+        // for the sample, in the selection's share of it.
+        Session::LoopLength selectionLoopLength() const
+        {
+            const auto seconds = std::max (0.0, clip.sourceLength);
+            const auto share = timeRange ? std::max (0.0, sourceAt (timeRange->second) - sourceAt (timeRange->first)) : seconds;
+            return Session::loopLengthFor (Session::estimateClipTempo (seconds) * share / 60, std::max (1.0, owner.state.timeSignature.beatsPerBar()));
+        }
+        enum WarpItem { warpStraight = 1, warpAsLoopItem, warpAtTempo, insertMarkerItem, deleteItem, loopItem, warpSelectionItem };
         void warpCommand (int item, double sourceSeconds)
         {
-            if (item == 1) owner.report (owner.session.warpFromHere (clip.id, sourceSeconds), "Warped from here.");
-            else if (item == 3) owner.report (owner.session.warpFromHere (clip.id, sourceSeconds, (double) (float) owner.state.tempo), "Warped from here.");
-            else if (item == 2) { const auto length = loopLength(); owner.report (owner.session.warpAsLoop (clip.id, length.count, length.beats)); }
+            if (item == warpStraight) owner.report (owner.session.warpFromHere (clip.id, sourceSeconds), "Warped from here.");
+            else if (item == warpAtTempo) owner.report (owner.session.warpFromHere (clip.id, sourceSeconds, (double) (float) owner.state.tempo), "Warped from here.");
+            else if (item == warpAsLoopItem) { const auto length = loopLength(); owner.report (owner.session.warpAsLoop (clip.id, length.count, length.beats)); }
+            else if (item == warpSelectionItem && timeRange)
+            {
+                const auto length = selectionLoopLength();
+                owner.report (owner.session.warpSelectionAsLoop (clip.id, sourceAt (timeRange->first), sourceAt (timeRange->second), length.count, length.beats));
+                timeRange.reset();
+            }
+            else if (item == insertMarkerItem) insertWarpMarkers();
+            else if (item == deleteItem) deleteMarkers();
+            else if (item == loopItem) loopSelection();
             owner.refresh(); sync();
         }
+        // The sample display's menu, as the reference's (static reading of its code), with the commands Halftrack has:
+        // Insert Warp Marker and Delete, the loop's command, then the warp commands. A point outside the time selection
+        // moves the insert marker there.
         void showWarpMenu (float x, juce::ModifierKeys mods)
         {
             const auto hit = markerAt (x);
             const auto beat = hit >= 0 ? clip.warpMarkers[(size_t) hit].beat : snapsMarkers (mods) ? std::round (xBeat (x) / snapGrid()) * snapGrid() : xBeat (x);
+            if (! timeRange || beat < timeRange->first || beat > timeRange->second) { timeRange.reset(); insertBeat = beat; repaint(); }
             const auto at = sourceAt (beat);
             juce::PopupMenu menu;
-            menu.addItem (1, "Warp From Here (Straight)", markersEditable());
-            menu.addItem (3, "Warp " + juce::String ((float) owner.state.tempo, 2) + " BPM From Here", markersEditable());
-            const auto length = loopLength();
-            menu.addItem (2, "Warp as " + juce::String (length.count) + (length.beats ? "-Beat Loop" : "-Bar Loop"));
+            bool pending = false;
+            const auto item = [&] (int id, const juce::String& text, bool enabled = true) { if (pending) menu.addSeparator(); pending = false; menu.addItem (id, text, enabled); };
+            if (markersEditable())
+            {
+                if (! markersToInsert().empty()) item (insertMarkerItem, "Insert Warp Marker");
+                if (! markersToDelete().empty()) item (deleteItem, "Delete");
+                pending = true;
+            }
+            if (clip.canLoop) { item (loopItem, timeRange ? "Loop Selection" : clip.loop.on ? "Deactivate Loop" : "Activate Loop"); pending = true; }
+            item (warpStraight, "Warp From Here (Straight)", markersEditable());
+            item (warpAtTempo, "Warp " + juce::String ((float) owner.state.tempo, 2) + " BPM From Here", markersEditable());
+            const auto length = timeRange ? selectionLoopLength() : loopLength();
+            const auto loopName = juce::String (length.count) + (length.beats ? "-Beat Loop" : "-Bar Loop");
+            if (timeRange) item (warpSelectionItem, "Warp Selection as " + loopName); else item (warpAsLoopItem, "Warp as " + loopName);
             auto safe = juce::Component::SafePointer<AudioClipView> (this);
             menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (this).withMousePosition(),
                                 [safe, at] (int chosen) { if (safe != nullptr && chosen > 0) safe->warpCommand (chosen, at); });
+        }
+        // The time selection and insert marker, as the reference's sample display has them, in content beats.
+        std::optional<std::pair<double, double>> selectedTime() const { return timeRange; }
+        double insertionBeat() const noexcept { return insertBeat; }
+        // Where Insert Warp Marker puts markers (0x1039c0148): the transients in a time selection without a marker, or
+        // else the selection's start and end (the insert marker without one), each within the sample and free.
+        std::vector<Session::WarpMarker> markersToInsert() const
+        {
+            std::vector<Session::WarpMarker> added;
+            const auto free = [&] (double seconds, double beat)
+            {
+                return std::none_of (clip.warpMarkers.begin(), clip.warpMarkers.end(), [&] (const auto& m) { return std::abs (m.sourceSeconds - seconds) < 1e-6 || std::abs (m.beat - beat) < 1e-6; })
+                    && std::none_of (added.begin(), added.end(), [&] (const auto& m) { return std::abs (m.sourceSeconds - seconds) < 1e-6; });
+            };
+            if (timeRange)
+                for (const auto t : transients)
+                    if (const auto b = beatAtSource (t); b >= timeRange->first && b <= timeRange->second && t > 0 && t < clip.sourceLength && free (t, b)) added.push_back ({ t, b });
+            if (! added.empty()) return added;
+            for (const auto beat : timeRange ? std::vector<double> { timeRange->first, timeRange->second } : std::vector<double> { insertBeat })
+                if (const auto seconds = sourceAt (beat); beat > 0 && seconds > 0 && seconds < clip.sourceLength && free (seconds, beat)) added.push_back ({ seconds, beat });
+            return added;
+        }
+        void insertWarpMarkers()
+        {
+            const auto added = markersToInsert();
+            if (added.empty() || ! markersEditable()) return;
+            auto markers = clip.warpMarkers;
+            for (const auto& m : added) markers.insert (std::lower_bound (markers.begin(), markers.end(), m, [] (const auto& a, const auto& b) { return a.beat < b.beat; }), m);
+            const auto result = owner.session.setAudioClipWarpMarkers (clip.id, markers);
+            owner.report (result);
+            if (result.wasOk()) { selectedMarkers.clear(); for (const auto& m : added) selectedMarkers.push_back (m.sourceSeconds); segmentMarker = selectedMarkers.back(); markerAnchor.reset(); }
+            owner.refresh(); sync();
+        }
+        // What Delete takes: the selected markers, or else those in the time selection.
+        std::vector<double> markersToDelete() const
+        {
+            std::vector<double> doomed;
+            for (const auto i : selectedMarkerIndices()) doomed.push_back (clip.warpMarkers[i].sourceSeconds);
+            if (doomed.empty() && timeRange)
+                for (size_t i = 0; i < clip.warpMarkers.size(); ++i)
+                    if (movableMarker (i) && clip.warpMarkers[i].beat >= timeRange->first && clip.warpMarkers[i].beat <= timeRange->second) doomed.push_back (clip.warpMarkers[i].sourceSeconds);
+            return doomed;
+        }
+        void deleteMarkers()
+        {
+            if (const auto doomed = markersToDelete(); ! doomed.empty()) { owner.report (owner.session.deleteWarpMarkers (clip.id, doomed)); owner.refresh(); sync(); }
+        }
+        // Loop Selection, or with no time selection the loop switched off or on (0x1039c8d2c).
+        void loopSelection()
+        {
+            if (! clip.canLoop) return;
+            if (timeRange)
+            {
+                auto start = clip.contentStartBeat;
+                if (start < timeRange->first || start >= timeRange->second) start = timeRange->first;
+                owner.report (owner.session.setClipLoop (clip.id, { true, timeRange->first, timeRange->second - timeRange->first }, start));
+            }
+            else { auto loop = clip.loop; loop.on = ! loop.on; owner.report (owner.session.setClipLoop (clip.id, loop, clip.contentStartBeat)); }
+            owner.refresh(); sync();
         }
         void mouseDown (const juce::MouseEvent& e) override
         {
@@ -9075,8 +9181,34 @@ private:
                 markerGrab = beatX (clip.warpMarkers[(size_t) hit].beat) - e.position.x; markerDownX = e.position.x;
                 if (isMarkerSelected ((size_t) hit)) reselectOnUp = true; else clickMarker ((size_t) hit, e.mods);
             }
-            else if (! e.mods.isCommandDown() && ! e.mods.isShiftDown()) clearMarkerSelection();
+            else
+            {
+                if (! e.mods.isCommandDown() && ! e.mods.isShiftDown()) clearMarkerSelection();
+                // A drag on the waveform selects time, on the grid unless it is bypassed, and a click places the insert
+                // marker; Shift extends the selection from its far end.
+                const auto at = timeBeat (e.position.x, e.mods);
+                selectingTime = true;
+                if (e.mods.isShiftDown() && timeRange) { timeOrigin = std::abs (at - timeRange->first) > std::abs (at - timeRange->second) ? timeRange->first : timeRange->second; selectTime (at); }
+                else if (e.mods.isShiftDown()) { timeOrigin = insertBeat; selectTime (at); }
+                else { timeOrigin = at; timeRange.reset(); insertBeat = at; }
+            }
             sync();
+        }
+        // The beat under x for the time selection, on the grid unless the bypass modifier is held, within the waveform.
+        double timeBeat (float x, juce::ModifierKeys mods) const
+        {
+            const auto [first, beats] = visibleBeats();
+            auto beat = xBeat (x);
+            if (snapsMarkers (mods)) { const auto grid = snapGrid(); beat = std::round (beat / grid) * grid; }
+            return juce::jlimit (first, first + beats, beat);
+        }
+        void selectTime (double at)
+        {
+            const auto from = std::min (timeOrigin, at), to = std::max (timeOrigin, at);
+            timeRange.reset();
+            if (to > from + 1.0e-9) timeRange = std::pair { from, to };
+            insertBeat = from;
+            repaint();
         }
         // The clip's own grid at the view's zoom and width, as the note editor's is.
         GridPlace gridPlace() const
@@ -9131,6 +9263,7 @@ private:
                 owner.report (owner.session.setClipLoop (clip.id, loop, start)); owner.refresh(); sync();
                 return;
             }
+            if (selectingTime) { selectTime (timeBeat (e.position.x, e.mods)); return; }
             if (! pressedMarker || ! dragsMarkers) return;
             if (! markerDragging && std::abs (e.position.x - markerDownX) <= 3) return;
             const auto pressed = markerIndex (*pressedMarker);
@@ -9148,7 +9281,7 @@ private:
             if (gesture) { owner.session.endEditGesture(); gesture = false; }
             if (reselectOnUp && ! markerDragging && pressedMarker)
                 if (const auto pressed = markerIndex (*pressedMarker)) clickMarker (*pressed, e.mods);
-            pressedMarker.reset(); markerDragging = reselectOnUp = false; braceDrag = 0; sync();
+            pressedMarker.reset(); markerDragging = reselectOnUp = selectingTime = false; braceDrag = 0; sync();
         }
         // The clip's content beats over the waveform, where its envelopes' points lie: from its
         // offset into the content, for its length.
@@ -9173,6 +9306,10 @@ private:
         // Where the Follow Action time's marker is: its time after the start marker.
         float followMarkerX() const { return beatX (clip.contentStartBeat + clip.follow.timeBeats); }
     private:
+        // The time selection and the insert marker (see selectedTime), and the press a selection drag began at.
+        std::optional<std::pair<double, double>> timeRange;
+        double insertBeat = 0, timeOrigin = 0;
+        bool selectingTime = false;
         // The selected warp markers (see selectedWarpMarkers) and the clip they belong to.
         std::vector<double> selectedMarkers;
         std::optional<double> segmentMarker, markerAnchor;
@@ -27814,6 +27951,41 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
                 check (key (juce::KeyPress::deleteKey) && session.undoSteps().size() == steps + 1, "with none selected, Delete here deletes nothing else");
                 session.undo(); session.undo(); refresh(); audioClipView.sync();
                 check (clickMarkers().size() == 2, "two undo steps return the one marker");
+                // The time selection: a drag on the waveform away from the marker, on the grid.
+                const auto snapped = [&] (double beat) { return std::round (beat / grid) * grid; };
+                const auto selectFrom = audioClipView.beatX (0.25), selectTo = audioClipView.beatX (1.0);
+                audioClipView.mouseDown (view (selectFrom, selectFrom, false, 1)); audioClipView.mouseDrag (view (selectTo, selectFrom, true, 1)); audioClipView.mouseUp (view (selectTo, selectFrom, true, 1));
+                const auto range = audioClipView.selectedTime();
+                check (range && std::abs (range->first - snapped (0.25)) < 1e-9 && std::abs (range->second - snapped (1.0)) < 1e-9 && audioClipView.selectedWarpMarkers().empty(),
+                       "a drag on the waveform selects time on the grid, deselecting the markers");
+                check (key ('I', juce::ModifierKeys::commandModifier) && clickMarkers().size() == 3 && clickMarkers()[1].sourceSeconds == transients[0]
+                           && audioClipView.selectedWarpMarkers() == std::vector<double> { transients[0] },
+                       "Cmd+I puts a warp marker on the transient in the selection, and selects it");
+                session.undo(); refresh(); audioClipView.sync();
+                check (key (juce::KeyPress::returnKey) && audioClipView.selectedWarpMarkers().empty(), "Return selects the markers in the selection: none");
+                const auto extendTo = audioClipView.beatX (1.75);
+                audioClipView.mouseDown (view (extendTo, extendTo, false, 1, juce::ModifierKeys (juce::ModifierKeys::leftButtonModifier | juce::ModifierKeys::shiftModifier)));
+                audioClipView.mouseUp (view (extendTo, extendTo, false, 1, juce::ModifierKeys (juce::ModifierKeys::leftButtonModifier | juce::ModifierKeys::shiftModifier)));
+                check (audioClipView.selectedTime() && std::abs (audioClipView.selectedTime()->second - snapped (1.75)) < 1e-9 && std::abs (audioClipView.selectedTime()->first - snapped (0.25)) < 1e-9,
+                       "a Shift-click extends the selection");
+                check (key (juce::KeyPress::returnKey) && audioClipView.selectedWarpMarkers() == std::vector<double> { transients[1] }, "and Return selects the marker now in it");
+                check (key (juce::KeyPress::escapeKey) && audioClipView.selectedWarpMarkers().empty() && audioClipView.selectedTime(), "Escape deselects the marker first");
+                check (key ('L', juce::ModifierKeys::commandModifier) && state.tracks[(size_t) clickTrack].clips[0].loop.on
+                           && std::abs (state.tracks[(size_t) clickTrack].clips[0].loop.start - snapped (0.25)) < 1e-6
+                           && std::abs (state.tracks[(size_t) clickTrack].clips[0].loop.length - (snapped (1.75) - snapped (0.25))) < 1e-6,
+                       "Cmd+L loops the clip over the selection");
+                session.undo(); refresh(); audioClipView.sync();
+                const auto stepsBeforeDelete = session.undoSteps().size();
+                check (key (juce::KeyPress::deleteKey) && clickMarkers().empty() && session.undoSteps().size() == stepsBeforeDelete + 1, "Delete deletes the markers in the selection");
+                session.undo(); refresh(); audioClipView.sync();
+                check (key (juce::KeyPress::escapeKey) && ! audioClipView.selectedTime(), "a second Escape ends the selection");
+                const auto click = audioClipView.beatX (3.0);
+                audioClipView.mouseDown (view (click, click, false, 1)); audioClipView.mouseUp (view (click, click, false, 1));
+                check (! audioClipView.selectedTime() && std::abs (audioClipView.insertionBeat() - snapped (3.0)) < 1e-9, "a click places the insert marker");
+                check (key ('I', juce::ModifierKeys::commandModifier) && clickMarkers().size() == 3 && std::abs (clickMarkers()[2].beat - snapped (3.0)) < 1e-9,
+                       "and Cmd+I puts a marker there, where its audio plays");
+                session.undo(); refresh(); audioClipView.sync();
+                check (clickMarkers().size() == 2, "undo removes it");
             }
             // The waveform's menu runs the warp commands: two seconds of clicks suggest a one-bar loop,
             // and are too short for Warp From Here to find a tempo, which it says.

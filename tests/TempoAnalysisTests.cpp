@@ -251,6 +251,23 @@ int runTempoAnalysisTests (const juce::File& artifacts)
             check (std::abs (s.snapshot().tracks[(size_t) loopTrack].clips[0].warp.bpm - 52.5) < 1e-3, "it plays the four bars as eight beats, at 52.5 BPM");
             s.undo();
             check (s.warpAsLoop (loopId, 0).failed() && s.warpAsLoop (loopId, 300).failed(), "0 or 300 bars are refused");
+            // Warp Selection as N-Bar Loop: the loop's middle two bars, as two bars.
+            const auto seconds = looped.sourceLength;
+            const auto stepsBefore = s.undoSteps().size();
+            ok (s.warpSelectionAsLoop (loopId, seconds / 4, seconds * 3 / 4, 2), "Warp Selection as 2-Bar Loop over the middle two bars");
+            const auto selected = s.snapshot().tracks[(size_t) loopTrack].clips[0];
+            check (std::abs (selected.warp.bpm - 105) < 1e-3 && selected.loop.on && std::abs (selected.loop.length - 8) < 1e-9 && std::abs (selected.loop.start - 4) < 1e-3
+                       && std::abs (selected.contentStartBeat - selected.loop.start) < 1e-9 && selected.warpMarkers.empty() && s.undoSteps().size() == stepsBefore + 1,
+                   "the selection plays at the tempo that fits it into two bars, 105 BPM, looped from where it starts, one undo step");
+            ok (s.warpSelectionAsLoop (loopId, 0, seconds / 8, 1, true), "the first half bar as one beat");
+            check (std::abs (s.snapshot().tracks[(size_t) loopTrack].clips[0].warp.bpm - 52.5) < 1e-3 && s.snapshot().tracks[(size_t) loopTrack].clips[0].loop.start == 0,
+                   "it plays two beats' audio as one, at 52.5 BPM, from the first beat");
+            check (s.warpSelectionAsLoop (loopId, 0, seconds, 1, true).failed() && s.warpSelectionAsLoop (loopId, 2, 2, 1).failed()
+                       && s.warpSelectionAsLoop (loopId, 0, seconds, 0).failed(),
+                   "a selection that would play below 20 BPM, an empty one and 0 bars are refused");
+            s.undo(); s.undo();
+            check (std::abs (s.snapshot().tracks[(size_t) loopTrack].clips[0].warp.bpm - 105) < 1e-3 && s.snapshot().tracks[(size_t) loopTrack].clips[0].loop.start == 0,
+                   "two undo steps return the four-bar loop");
             s.undo();
             check (s.snapshot().tracks[(size_t) loopTrack].clips[0].warp.bpm == 120, "one undo returns 120 BPM");
 

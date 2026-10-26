@@ -14059,6 +14059,30 @@ Result Session::warpAsLoop (const String& id, int count, bool inBeats)
     if (auto r = setClipLoop (id, { true, 0, beats }, 0); r.failed()) return r;
     impl->changed(); return Result::ok();
 }
+Result Session::warpSelectionAsLoop (const String& id, double fromSeconds, double toSeconds, int count, bool inBeats)
+{
+    if (auto frozen = impl->unfrozen (impl->trackOfClip (id)); frozen.failed()) return frozen;
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    auto* clip = impl->audioClip (id); if (! clip) return Result::fail ("Audio clip not found.");
+    const auto before = describeClip (*clip);
+    if (before.warp.mode == WarpMode::off) return Result::fail ("Warp Selection as Loop needs a warped clip.");
+    if (count < 1 || count > (inBeats ? 1024 : 256)) return Result::fail (inBeats ? "Choose 1 to 1024 beats." : "Choose 1 to 256 bars.");
+    if (! std::isfinite (fromSeconds) || ! std::isfinite (toSeconds)) return Result::fail ("Select some of the clip's audio first.");
+    const auto from = juce::jlimit (0.0, before.sourceLength, fromSeconds), to = juce::jlimit (0.0, before.sourceLength, toSeconds);
+    if (! (to > from)) return Result::fail ("Select some of the clip's audio first.");
+    const auto beats = inBeats ? (double) count : count * snapshot().timeSignature.beatsPerBar();
+    // As the reference's: the tempo that fits the selection into the loop, at most 999 BPM.
+    const auto bpm = std::min (999.0, beats / (to - from) * 60);
+    if (bpm < 20)
+        return Result::fail ("As " + String (count) + (inBeats ? " beats" : " bars") + " the selection would play at " + String (bpm, 2) + " BPM, below 20.");
+    const OneUndoStep step (*this, true, impl->gesture != nullptr, "Warp selection as loop");
+    if (! before.warpMarkers.empty()) if (auto r = setAudioClipWarpMarkers (id, {}); r.failed()) return r;
+    auto settings = before.warp; settings.bpm = bpm;
+    if (auto r = setAudioClipWarp (id, settings); r.failed()) return r;
+    const auto start = from * bpm / 60;
+    if (auto r = setClipLoop (id, { true, start, beats }, start); r.failed()) return r;
+    impl->changed(); return Result::ok();
+}
 // The markers at the given source seconds, by index, in order; the start at (0, 0) is not among them.
 static std::vector<size_t> markersAtSeconds (const std::vector<Session::WarpMarker>& markers, const std::vector<double>& seconds)
 {

@@ -1379,6 +1379,11 @@ public:
     // Warp as N-Bar Loop, as the reference's: the whole sample becomes that many bars of the project meter (beats with
     // inBeats), with no markers, looping from its start. One undo step.
     juce::Result warpAsLoop (const juce::String& clipId, int count, bool inBeats = false);
+    // Warp Selection as N-Bar Loop, as the reference's (static reading of its code): the audio between two points of the
+    // source becomes that many bars (beats with inBeats), looped, at the tempo that fits them, at most 999 BPM. The
+    // reference puts the selection's start at beat 1.1.1; Halftrack's clips keep their source's start on the first beat,
+    // so the loop and start lie where the selection plays, with no markers. Refused below 20 BPM. One undo step.
+    juce::Result warpSelectionAsLoop (const juce::String& clipId, double fromSeconds, double toSeconds, int count, bool inBeats = false);
     // The length the reference's Warp as Loop offers for a sample of that many beats: 1, 2, 4 or 8 bars, then multiples
     // of 8 up to 64, then whole bars; in beats when that is shorter than a bar.
     struct LoopLength { int count = 1; bool beats = false; bool operator== (const LoopLength&) const = default; };

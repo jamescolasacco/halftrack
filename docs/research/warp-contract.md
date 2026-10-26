@@ -129,7 +129,7 @@ The UI suite checks the menu's one-bar suggestion for two seconds at 120 BPM. It
 
 Missing, from the same reading:
 - Warp From Here (with tempo changes) and Warp From Here (Start at the project tempo), which need the reference's beat tracker: markers on every bar from the whole beat at or below the point.
-- Set 1.1.1 Here, Warp Selection as N-Bar Loop, and the menu's Insert Warp Marker, Delete and Quantize.
+- Set 1.1.1 Here and the menu's Quantize. Warp Selection as N-Bar Loop, Insert Warp Marker and Delete are in [the time selection](#the-time-selection-and-the-sample-displays-menu-2026-10-26).
 
 ## Marker selection, moves and Seg. BPM (2026-10-26)
 
@@ -161,7 +161,7 @@ After the same static reading of the reference's code, the clip view selects, mo
 
 Differences from the reference:
 - Halftrack's start marker at (0, 0) is fixed and not drawn. The reference's first marker, whose Seg. BPM is the tempo after it, corresponds to Halftrack's empty selection.
-- The reference's clip view has a time selection and an insert marker. A click on a marker moves the insert marker there, and Return selects the markers in the time selection. Halftrack's audio clip view has neither.
+- A click on the reference's marker moves the insert marker there; Halftrack's leaves the insert marker where it was. The time selection came after this section ([below](#the-time-selection-and-the-sample-displays-menu-2026-10-26)).
 - Marker beats are not rounded to the reference's 1/3843840 beat.
 - Not implemented: transient pseudo markers (shown on hover, converted by Cmd-dragging), Shift-dragging the waveform or a transient, and audio preview while the arrow keys move markers.
 
@@ -185,6 +185,25 @@ Evidence:
   - Escape deselects;
   - with both selected by Cmd-clicks, a drag far left stops the first where its segment from the start plays at 5 BPM, keeping their spacing, in one undo step;
   - Delete deletes both in one undo step, the clip's tempo staying 120, and with none selected deletes nothing.
+
+## The time selection and the sample display's menu (2026-10-26)
+
+After the same reading, a warped clip's sample display has the reference's time selection and insert marker, and its menu its marker and loop commands.
+
+- **Selecting.** A drag on the waveform, away from the markers, selects time on the grid unless the grid is bypassed, and deselects the markers without Cmd or Shift. A click places the insert marker, drawn while the view has the keys. A Shift-click extends the selection from its far end. Showing another clip ends it.
+- **Keys:**
+  - Cmd+I inserts warp markers (`insp`): at each transient in the selection without a marker, or else at the selection's start and end, or the insert marker without a selection, each within the sample and free of a marker; the new markers are selected;
+  - Delete deletes the selected markers, or else those in the selection;
+  - Return selects the markers in the selection;
+  - Cmd+L loops the clip over the selection, keeping a start inside it; with no selection it switches the loop off or on;
+  - Escape deselects the markers, and then ends the selection.
+- **The menu**, in the reference's order with the commands Halftrack has: Insert Warp Marker and Delete when they would act, the loop's command (Loop Selection, or Activate Loop or Deactivate Loop), then the warp commands. A right-click outside the selection ends it and moves the insert marker there, as the reference's does.
+- **Warp Selection as N-Bar Loop** replaces Warp as N-Bar Loop when there is a selection. `Session::warpSelectionAsLoop (clipId, fromSeconds, toSeconds, count, inBeats)` plays the selected audio as that many bars (or beats), looped, at the tempo that fits it, at most 999 BPM, with no markers, in one undo step. The length offered is the whole-bar guess for the sample, in the selection's share of it, rounded as Warp as Loop's is.
+  - The reference puts the selection's start at 1.1.1 with a marker there. Halftrack's clips keep their source's start on the first beat, so its loop and start lie where the selection plays: the same audio loops at the same tempo, with the loop's position counted from the source's start. Below 20 BPM, Halftrack's lowest clip tempo, it is refused.
+
+Evidence:
+- `tests/TempoAnalysisTests.cpp`: a four-bar loop at 105 BPM, its middle two bars warped as a 2-bar loop, plays at 105 BPM looping from beat 5 in one undo step; its first half bar as one beat plays at 52.5 BPM from the first beat; a selection that would play below 20 BPM, an empty one and 0 bars are refused; undo returns the loop.
+- The UI suite, on the click fixture: a drag selects time on the grid; Cmd+I marks the transient in it and selects the marker; Return selects none, and after a Shift-click extends the selection, the marker now in it; Escape deselects the marker first; Cmd+L loops the clip over the selection; Delete deletes the marker in it in one undo step; a second Escape ends the selection; a click places the insert marker, where Cmd+I puts a marker.
 
 ## First play of a warped clip (2026-10-24)
 

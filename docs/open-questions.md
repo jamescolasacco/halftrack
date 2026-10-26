@@ -1009,3 +1009,7 @@ Device A/B comparison ([native effects contract](research/native-effects-contrac
 Same-pitch note overlaps ([contract](research/note-overlaps-contract.md)). Defaults where the static reading left it open: a note drawn or double-clicked stays floating while it stays selected, so dragging it on brings back what it took away; Draw Mode's notes follow the same rule; a cut that would leave a note shorter than Halftrack's minimum (a 960th of a beat) removes the note; MIDI files import overlapping notes as they are; a cut note keeps its expression as it was.
 
 Playing a MIDI track's clips while recording over them. The engine's MIDI take merging stays on while recording so the track's clips keep playing, with Arrangement Overdub off too; it is turned off only while takes finish. Whether the reference silences the material a take with overdub off is replacing, as it records, was not read; the default keeps it audible, as before.
+
+## MIDI inputs' Remote switches default off (2026-10-26)
+
+The reference's input ports start with Remote off (static reading of its preferences), so a controller maps nothing until its Remote switch is on in Link, Tempo & MIDI. Halftrack now does the same, so a setup that mapped controllers before needs its inputs' Remote switched on once. Default kept: the reference's. Open: whether the reference switches Remote on itself when a control surface or a known controller is chosen for a port (its device-found path was not traced).
