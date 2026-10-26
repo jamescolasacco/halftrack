@@ -20,6 +20,18 @@ Halftrack's Live Clips follow the reference's, as its manual describes them ([Ma
   - A Session clip keeps its launch settings; an Arrangement clip in a slot takes the defaults. A MIDI clip keeps its length and content start in beats; a warped audio clip keeps its length in beats.
   - It is one undo step, and a damaged file is refused before anything changes.
 
+## Tracks from other projects (2026-10-26)
+
+As the manual describes, a project in the browser unfolds like a folder to show its tracks, and its tracks come into the open project whole.
+
+- **Listing.** A project file's triangle unfolds its tracks, read from the file without opening it: groups, then what is in them one level deeper (`Session::listProjectTracks`). Returns are not listed.
+- **Importing** (`Session::importProjectTracks`): dragging a track in, or pressing Return on it, brings it with its clips, devices and automation; dragging the project brings its top-level tracks and groups. A group comes with everything in it.
+  - They land before the track or Session column under the pointer, or after the other tracks where no track is (as Paste places tracks); Return puts a track after the others.
+  - The project is read with every check opening it makes, and a damaged one is refused before anything changes.
+  - Media stays where it is until the next save collects it into this project, as any outside sample does.
+  - Returns are not imported, and sends to returns are left out. It is one undo step.
+- Opening a project from the browser still loads it.
+
 ## Evidence
 
 The presets suite:
@@ -31,11 +43,13 @@ The presets suite:
 - saves an audio clip, its sample copied into Samples, and loads it, its sample collected into the project;
 - refuses a damaged file, changing nothing.
 
-The UI suite drags a clip onto the browser showing the User Library, finds the file saved and listed there, dragging as a Live Clip, and the clip unmoved. It drops it on the track's lane at its second bar, and in the Session's drop area, where it lands in a slot of a new track.
+The track-duplicate suite lists another project's tracks (its MIDI track at the top, its group followed by the audio track in it, and its return), imports its MIDI track whole (its clip and note, its Saturator and its volume automation) and undoes it, imports the whole project (the group with its audio track and audio, no return), imports a track before this project's first, and refuses a damaged project, changing nothing.
+
+The UI suite drags a clip onto the browser showing the User Library, finds the file saved and listed there, dragging as a Live Clip, and the clip unmoved. It drops it on the track's lane at its second bar, and in the Session's drop area, where it lands in a slot of a new track. It also finds a project in the User Library folded, unfolds it with its triangle to a Keys track one level deeper that drags as that project's track, drops it on a track, where it comes in before it, and folds it again.
 
 ## Not yet covered
 
 - Previewing a Live Clip from the browser, and hot-swapping one.
-- Unfolding a project in the browser to drag its tracks or clips in, and exporting Session clips as a new project by dragging them to the browser.
+- Dragging an unfolded project's clips in, importing returns with their sends, and exporting Session clips as a new project by dragging them to the browser.
 - The reference's Collect Files on Export choices: Halftrack always copies the sample beside the file.
 - Defaults where the manual is silent are in the [open questions](../open-questions.md#live-clips).

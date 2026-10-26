@@ -536,6 +536,7 @@ The manual describes saving and loading Live Clips ([contract](research/live-cli
 - **No devices.** The built-in synth a new MIDI track starts with counts as no devices, standing in for the reference's empty MIDI track.
 - **Samples.** An audio clip's sample is always copied beside the file, into Samples.
 - **Slots.** A Live Clip dropped on a slot replaces its clip.
+- **Imported tracks.** Returns are neither listed nor imported, so sends to them are left out; the manual says tracks are "completely reconstructed". Imported media stays where it is until the next save collects it.
 
 ### Capture MIDI boundaries
 

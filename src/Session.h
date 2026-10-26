@@ -852,6 +852,14 @@ public:
     juce::Result readLiveClip (const juce::File&, LiveClip&) const;
     juce::Result loadLiveClip (const juce::File&, int trackIndex, double startBeat, juce::String& clipId);
     juce::Result loadLiveClipToSlot (const juce::File&, int trackIndex, int sceneIndex, juce::String& clipId);
+    // Another project's tracks, as the reference's browser unfolds a Set: listed from its file without opening it
+    // (groups followed by what is in them, one level deeper), and imported whole, with their clips, devices and
+    // automation, before the track or group `before` names (or after the other tracks), a group with everything in it.
+    // With no tracks named, its top-level tracks and groups come. Returns are not imported, and sends to returns are
+    // left out. The project is read with every check opening it makes; one undo step.
+    struct ProjectTrack { juce::String id, name; bool midi = false, group = false, returnTrack = false; int depth = 0; };
+    static juce::Result listProjectTracks (const juce::File&, std::vector<ProjectTrack>&);
+    juce::Result importProjectTracks (const juce::File&, const juce::StringArray& trackIds, const juce::String& before, juce::StringArray& created);
     juce::Result addAudioTrack (juce::String name = {}, const juce::String& after = {});
     juce::Result addMidiTrack (juce::String name = {}, const juce::String& after = {});
     juce::Result addReturnTrack (juce::String name = {}, const juce::String& after = {});

@@ -110,7 +110,7 @@ Each capability with partial implementation (a PARTIAL row of the [capability le
 | PRJ-008 | collections, ui |  |
 | PRJ-009 | preview, ui |  |
 | PRJ-010 | similarity, ui | Core Library drum one-shots evaluated with --similarity-evaluate |
-| PRJ-011 | presets, track-order, ui |  |
+| PRJ-011 | presets, track-order, track-duplicate, ui |  |
 | PRJ-012 | audio-export |  |
 | PRJ-013 | stems |  |
 | PRJ-014 | render-agreement |  |

@@ -3007,3 +3007,7 @@ UI area. As the reference's manual describes, multi-clip editing's loop bars now
 ## Live Clips — 2026-10-26
 
 Engine and UI areas. As the reference's manual describes, dragging a clip onto the browser saves it as a Live Clip in the place shown: its settings, loop, notes and envelopes with its track's devices, and an audio clip's sample beside it. The browser lists Live Clips, and dragging one into the project lands it like a sound: on the track or slot under it, bringing its devices onto an empty track, or on a new track where no track is.
+
+## Tracks from other projects — 2026-10-26
+
+Engine and UI areas. As the reference's manual describes, a project in the browser unfolds to its tracks, and dragging a track (or the whole project) into the open project brings it with its clips, devices and automation, before the track under the pointer or after the others, in one undo step. The project is read with every check opening it makes. Opening a project now shares that reading step.

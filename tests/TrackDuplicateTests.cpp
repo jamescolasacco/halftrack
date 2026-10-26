@@ -189,13 +189,75 @@ void defaultTrackTests (const juce::File& root)
     file.replaceWithText ("not a track");
     ok (session.addAudioTrack(), "an unreadable default"); check (session.snapshot().tracks.back().plugins.empty(), "makes a plain track");
 }
+// Tracks of another project, as the reference's browser unfolds a Set: listed from its file, and imported whole.
+void importTests (const juce::File& root)
+{
+    const auto file = root.getChildFile ("Other").getChildFile ("Other.halftrack");
+    juce::String keysId;
+    {
+        Session other (false);
+        ok (other.addMidiTrack ("Keys"), "a MIDI track in another project");
+        const int keys = (int) other.snapshot().tracks.size() - 1;
+        keysId = other.snapshot().tracks[(size_t) keys].id;
+        ok (other.addNativeEffect (keys, Session::EffectKind::saturator), "with a Saturator");
+        ok (other.addMidiClip (keysId, 0, 4), "and a clip");
+        ok (other.addMidiNote (other.snapshot().tracks[(size_t) keys].clips[0].id, 60, 0, 1, .8f), "holding a note");
+        ok (other.setTrackAutomation (keysId, Session::AutomationTarget::volume, { true, { { 0, -6 }, { 4, -12 } } }), "and volume automation");
+        ok (other.importAudio (root.getChildFile ("duplicate-source.wav"), 0), "audio on its first track");
+        juce::String group;
+        ok (other.groupTracks ({ other.snapshot().tracks[0].id }, group), "which is grouped");
+        ok (other.addReturnTrack(), "a return");
+        ok (other.saveProject (file), "save it");
+    }
+    std::vector<Session::ProjectTrack> listed;
+    ok (Session::listProjectTracks (file, listed), "list its tracks from the file");
+    const auto keysListed = std::find_if (listed.begin(), listed.end(), [&] (const auto& t) { return t.id == keysId; });
+    const auto groupListed = std::find_if (listed.begin(), listed.end(), [] (const auto& t) { return t.group; });
+    check (keysListed != listed.end() && keysListed->name == "Keys" && keysListed->midi && keysListed->depth == 0
+               && groupListed != listed.end() && groupListed + 1 != listed.end() && (groupListed + 1)->depth == 1 && ! (groupListed + 1)->midi
+               && std::any_of (listed.begin(), listed.end(), [] (const auto& t) { return t.returnTrack; }),
+           "Keys at the top, the group followed by its audio track a level deeper, and the return");
+    Session session (false);
+    ok (session.saveProject (root.getChildFile ("Here").getChildFile ("Here.halftrack")), "this project saved");
+    const auto start = session.snapshot();
+    const auto before = start.tracks.size();
+    const auto groups = start.groups.size();
+    const auto returns = std::count_if (start.tracks.begin(), start.tracks.end(), [] (const auto& t) { return t.isReturn; });
+    juce::StringArray created;
+    ok (session.importProjectTracks (file, { keysId }, {}, created), "import Keys");
+    auto snap = session.snapshot();
+    const auto imported = std::find_if (snap.tracks.begin(), snap.tracks.end(), [&] (const auto& t) { return created.contains (t.id); });
+    check (created.size() == 1 && snap.tracks.size() == before + 1 && imported != snap.tracks.end() && imported->name == "Keys" && imported->isMidi
+               && imported->clips.size() == 1 && imported->clips[0].notes.size() == 1
+               && std::any_of (imported->plugins.begin(), imported->plugins.end(), [] (const auto& p) { return p.effect.kind == Session::EffectKind::saturator; })
+               && imported->volumeAutomation.points.size() == 2,
+           "it comes whole: its clip and note, its Saturator and its volume automation ("
+               + (imported == snap.tracks.end() ? juce::String ("missing") : imported->name + ", " + juce::String ((int) imported->clips.size()) + " clips, "
+                  + juce::String ((int) imported->plugins.size()) + " devices, " + juce::String ((int) imported->volumeAutomation.points.size()) + " points") + ")");
+    session.undo();
+    check (session.snapshot().tracks.size() == before, "one undo removes it");
+    ok (session.importProjectTracks (file, {}, {}, created), "import the whole project");
+    snap = session.snapshot();
+    const auto audio = std::find_if (snap.tracks.begin(), snap.tracks.end(), [&] (const auto& t) { return t.groupId.isNotEmpty() && t.clips.size() == 1 && t.clips[0].isAudio; });
+    check (snap.groups.size() == groups + 1 && audio != snap.tracks.end() && audio->clips[0].file.existsAsFile()
+               && std::count_if (snap.tracks.begin(), snap.tracks.end(), [] (const auto& t) { return t.isReturn; }) == returns,
+           "its group comes with the audio track in it, the audio there, and no return");
+    session.undo();
+    ok (session.importProjectTracks (file, { keysId }, session.snapshot().tracks[0].id, created), "import Keys before the first track");
+    check (session.snapshot().tracks[0].id == created[0], "it goes before the track chosen");
+    session.undo();
+    const auto junk = root.getChildFile ("Junk.halftrack");
+    check (junk.replaceWithText ("<HALFTRACK version=\"1\"/>"), "write a damaged project");
+    check (session.importProjectTracks (junk, {}, {}, created).failed() && Session::listProjectTracks (junk, listed).failed() && session.snapshot().tracks.size() == before,
+           "a damaged project is refused, changing nothing");
+}
 int runTrackDuplicateTests (const juce::File& artifacts)
 {
     try
     {
         useHardClipEdges(); // Renders here are compared sample for sample with hard clip edges.
         const auto root=artifacts.getChildFile("track-duplicate-"+juce::Uuid().toString());ok(root.createDirectory(),"create isolated fixtures");
-        audioTests(root);midiTests(root);captureTests(root);defaultTrackTests(root);std::cout<<"Track duplication tests passed: "<<root.getFullPathName()<<std::endl;return 0;
+        audioTests(root);midiTests(root);captureTests(root);defaultTrackTests(root);importTests(root);std::cout<<"Track duplication tests passed: "<<root.getFullPathName()<<std::endl;return 0;
     }
     catch(const std::exception& e){std::cerr<<"FAIL track duplicate: "<<e.what()<<std::endl;return 1;}
 }

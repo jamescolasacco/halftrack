@@ -8451,10 +8451,10 @@ Result Session::startProject (bool builtInDefaultSet)
     return Result::ok();
 }
 
-Result Session::loadProject (const File& file)
+// A project file read into an Edit of its own, with every check opening it makes, before anything replaces the open
+// project; its media paths are made absolute. Opening a project and importing its tracks both start here.
+Result readProjectCandidate (te::Engine& engine, const File& file, std::unique_ptr<te::Edit>& candidateOut)
 {
-    impl->endNudge();
-    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
     auto xml = juce::XmlDocument::parse (file);
     if (! xml || ! xml->hasTagName ("HALFTRACK") || xml->getIntAttribute ("version") != 1)
         return Result::fail ("This is not a supported Halftrack project.");
@@ -8532,7 +8532,7 @@ Result Session::loadProject (const File& file)
     migrateFollowActions (state);
     auto id = te::ProjectItemID::fromProperty (state, te::IDs::projectID);
     if (! id.isValid()) id = te::ProjectItemID::createNewID (te::ProjectID{});
-    auto options = te::Edit::Options { impl->engine, state, id };
+    auto options = te::Edit::Options { engine, state, id };
     options.numAudioTracks = 0;
     options.editFileRetriever = [file] { return file; };
     auto candidate = te::Edit::createEdit (std::move (options));
@@ -8542,7 +8542,7 @@ Result Session::loadProject (const File& file)
             for (const auto target : mixerTargets)
                 if (! validAutomationLane (target, automationLane (*mixer, target)))
                     return Result::fail ("Mixer automation exceeds the supported beat or value range.");
-    for (const auto target : { AutomationTarget::volume, AutomationTarget::pan })
+    for (const auto target : { Session::AutomationTarget::volume, Session::AutomationTarget::pan })
         if (! validAutomationLane (target, automationLane (*candidate->getMasterVolumePlugin(), target)))
             return Result::fail ("Main automation exceeds the supported beat or value range.");
     // Plug-ins that cannot load stay as placeholders; the snapshot marks them missing.
@@ -8563,6 +8563,15 @@ Result Session::loadProject (const File& file)
             for (auto clip : lane)
                 if (clip.hasType (te::IDs::AUDIOCLIP))
                     clip.setProperty (te::IDs::source, te::SourceFileReference::findFileFromString (*candidate, clip[te::IDs::source].toString()).getFullPathName(), nullptr);
+    candidateOut = std::move (candidate);
+    return Result::ok();
+}
+Result Session::loadProject (const File& file)
+{
+    impl->endNudge();
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    std::unique_ptr<te::Edit> candidate;
+    if (auto read = readProjectCandidate (impl->engine, file, candidate); read.failed()) return read;
     endEditGesture(); closePluginEditors(); stop(); impl->meters.clear();
     impl->projectFile = file;
     impl->pristineNewDocument = false;
@@ -8592,6 +8601,74 @@ Result Session::loadProject (const File& file)
     return Result::ok();
 }
 
+Result Session::listProjectTracks (const File& file, std::vector<ProjectTrack>& tracks)
+{
+    tracks.clear();
+    auto xml = juce::XmlDocument::parse (file);
+    auto* editXml = xml != nullptr && xml->hasTagName ("HALFTRACK") && xml->getIntAttribute ("version") == 1 ? xml->getChildByName ("EDIT") : nullptr;
+    if (editXml == nullptr) return Result::fail ("This is not a supported Halftrack project.");
+    const std::function<void (const juce::XmlElement&, int)> visit = [&] (const juce::XmlElement& parent, int depth)
+    {
+        for (auto* child : parent.getChildIterator())
+        {
+            const bool group = child->hasTagName ("FOLDERTRACK");
+            if (! group && ! child->hasTagName ("TRACK")) continue;
+            ProjectTrack track;
+            track.id = child->getStringAttribute ("id");
+            track.midi = child->getBoolAttribute (midiTrackProperty.toString());
+            track.returnTrack = child->getBoolAttribute (returnProperty.toString());
+            track.group = group; track.depth = depth;
+            track.name = child->getStringAttribute ("name").trim();
+            if (track.name.isEmpty()) track.name = group ? "Group" : track.returnTrack ? "Return" : track.midi ? "MIDI" : "Audio";
+            tracks.push_back (track);
+            if (group) visit (*child, depth + 1);
+        }
+    };
+    visit (*editXml, 0);
+    return Result::ok();
+}
+Result Session::importProjectTracks (const File& file, const juce::StringArray& trackIds, const String& beforeId, juce::StringArray& created)
+{
+    created.clear();
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    if (impl->anyRecording()) return Result::fail ("Stop recording before importing tracks.");
+    te::Track* before = nullptr;
+    if (beforeId.isNotEmpty())
+    {
+        before = impl->track (beforeId);
+        if (before == nullptr) before = impl->group (beforeId);
+        if (before == nullptr) return Result::fail ("Track not found.");
+        if (auto* audio = dynamic_cast<te::AudioTrack*> (before); audio != nullptr && isReturn (*audio)) return Result::fail ("Imported tracks go among the other tracks, not the returns.");
+    }
+    // The other project, read with every check opening it makes.
+    std::unique_ptr<te::Edit> other;
+    if (auto read = readProjectCandidate (impl->engine, file, other); read.failed()) return read;
+    juce::Array<te::Track*> chosen;
+    for (auto* t : te::getAllTracks (*other))
+    {
+        auto* audio = dynamic_cast<te::AudioTrack*> (t);
+        auto* folder = dynamic_cast<te::FolderTrack*> (t);
+        if (! ((audio != nullptr && ! isReturn (*audio)) || (folder != nullptr && folder->isSubmixFolder()))) continue;
+        if (trackIds.isEmpty() ? t->getParentTrack() == nullptr : trackIds.contains (t->itemID.toString())) chosen.add (t);
+    }
+    // A group brings everything in it.
+    const auto all = chosen;
+    chosen.removeIf ([&all] (te::Track* t)
+    {
+        for (auto* other : all) if (auto* folder = dynamic_cast<te::FolderTrack*> (other); folder != nullptr && other != t && Impl::inside (*t, *folder)) return true;
+        return false;
+    });
+    if (chosen.isEmpty()) return Result::fail ("That project has no such tracks to import.");
+    // Their clips, devices and automation as they are there; media stays where it is until a save collects it.
+    other->flushState();
+    std::vector<juce::ValueTree> states;
+    for (auto* t : chosen) { t->flushStateToValueTree(); states.push_back (t->state.createCopy()); }
+    impl->transaction (states.size() > 1 || states.front().hasType (te::IDs::FOLDERTRACK) ? "Import tracks" : "Import track");
+    auto* parent = before != nullptr ? before->getParentFolderTrack() : nullptr;
+    if (auto inserted = impl->insertStates (states, parent, before, created); inserted.failed()) { impl->changed(); return inserted; }
+    impl->normaliseGroupOutputs();
+    impl->refreshRouting(); impl->changed(); return Result::ok();
+}
 Result Session::writeRecovery (const File& destination)
 {
     impl->endNudge();

@@ -2682,7 +2682,8 @@ private:
     static constexpr int categoryWidth = 98, trackWidth = 252, trackHeight = 72, rulerHeight = 60,
                          deviceHeight = 268, statusHeight = 24;
     // found: a search result from the index; depth: how far inside the listed folder's open folders it is.
-    struct BrowserItem { juce::File file; bool directory = false, found = false; int depth = 0; };
+    // A browser file row; an unfolded project's track rows name the track (see openProjects).
+    struct BrowserItem { juce::File file; bool directory = false, found = false; int depth = 0; juce::String trackId, trackName; bool group = false, midi = false; };
     struct FolderScan
     {
         struct Entry { std::string name; bool directory = false; };
@@ -14113,6 +14114,8 @@ private:
         if (sampleBrowser())
         {
             const auto& item = browserItems[(size_t) row];
+            if (item.trackId.isNotEmpty()) return "projecttrack:" + item.file.getFullPathName() + "|" + item.trackId;
+            if (! item.directory && isProject (item.file)) return "project:" + item.file.getFullPathName();
             if (! item.directory && isLiveClip (item.file)) return "clip:" + item.file.getFullPathName();
             return item.directory || ! isAudio (item.file) ? juce::String() : "sample:" + item.file.getFullPathName();
         }
@@ -20175,6 +20178,15 @@ private:
                 item.depth = depth; rows.push_back (item);
                 if (item.directory && openFolders.contains (item.file))
                     if (const auto found = folderListings.find (item.file); found != folderListings.end()) add (found->second, depth + 1);
+                // An unfolded project lists its tracks, as the reference's browser unfolds a Set.
+                if (! item.directory && isProject (item.file) && openProjects.contains (item.file))
+                    if (const auto found = projectListings.find (item.file); found != projectListings.end())
+                        for (const auto& track : found->second)
+                            if (! track.returnTrack)
+                            {
+                                BrowserItem row { item.file, false, false, depth + 1 + track.depth, track.id, track.name, track.group, track.midi };
+                                rows.push_back (row);
+                            }
             }
         };
         add (allBrowserItems, 0);
@@ -20209,6 +20221,8 @@ private:
     // Still reading: the index, the listed folder or an open folder.
     bool browserBusy() const { return browserIndex.status().indexing || browserLoading || ! folderScans.empty(); }
     std::set<juce::File> openFolders;
+    std::set<juce::File> openProjects; // Projects unfolded to their tracks.
+    std::map<juce::File, std::vector<Session::ProjectTrack>> projectListings;
     std::map<juce::File, std::vector<BrowserItem>> folderListings;
     std::map<juce::File, std::shared_ptr<FolderScan>> folderScans;
     // While the folder is indexed, a search's results grow and the browser shows how far it has got.
@@ -20548,10 +20562,18 @@ private:
         g.setColour (selected ? orange : muted);
         g.setFont (font (11.5f));
         const auto& item = browserItems[(size_t) row];
-        auto label = item.file.getFileName();
+        auto label = item.trackId.isNotEmpty() ? item.trackName : item.file.getFileName();
         // Items inside open folders are indented under them; a folder's triangle shows whether it is open.
         const int x = treeIndent (item);
-        if (item.directory)
+        if (item.trackId.isNotEmpty())
+        {
+            // An unfolded project's track: a track's strip, a group's with a fold.
+            g.drawRect (x, height / 2 - 4, 11, 9);
+            if (item.group) g.fillRect (x, height / 2 - 6, 5, 2);
+            else if (item.midi) for (int i = 0; i < 3; ++i) g.fillRect (x + 2 + i * 3, height / 2 - 2 + (i % 2) * 2, 2, 1);
+            else for (int i = 0; i < 4; ++i) g.drawVerticalLine (x + 2 + i * 2, (float) height / 2 - (i % 2 == 0 ? 2 : 3), (float) height / 2 + (i % 2 == 0 ? 2 : 3));
+        }
+        else if (item.directory)
         {
             if (! item.found)
             {
@@ -20565,7 +20587,12 @@ private:
         }
         else if (isProject (item.file))
         {
-            // A project: a page with lines on it.
+            // A project: a page with lines on it, after a triangle that unfolds its tracks.
+            juce::Path triangle;
+            const auto cx = (float) x - 8.0f, cy = (float) height / 2;
+            if (openProjects.contains (item.file)) triangle.addTriangle (cx - 3.5f, cy - 2, cx + 3.5f, cy - 2, cx, cy + 2.5f);
+            else triangle.addTriangle (cx - 2, cy - 3.5f, cx - 2, cy + 3.5f, cx + 2.5f, cy);
+            g.fillPath (triangle);
             g.drawRect (x + 1, height / 2 - 6, 9, 12);
             for (int i = 0; i < 3; ++i) g.fillRect (x + 3, height / 2 - 3 + i * 3, 5, 1);
         }
@@ -20627,6 +20654,12 @@ private:
             {
                 if (openFolders.contains (item.file)) closeBrowserFolder (item.file);
                 else openBrowserFolder (item.file, juce::ModifierKeys::currentModifiers.isCommandDown());
+            }
+            else if (item.trackId.isNotEmpty())
+            {
+                juce::StringArray created;
+                report (session.importProjectTracks (item.file, { item.trackId }, {}, created), "Imported " + item.trackName + ".");
+                refresh();
             }
             else if (isProject (item.file)) openProject (item.file);
             else useBrowserSample (item.file);
@@ -20693,6 +20726,7 @@ private:
         {
             if (! juce::isPositiveAndBelow (row, (int) browserItems.size())) return {};
             const auto& file = browserItems[(size_t) row].file;
+            if (browserItems[(size_t) row].trackId.isNotEmpty() || isProject (file)) return browserDragPrefix + browserKey (row);
             if (isLiveClip (file)) return browserDragPrefix + juce::String ("clip:") + file.getFullPathName();
             if (! isAudio (file)) return {};
             return browserDragPrefix + juce::String ("sample:") + file.getFullPathName();
@@ -20730,6 +20764,13 @@ private:
             return;
         }
         if (key.startsWith ("clip:")) { liveClipDropped (juce::File (key.fromFirstOccurrenceOf ("clip:", false, false)), at); return; }
+        if (key.startsWith ("project:")) { projectTracksDropped (juce::File (key.fromFirstOccurrenceOf ("project:", false, false)), {}, at); return; }
+        if (key.startsWith ("projecttrack:"))
+        {
+            const auto rest = key.fromFirstOccurrenceOf ("projecttrack:", false, false);
+            projectTracksDropped (juce::File (rest.upToLastOccurrenceOf ("|", false, false)), { rest.fromLastOccurrenceOf ("|", false, false) }, at);
+            return;
+        }
         const auto row = collectionRow (key);
         if (! row) return;
         // A groove goes into the Groove Pool, and onto the clip it is dropped on, as the reference's grooves do.
@@ -20783,6 +20824,40 @@ private:
         }
         useDeviceRow (*row);
     }
+    // A project unfolds to its tracks, read from its file, and folds again.
+    void toggleBrowserProject (const juce::File& project)
+    {
+        if (openProjects.erase (project) == 0)
+        {
+            std::vector<Session::ProjectTrack> tracks;
+            if (const auto listed = Session::listProjectTracks (project, tracks); listed.failed()) { report (listed); return; }
+            projectListings[project] = std::move (tracks);
+            openProjects.insert (project);
+        }
+        updateBrowser();
+    }
+    // A project's tracks dropped into this one, as the reference's: before the track under the pointer, or after the
+    // others where no track is. All its tracks come with an empty list.
+    void projectTracksDropped (const juce::File& project, const juce::StringArray& trackIds, juce::Point<int> at)
+    {
+        juce::String before;
+        if (showSession)
+        {
+            const auto local = launcher.getLocalPoint (this, at);
+            if (const int track = launcher.trackColumnAt (local.x); track >= 0 && local.y >= 0 && juce::isPositiveAndBelow (track, (int) state.tracks.size())) before = state.tracks[(size_t) track].id;
+            else if (! launcher.dropArea().withBottom (launcher.getHeight()).contains (local)) return;
+        }
+        else
+        {
+            if (! viewport.getBounds().contains (at)) return;
+            if (const auto index = trackAtY (canvas.getLocalPoint (this, at).y); juce::isPositiveAndBelow (index, (int) state.tracks.size())) before = state.tracks[(size_t) index].id;
+        }
+        if (before.isNotEmpty() && state.tracks[(size_t) trackIndexOf (before)].isReturn) before.clear();
+        juce::StringArray created;
+        report (session.importProjectTracks (project, trackIds, before, created), "Imported " + juce::String (created.size()) + (created.size() == 1 ? " track." : " tracks."));
+        refresh();
+    }
+    int trackIndexOf (const juce::String& id) const { for (int i = 0; i < (int) state.tracks.size(); ++i) if (state.tracks[(size_t) i].id == id) return i; return 0; }
     // A Live Clip lands as a dropped sound does, as the reference's: onto the track or slot under it, or where no track is
     // onto a new one made from its saved track.
     void liveClipDropped (const juce::File& file, juce::Point<int> at)
@@ -20812,10 +20887,14 @@ private:
         if (! e.mods.isPopupMenu())
         {
             if (sampleBrowser() && juce::isPositiveAndBelow (row, (int) browserItems.size()))
-                if (const auto item = browserItems[(size_t) row]; item.directory && ! item.found && e.x < treeIndent (item))
+            {
+                const auto item = browserItems[(size_t) row];
+                if (item.directory && ! item.found && e.x < treeIndent (item))
                 {
                     if (openFolders.contains (item.file)) closeBrowserFolder (item.file); else openBrowserFolder (item.file, e.mods.isCommandDown());
                 }
+                else if (isProject (item.file) && item.trackId.isEmpty() && e.x < treeIndent (item)) toggleBrowserProject (item.file);
+            }
             return;
         }
         if (browserCategory == BrowserCategory::templates && juce::isPositiveAndBelow (row, (int) deviceItems.size()) && deviceItems[(size_t) row].projectTemplate != juce::File())
@@ -22098,6 +22177,37 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
                "dropped in the Session's drop area, it lands in a slot of a new track");
         session.undo(); refresh();
         showArrangementView(); refresh();
+        {
+            // A project in a place unfolds to its tracks, as the reference's browser unfolds a Set; a track dragged from it
+            // comes into this project.
+            const auto project = userLibrary.getChildFile ("Other.halftrack");
+            juce::String keysId;
+            {
+                Session other (false);
+                check (other.addMidiTrack ("Keys").wasOk() && other.saveProject (project).wasOk(), "a project with a Keys track in the User Library");
+                for (const auto& t : other.snapshot().tracks) if (t.name == "Keys") keysId = t.id;
+            }
+            scannedBrowserFolder = juce::File(); updateBrowser();
+            for (int i = 0; i < 1000 && browserBusy(); ++i) { juce::Thread::sleep (5); pollBrowserScan(); }
+            updateBrowser();
+            const auto rowOf = [&] (const juce::String& trackId) { for (int r = 0; r < (int) browserItems.size(); ++r) if (browserItems[(size_t) r].file == project && browserItems[(size_t) r].trackId == trackId) return r; return -1; };
+            const int projectRow = rowOf ({});
+            check (projectRow >= 0 && rowOf (keysId) < 0, "the project is listed, folded");
+            const auto click = juce::MouseEvent (juce::Desktop::getInstance().getMainMouseSource(), juce::Point<float> (6.0f, 6.0f), juce::ModifierKeys(), 1.0f, 0, 0, 0, 0,
+                                                 &browserList, &browserList, now, {}, now, 1, false);
+            listBoxItemClicked (projectRow, click);
+            const int keysRow = rowOf (keysId);
+            juce::SparseSet<int> keysRows; keysRows.addRange ({ keysRow, keysRow + 1 });
+            check (keysRow > projectRow && browserItems[(size_t) keysRow].trackName == "Keys" && browserItems[(size_t) keysRow].depth == browserItems[(size_t) projectRow].depth + 1
+                       && getDragSourceDescription (keysRows).toString() == juce::String (browserDragPrefix) + "projecttrack:" + project.getFullPathName() + "|" + keysId,
+                   "its triangle unfolds its tracks, Keys dragging as that project's track");
+            const auto tracksBefore = state.tracks.size();
+            browserItemDropped ("projecttrack:" + project.getFullPathName() + "|" + keysId, onRiff); refresh();
+            check (state.tracks.size() == tracksBefore + 1 && state.tracks[(size_t) riff].name == "Keys", "dropped on a track, it comes in before it");
+            session.undo(); refresh();
+            listBoxItemClicked (projectRow, click);
+            check (rowOf (keysId) < 0, "and folds again");
+        }
         check (session.removeTrack (riff).wasOk(), "remove the Live Clip track"); refresh();
         selectTrack (previousTrack); refresh();
         userLibrary = library; browserFolder = folder; setBrowserCategory (category); showBrowser = browserWas; resized();
@@ -26143,7 +26253,8 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         check (browserCategory == BrowserCategory::place && browserPlace == currentProjectPlace && browserFolder == backup.getParentDirectory().getParentDirectory()
                    && openFolders.contains (backup.getParentDirectory())
                    && juce::isPositiveAndBelow (browserList.getSelectedRow(), (int) browserItems.size()) && browserItems[(size_t) browserList.getSelectedRow()].file == backup
-                   && browserKey (browserList.getSelectedRow()).isEmpty(), "Show in Browser opens the Current Project's Backup folder, the newest backup selected");
+                   && browserKey (browserList.getSelectedRow()) == "project:" + backup.getFullPathName(),
+               "Show in Browser opens the Current Project's Backup folder, the newest backup selected, dragging as a project");
         activateBrowserRow (browserList.getSelectedRow());
         check (state.projectFile == backup && state.tracks.size() == tracks - 1, "a project in the browser opens with a double-click: the earlier version");
         check (session.loadProject (project).wasOk(), "back to the project"); refresh();
