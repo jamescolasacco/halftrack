@@ -22,6 +22,7 @@ Halftrack's multi-clip editing follows the reference's MIDI editor showing sever
   - The clips loop together from their loop starts. The editor shows the passes they take to come round together again: the least common multiple of their loop lengths, on a 960th of a beat, and at most 64 times the longest loop.
   - The other clips' notes show at each pass round their loops, and the edited clip's later passes show dimmed.
   - Clicking another shown clip's note edits that clip and keeps the selection. Focus works as in the Arrangement.
+- **Folding.** Fold to Notes keeps the rows with notes in any shown clip, in the Arrangement and the Session alike.
 - **Loop bars** (2026-10-26), as the manual describes them (section 10.8):
   - While clips show together, a loop bar for each sits between the ruler and the notes, in its clip's colour. The edited clip's bar is outlined.
   - In the Session, each clip has a row, ordered by track then scene; its bar is its loop from the shared start. In the Arrangement, each track has a row, its clips side by side by time; each bar spans what its clip plays, with its loop along the top.
@@ -47,10 +48,11 @@ The UI suite:
   - dragging the six-beat bar's end two beats on making that loop eight beats long, while the edited clip stays the same;
   - a click on that bar editing its clip;
   - the other clip becoming the edited one with both still shown;
+  - Fold to Notes keeping the two clips' rows;
   - and one selected clip editing alone again, without loop bars.
 
 ## Not yet covered
 
 - Some loop bar features are missing: selecting several bars (Cmd and Shift), duplicating them (Cmd+D and their menu), setting their height, and dragging a loop's start.
-- The reference's limit of eight Arrangement tracks, and Fold to Notes over every shown clip, are missing.
+- The reference's limit of eight Arrangement tracks is missing.
 - Neither the shading of each clip's area outside its loop in Session multi-clip editing nor its loop markers on hover is drawn.

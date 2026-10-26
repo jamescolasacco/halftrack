@@ -23712,6 +23712,9 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
             beats.clear();
             for (const auto& pass : pianoRoll.loopPasses (*currentMidiClip(), 1)) beats.push_back (pass.beat);
             check (beats == std::vector<double> { 4, 8 }, "and the edited clip's own note at its later passes");
+            setFold (true, false);
+            check (pianoRoll.shownRows() == 2, "Fold to Notes keeps the rows with notes in any shown clip");
+            setFold (false, false);
             {
                 // Loop bars, between the ruler and the notes: a row for each clip, by track then scene.
                 const auto bars = pianoRoll.loopBars();
