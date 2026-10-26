@@ -26,7 +26,7 @@ Halftrack's multi-clip editing follows the reference's MIDI editor showing sever
 - **Loop bars** (2026-10-26), as the manual describes them (section 10.8):
   - While clips show together, a loop bar for each sits between the ruler and the notes, in its clip's colour. The edited clip's bar is outlined.
   - In the Session, each clip has a row, ordered by track then scene; its bar is its loop from the shared start. In the Arrangement, each track has a row, its clips side by side by time; each bar spans what its clip plays, with its loop along the top.
-  - A click on a bar edits its clip and selects its loop, so Cmd+D duplicates the loop ([Duplicate Loop](clip-loops-contract.md#duplicate-loop-2026-10-26)). Dragging a loop's end changes that clip's loop length, on the note grid unless the grid is bypassed, in one undo step; the edited clip stays the same.
+  - A click on a bar edits its clip and selects its loop, so Cmd+D duplicates the loop ([Duplicate Loop](clip-loops-contract.md#duplicate-loop-2026-10-26)). Its menu's Duplicate does the same. Dragging a loop's end changes that clip's loop length, on the note grid unless the grid is bypassed, in one undo step; the edited clip stays the same.
 - **Scope.** Shown clips can be on different tracks: in the Arrangement, clips from up to eight tracks, the edited clip's among them, as the manual describes (2026-10-26); a clip from a ninth track is left out.
 
 ## Evidence
@@ -54,5 +54,5 @@ The UI suite:
 
 ## Not yet covered
 
-- Some loop bar features are missing: selecting several bars (Cmd and Shift), their menu, setting their height, and dragging a loop's start.
+- Some loop bar features are missing: selecting several bars (Cmd and Shift), setting their height, and dragging a loop's start. Their menu holds only Duplicate.
 - Neither the shading of each clip's area outside its loop in Session multi-clip editing nor its loop markers on hover is drawn.

@@ -9478,7 +9478,7 @@ private:
                 sound ({ { keyPitch, keyVelocity } });
                 return;
             }
-            if (e.y >= rulerBottom && e.y < gridTop) { pressLoopBar (e.position); return; }
+            if (e.y >= rulerBottom && e.y < gridTop) { pressLoopBar (e.position, e.mods.isPopupMenu()); return; }
             // The loop brace and the start marker drag; the rest of the ruler places the insert marker. A click
             // on the brace also selects it for its keys (see braceKey); a click elsewhere lets it go.
             loopBraceSelected = braceAt (*clip, e.position) == 3 || braceAt (*clip, e.position) == 1 || braceAt (*clip, e.position) == 2;
@@ -9976,13 +9976,23 @@ private:
             return juce::Rectangle<float>::leftTopRightBottom (at (bar.from), (float) (rulerBottom + bar.row * loopBarHeight), at (bar.to),
                                                                (float) (rulerBottom + (bar.row + 1) * loopBarHeight - 1));
         }
-        // A press on a loop bar: near its loop's end it takes the loop's length, elsewhere it edits its clip.
-        void pressLoopBar (juce::Point<float> at)
+        // A press on a loop bar: near its loop's end it takes the loop's length, elsewhere it edits its clip. Its menu
+        // duplicates its loop, as the reference's loop bars' does.
+        void pressLoopBar (juce::Point<float> at, bool menu = false)
         {
             for (const auto& bar : loopBars())
             {
                 const auto bounds = loopBarBounds (bar);
                 if (at.y < bounds.getY() || at.y > bounds.getBottom() + 1) continue;
+                if (menu && at.x >= bounds.getX() && at.x <= bounds.getRight())
+                {
+                    juce::PopupMenu items;
+                    items.addItem (1, "Duplicate", bar.loop.has_value());
+                    items.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (this).withMousePosition(),
+                                         [safe = juce::Component::SafePointer<PianoRoll> (this), id = bar.clip->id] (int chosen)
+                                         { if (safe != nullptr && chosen == 1) { safe->owner.report (safe->owner.session.duplicateClipLoop (id)); safe->owner.refresh(); } });
+                    return;
+                }
                 const auto end = bar.loop ? (float) (keysWidth + (bar.loop->second - viewBeat) * pixelsPerBeat) : -1.0e9f;
                 if (bar.loop && std::abs (at.x - end) <= 4)
                 {
@@ -14850,6 +14860,18 @@ private:
         std::erase (extraMidiClipIds, id);
         selectTrack (t); selectedClip = c; selectedLauncherClipId.clear();
         refresh();
+    }
+    // With HALFTRACK_TEST_UI_SNAPSHOT_DIRECTORY set, a picture of part of the window kept for review under a name.
+    void keepSnapshot (const juce::String& name, juce::Rectangle<int> area)
+    {
+        if (const auto* configured = std::getenv ("HALFTRACK_TEST_UI_SNAPSHOT_DIRECTORY"))
+            if (const juce::File directory (juce::String::fromUTF8 (configured)); directory.createDirectory().wasOk())
+            {
+                juce::PNGImageFormat png; const auto output = directory.getChildFile (name + ".png");
+                if (auto stream = output.createOutputStream(); stream && stream->setPosition (0) && stream->truncate().wasOk()
+                    && png.writeImageToStream (createComponentSnapshot (area, true, 1.0f), *stream))
+                    std::cout << "UI SNAPSHOT " << output.getFullPathName() << std::endl;
+            }
     }
     // The Session MIDI clip an open clip view edits, which has launch settings.
     const Session::ClipInfo* sessionMidiClip() const { return showSession && selectedLauncherClipId.isNotEmpty() ? currentMidiClip() : nullptr; }
@@ -23761,6 +23783,7 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
                 check (bars.size() == 2 && bars[0].clip->id == four.id && bars[1].clip->id == six.id && bars[1].row == 1 && pianoRoll.loopBarRows() == 2
                            && pianoRoll.notesTop() == PianoRoll::rulerFoot() + 2 * PianoRoll::loopBarRowHeight(),
                        "each clip has a loop bar, in its own row, pushing the notes down");
+                keepSnapshot ("multi-clip-session", pianoRoll.getBounds());
                 const auto bar = pianoRoll.loopBarBounds (bars[1]);
                 const auto at = [&] (juce::Point<float> p, bool dragged)
                 {
@@ -26084,9 +26107,17 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
                     check (! state.scenes[1].tempo && ! state.scenes[3].tempo && session.undoSteps()[0] == "Scene tempo", "and Delete clears their tempo, one undo step");
                     renameScenes (sceneSelection(), "Verse");
                     check (state.scenes[1].name == "Verse" && state.scenes[3].name == "Verse" && session.undoSteps()[0] == "Rename scenes", "renaming them names both, one undo step");
-                    for (int i = 0; i < 4; ++i) session.undo();
+                    // Its Follow Action section, the Launch box's, goes to every selected scene too.
+                    auto* sceneFollow = dynamic_cast<juce::Button*> (findNamed (sceneView, "Follow Action switch"));
+                    check (sceneFollow != nullptr && sceneFollow->isVisible() && ! sceneFollow->getToggleState(), "the Scene View shows the scenes' Follow Action, off at first");
+                    sceneFollow->setToggleState (true, juce::dontSendNotification); sceneFollow->onClick(); refresh();
+                    check (state.scenes[1].follow.enabled && state.scenes[3].follow.enabled && session.undoSteps()[0] == "Scene follow action",
+                           "switching it on turns both scenes' on, one undo step");
+                    keepSnapshot ("scene-view", sceneView.getBounds());
+                    for (int i = 0; i < 5; ++i) session.undo();
                     refresh();
-                    check (! state.scenes[1].tempo && ! state.scenes[1].timeSignature && ! state.scenes[3].timeSignature && state.scenes[1].name != "Verse", "four undos take it all back");
+                    check (! state.scenes[1].tempo && ! state.scenes[1].timeSignature && ! state.scenes[3].timeSignature && state.scenes[1].name != "Verse"
+                               && ! state.scenes[1].follow.enabled, "five undos take it all back");
                     selectTrack (0); refresh(); resized();
                     check (! sceneView.isVisible() && deviceChain.isVisible(), "selecting a track shows its devices again");
                     const auto when = juce::Time::getCurrentTime();

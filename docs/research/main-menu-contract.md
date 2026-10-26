@@ -96,7 +96,7 @@ The UI suite compares each menu with the reference's order, filtered to Halftrac
 - Plug-In Windows hiding and showing the plug-in windows (the plug-in editor suite hides an open editor's window, shows it again, and sees opening an editor bring the windows back);
 - Cmd+I inserting a scene below the selected one;
 - Edit acting on the slots (Cmd+E removing a stop button), a scene and the headers (Duplicate), and a lone Arrangement clip (Cut, then Paste at the insert marker), and Select All in the Arrangement;
-- the Launch box opening a clip's follow action.
+- the Launch box showing a clip's Follow Action controls.
 
 ## Not determined
 
