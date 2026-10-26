@@ -3139,6 +3139,7 @@ private:
                 const int item = input.getSelectedId();
                 if (item >= firstSourceItem && item - firstSourceItem < inputSourceIds.size())
                     owner.report (owner.session.setTrackInputTrack (trackId, inputSourceIds[item - firstSourceItem], Session::InputTap::postMixer));
+                else if (item == resamplingItem) owner.report (owner.session.setTrackInput (index, Session::resamplingInputName));
                 else if (item <= 1) owner.report (owner.session.setTrackInput (index, {}));
                 else if (! midi) owner.report (owner.session.setTrackInput (index, inputNames.contains (lastExternalInput) ? lastExternalInput : inputNames[0])); // Ext. In
                 else owner.report (owner.session.setTrackInput (index, inputNames[item - 2]));
@@ -3230,12 +3231,15 @@ private:
                 // The engine's All MIDI Ins is the reference's All Ins.
                 if (midi) for (int n = 0; n < inputNames.size(); ++n) input.addItem (inputNames[n] == "All MIDI Ins" ? juce::String ("All Ins") : inputNames[n], n + 2);
                 else if (! inputNames.isEmpty()) input.addItem ("Ext. In", 2);
+                // Resampling, the main output, after Ext. In, as the reference's chooser has it.
+                if (! midi && ! returnTrack) input.addItem ("Resampling", resamplingItem);
                 for (int n = 0; n < sourceLabels.size(); ++n) input.addItem (sourceLabels[n], firstSourceItem + n);
             }
             inputSourceIds = sources;
             sourceTrack = track.inputTrackId.isNotEmpty() && sources.contains (track.inputTrackId) ? track.inputTrackId : juce::String();
             int selected = 1;
             if (sourceTrack.isNotEmpty()) selected = firstSourceItem + sources.indexOf (sourceTrack);
+            else if (! midi && track.inputName == Session::resamplingInputName) selected = resamplingItem;
             else if (track.inputName.isNotEmpty() && inputNames.contains (track.inputName)) selected = midi ? inputNames.indexOf (track.inputName) + 2 : 2;
             if (! midi && selected == 2) lastExternalInput = track.inputName;
             input.setSelectedId (selected, juce::dontSendNotification);
@@ -3253,7 +3257,7 @@ private:
             if (midi) inputDetail.setSelectedId (track.inputChannel + 1, juce::dontSendNotification);
             else if (sourceTrack.isNotEmpty()) inputDetail.setSelectedId (static_cast<int> (track.inputTap) + 1, juce::dontSendNotification);
             else inputDetail.setSelectedId (inputNames.indexOf (track.inputName) + 2, juce::dontSendNotification);
-            const bool detailWanted = selected != 1;
+            const bool detailWanted = selected != 1 && selected != resamplingItem; // Resampling has no channels to choose.
             if (detailWanted != inputDetailShown)
             {
                 inputDetailShown = detailWanted;
@@ -3601,7 +3605,7 @@ private:
         static constexpr int firstPortItem = 1000;
         std::vector<Impl::OutputChoice> outputChoiceList; // The Audio To choices, in the chooser's order.
         juce::String outputSignature;
-        static constexpr int firstSourceItem = 1000;
+        static constexpr int firstSourceItem = 1000, resamplingItem = 999;
         std::vector<std::unique_ptr<ValueSlider>> sends;
         std::unique_ptr<juce::TextButton> sideA, sideB;
         Session::MixerSections laidOut;
@@ -30837,6 +30841,16 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         check (state.tracks[0].inputTap == Session::InputTap::postFX && tapChooser->getText() == "Post FX", "the chooser under it picks the tap");
         session.undo(); session.undo(); refresh();
         check (state.tracks[0].inputTrackId.isEmpty() && inputChooser->getSelectedId() == inputBefore, "undo returns the choosers to the earlier input");
+        {
+            // Resampling, after Ext. In as the reference lists it, with no channels to choose.
+            const int resampling = inputChooser->indexOfItemId (999);
+            check (resampling == inputChooser->indexOfItemId (2) + 1 && inputChooser->getItemText (resampling) == "Resampling", "Audio From offers Resampling after Ext. In");
+            inputChooser->setSelectedId (999, juce::sendNotificationSync); refresh();
+            check (state.tracks[0].inputName == Session::resamplingInputName && inputChooser->getText() == "Resampling" && ! tapChooser->isVisible(),
+                   "choosing it takes the main output, with no chooser under it");
+            session.undo(); refresh();
+            check (inputChooser->getSelectedId() == inputBefore, "undo returns the earlier input");
+        }
         // Scene tempo and time signature: the fields show from the scene menu's switch, and a click on one edits it.
         const auto answer = [&] (const juce::String& text)
         {

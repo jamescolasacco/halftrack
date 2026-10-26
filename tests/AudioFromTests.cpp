@@ -6,7 +6,7 @@
 // Audio From another track, through the synthetic device, with a constant 0.5 signal on track A
 // played Sends Only so only the routed copy is heard. Track B takes A's output after its devices
 // and mixer: heard through B's mixer as B monitors it, recorded as B's take, rendered in exports,
-// and reopened. Routes that would loop are refused.
+// and reopened. Routes that would loop are refused. Resampling records the main output, its track silent meanwhile.
 namespace halftrack
 {
 std::unique_ptr<juce::AudioIODeviceType> makeSyntheticTestDeviceType();
@@ -160,6 +160,66 @@ int runAudioFromTests (const juce::File& artifacts)
         check (trackB().inputTrackId.isEmpty(), "B no longer takes A's audio");
         s.undo();
         check (trackB().inputTrackId == a, "undo routes it again");
+        {
+            // Resampling, as the reference's (its manual, section 17.4): B records the main output, A's clicks, at their
+            // own times, and its own output is suppressed while it monitors or records it, so its clip is not in the
+            // recording and nothing feeds back.
+            const auto writeClicks = [&] (const juce::File& file, std::initializer_list<double> times)
+            {
+                juce::AudioBuffer<float> x (2, 3 * 48000); x.clear();
+                for (const auto t : times) for (int c = 0; c < 2; ++c) x.setSample (c, (int) std::lround (t * 48000), .8f);
+                juce::WavAudioFormat format; std::unique_ptr<juce::OutputStream> stream (file.createOutputStream());
+                auto writer = format.createWriterFor (stream, juce::AudioFormatWriterOptions().withSampleRate (48000).withNumChannels (2).withBitsPerSample (32));
+                check (writer && writer->writeFromAudioSampleBuffer (x, 0, x.getNumSamples()), "write clicks");
+            };
+            const auto clicksA = root.getChildFile ("clicks-a.wav"), clicksB = root.getChildFile ("clicks-b.wav");
+            writeClicks (clicksA, { .5, 1.0, 1.5, 2.0 }); writeClicks (clicksB, { .75 });
+            const auto clicksIn = [] (const juce::AudioBuffer<float>& x, int from = 0)
+            {
+                std::vector<int> at;
+                for (int n = from; n < x.getNumSamples(); ++n) if (std::abs (x.getSample (0, n)) > .1f) at.push_back (n);
+                return at;
+            };
+            Session r (false, makeSyntheticTestDeviceType());
+            const auto resampled = root.getChildFile ("Resampled").getChildFile ("Resampled.halftrack");
+            ok (r.saveProject (resampled), "save a resampling project");
+            ok (r.importAudio (clicksA, 0, 0), "A's clicks at 0.5, 1, 1.5 and 2 s");
+            ok (r.importAudio (clicksB, 1, 0), "B's own click at 0.75 s");
+            const auto groups = r.audioInputGroups();
+            check (! r.inputNames (false).contains (Session::resamplingInputName)
+                       && std::none_of (groups.begin(), groups.end(), [] (const auto& g) { return g.name == Session::resamplingInputName; }),
+                   "Resampling is not one of the audio interface's inputs");
+            ok (r.setTrackInput (1, Session::resamplingInputName), "B takes Resampling");
+            check (r.snapshot().tracks[1].inputName == Session::resamplingInputName && r.setTrackInput (0, "Resamplings").failed(),
+                   "B shows Resampling as its input, and an unknown input is refused");
+            ok (r.setTrackArmed (1, true), "arm B");
+            // The engine rebuilds its playback graph for the arming asynchronously, which takes longer on a loaded machine.
+            pumpSyntheticTestDevice (r, 8); juce::MessageManager::getInstance()->runDispatchLoopUntil (400); pumpSyntheticTestDevice (r, 8);
+            const auto listed = [] (const std::vector<int>& at) { juce::String text; for (const auto n : at) text << n << " "; return text; };
+            r.seek (0); ok (r.play(), "play, B armed and monitoring");
+            const auto armed = captureSyntheticTestDevice (r, 450);
+            r.stop();
+            check (clicksIn (armed) == std::vector<int> { 24000, 48000, 72000, 96000 },
+                   "the main output holds A's clicks once each: B, monitoring its Resampling input, plays nothing, its own click included (" + listed (clicksIn (armed)) + ")");
+            pumpSyntheticTestDevice (r, 8);
+            r.seek (0); ok (r.record(), "record");
+            const auto recording = captureSyntheticTestDevice (r, 470);
+            r.stop();
+            check (clicksIn (recording) == std::vector<int> { 24000, 48000, 72000, 96000 }, "while B records, the main output is A's clicks alone (" + listed (clicksIn (recording)) + ")");
+            const auto after = r.snapshot();
+            const auto& take = after.tracks[1].clips;
+            const auto recorded = std::find_if (take.begin(), take.end(), [&] (const auto& c) { return c.file != clicksB && c.file.existsAsFile(); });
+            check (recorded != take.end(), "B records a take");
+            juce::AudioFormatManager formats; formats.registerBasicFormats();
+            std::unique_ptr<juce::AudioFormatReader> reader (formats.createReaderFor (recorded->file));
+            check (reader != nullptr && reader->lengthInSamples > 96000, "read the take");
+            juce::AudioBuffer<float> x (2, (int) reader->lengthInSamples); reader->read (&x, 0, x.getNumSamples(), 0, true, true);
+            std::vector<double> times;
+            for (const auto n : clicksIn (x)) times.push_back (recorded->start + n / 48000.0 - recorded->sourceOffset);
+            juce::String list; for (const auto t : times) list << juce::String (t, 6) << " ";
+            check (times.size() == 4 && std::abs (times[0] - .5) < 1e-6 && std::abs (times[3] - 2.0) < 1e-6 && std::abs (x.getSample (0, clicksIn (x)[0]) - .8f) < 1e-4f,
+                   "the take holds A's four clicks at their own times, without B's (" + list + ")");
+        }
         std::cout << "Audio from passed: " << root.getFullPathName() << std::endl; return 0;
     }
     catch (const std::exception& e) { std::cerr << "FAIL audio from: " << e.what() << std::endl; return 1; }

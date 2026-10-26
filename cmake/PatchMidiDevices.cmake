@@ -54,7 +54,8 @@ void DeviceManager::timerCallback()
     set(replacements3 0)
     # The later input take rescan patch builds on this DeviceManager.cpp result.
     set(downstream3 "baa5513d1ecb6d3aad29b74c85ef3393b118892654502a49903330b48877a2f6") # The later remote MIDI patch.
-    set(downstream2 "896d6fc2b35ecaaffb1a8bca4b453880e01328a29eae4ee5e222c02da570ed36" "e653f519cdc6ae62cd56be45919cdfd5030e041a35e84ee77c18fadc4b008c91") # And the later MIDI ports patch.
+    set(downstream2 "896d6fc2b35ecaaffb1a8bca4b453880e01328a29eae4ee5e222c02da570ed36" "e653f519cdc6ae62cd56be45919cdfd5030e041a35e84ee77c18fadc4b008c91" "12383b707e12ce57113f93d9d447a06a4b14a4fc90a76483f0912e4c4ddf8e63") # And the later MIDI ports and Resampling patches.
+    set(downstream1 "afa6eede76941aca16c98f83f7fd8538d8728c3b48ab1e97d5b911a1d5db8c65") # The later Resampling patch.
     set(downstream0 "5721d06c407ce781dee9c3e804981f3a283fc98d26d412f2ce27246381ba9eaa" "546f1bc2652ba56474e93efabe4f054f8c699cebb2fb446b341a6e176af339e3" "d7306d85635ac5cc07de62145c249a8a5ebbea87ef43002918493ba223d25e95" "296e079a8c70e5d13fd8aec6c640daa56c325f1cf33e836e69d2b3037c14ecc6") # The later MIDI variations, MIDI ports, clip fades and cue patches.
     foreach(index RANGE 0 3)
         file(SHA256 "${source${index}}" hash)

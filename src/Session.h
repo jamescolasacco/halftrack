@@ -1870,6 +1870,10 @@ public:
     // A note from the computer keyboard on channel 1, velocity 0-1; refused while it is off. A
     // repeated note-on or a note-off for a note not held does nothing.
     juce::Result computerKeyboardNote (int note, float velocity, bool on);
+    // An audio track's input can be Resampling, as the reference's (its manual, section 17.4): the main output, as it
+    // plays. The track records it like an input; while it records or monitors it, its own output is suppressed, so it
+    // is not in what it records and does not feed back. inputNames lists the audio interface's inputs without it.
+    static constexpr const char* resamplingInputName = "Resampling";
     juce::Result setTrackInput (int trackIndex, const juce::String& inputName);
     // A MIDI track's MIDI From channel, as the reference's: 0 (All Channels) takes every channel from
     // its input, 1 to 16 only that one, for monitoring, playing, recording and Capture MIDI. One undo

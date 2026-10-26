@@ -131,6 +131,8 @@ include(cmake/PatchRenderJobs.cmake)
 halftrack_patch_render_jobs("${tracktion_SOURCE_DIR}")
 include(cmake/PatchClipAutomationBypass.cmake)
 halftrack_patch_clip_automation_bypass("${tracktion_SOURCE_DIR}")
+include(cmake/PatchResampling.cmake)
+halftrack_patch_resampling("${tracktion_SOURCE_DIR}")
 
 juce_add_gui_app(Halftrack
     PRODUCT_NAME "Halftrack"

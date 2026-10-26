@@ -9419,7 +9419,7 @@ std::vector<Session::AudioInputGroup> Session::audioInputGroups() const
 {
     std::vector<AudioInputGroup> result;
     for (auto* device : impl->engine.getDeviceManager().getWaveInputDevices())
-        if (! device->isTrackDevice())
+        if (! device->isTrackDevice() && ! device->resampling)
             result.push_back ({ device->getName(), (int) device->deviceDescription.getDeviceChannelRange().first, (int) device->deviceDescription.getNumChannels(), device->isEnabled() });
     std::stable_sort (result.begin(), result.end(), [] (const auto& a, const auto& b) { return a.firstChannel < b.firstChannel; });
     return result;
@@ -9431,7 +9431,7 @@ Result Session::setAudioInputPairStereo (int firstChannel, bool stereo)
     auto& devices = impl->engine.getDeviceManager();
     for (auto* device : devices.getWaveInputDevices())
     {
-        if (device->isTrackDevice() || (int) device->deviceDescription.getDeviceChannelRange().first != firstChannel) continue;
+        if (device->isTrackDevice() || device->resampling || (int) device->deviceDescription.getDeviceChannelRange().first != firstChannel) continue;
         const auto channels = device->deviceDescription.getNumChannels();
         auto* audio = devices.deviceManager.getCurrentAudioDevice();
         if (stereo && channels == 1 && (audio == nullptr || firstChannel + 1 >= audio->getInputChannelNames().size()))
@@ -9514,7 +9514,7 @@ Result Session::setAudioInputEnabled (const String& inputName, bool enabled)
     if (impl->anyRecording()) return Result::fail ("Stop recording before changing the input configuration.");
     auto& devices = impl->engine.getDeviceManager();
     for (auto* device : devices.getWaveInputDevices())
-        if (! device->isTrackDevice() && device->getName() == inputName)
+        if (! device->isTrackDevice() && ! device->resampling && device->getName() == inputName)
         {
             if (device->isEnabled() != enabled) { devices.setDeviceEnabled (*device, enabled); devices.dispatchPendingUpdates(); impl->refreshInputs(); impl->changed(); }
             return Result::ok();
@@ -17145,7 +17145,7 @@ juce::StringArray Session::inputNames (bool midi) const
         for (auto device : impl->engine.getDeviceManager().getMidiInDevices())
             if (!device->isTrackDevice() && impl->trackOn (device->getName())) names.add (device->getName());
     }
-    else for (auto* device : impl->engine.getDeviceManager().getWaveInputDevices()) names.add (device->getName());
+    else for (auto* device : impl->engine.getDeviceManager().getWaveInputDevices()) if (! device->resampling) names.add (device->getName());
     return names;
 }
 Result Session::setTrackInput (int index, const String& name)
@@ -17160,7 +17160,7 @@ Result Session::setTrackInput (int index, const String& name)
     const bool midi = t->state.getProperty (midiTrackProperty, false);
     // Validate the typed name before enabling anything. Re-query instances after
     // enabling because the native device list and playback graph may rebuild.
-    if (name.isNotEmpty() && !inputNames (midi).contains (name)) return Result::fail ("That input is not available for this track type.");
+    if (name.isNotEmpty() && !inputNames (midi).contains (name) && (midi || name != resamplingInputName)) return Result::fail ("That input is not available for this track type.");
     if (impl->autoArmed == t->itemID.toString()) { impl->autoArmed.clear(); impl->autoInput = false; } // Chosen by hand now.
     const auto monitored=impl->monitoredMidiTracks();
     const bool playing = impl->edit->getTransport().isPlaying();

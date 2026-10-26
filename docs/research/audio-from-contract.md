@@ -29,6 +29,16 @@ Halftrack's track-sourced input follows the reference's [routing and I/O chapter
 
 The UI suite chooses the other track's Post FX tap from the input chooser and undoes it.
 
+## Resampling (2026-10-26)
+
+As the reference's (its manual, section 17.4), an audio track's Audio From offers Resampling after Ext. In: the main output. `setTrackInput (index, Session::resamplingInputName)` chooses it; it has no channels to choose, and it is not among the audio interface's inputs (`inputNames`) or Input Config's pairs.
+
+- **What it records.** The main output as it plays, from the default output's channels after each block renders, placed at the edit time of that output. It takes no input latency adjustment ([the engine patch](../dependencies.md#tracktion-resampling-patch)).
+- **Its own output.** As the manual says the recording track's own output is suppressed during resampling, a track whose Resampling input records or monitors (armed with Auto monitoring, or In) plays nothing, so it is not in what it records and the main output does not feed back into it.
+  - The reference's manual says this of recording; Halftrack also silences the track while it only monitors, which keeps an armed track from feeding back. Whether the reference plays an armed resampling track's clips is not known.
+
+Evidence: `tests/AudioFromTests.cpp` puts four clicks on track A and one on B, with B taking Resampling. Armed and playing, and then recording, the main output holds A's four clicks once each; the take holds them at 0.5, 1, 1.5 and 2 s to the sample, without B's click. Resampling is not listed with the interface's inputs, and an unknown input is refused. The UI suite finds Resampling after Ext. In, chooses it with no chooser under it, and undoes it.
+
 ## Not yet covered
 
-Resampling of the Master output and groups as sources (the reference lists both; the engine has no input device for them), rack chain and device outputs as sources, MIDI from another track, several destinations per source, and reference timing comparison.
+Groups as sources (the reference lists them; the engine has no input device for them), rack chain and device outputs as sources, MIDI from another track, several destinations per source, and reference timing comparison.

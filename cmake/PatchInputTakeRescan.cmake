@@ -5,9 +5,9 @@ function(halftrack_patch_input_take_rescan source_dir)
     set(source "${source_dir}/modules/tracktion_engine/playback/tracktion_DeviceManager.cpp")
     set(original "49374cb08b8752baa385b18806c2824005cd1e0bb67481a373638977b3dbf498")
     set(patched "896d6fc2b35ecaaffb1a8bca4b453880e01328a29eae4ee5e222c02da570ed36")
-    set(downstream "e653f519cdc6ae62cd56be45919cdfd5030e041a35e84ee77c18fadc4b008c91") # The later MIDI ports patch.
+    set(downstream "e653f519cdc6ae62cd56be45919cdfd5030e041a35e84ee77c18fadc4b008c91" "12383b707e12ce57113f93d9d447a06a4b14a4fc90a76483f0912e4c4ddf8e63") # The later MIDI ports and Resampling patches.
     file(SHA256 "${source}" hash)
-    if(hash STREQUAL patched OR hash STREQUAL downstream)
+    if(hash STREQUAL patched OR hash IN_LIST downstream)
         return()
     endif()
     if(NOT hash STREQUAL original)

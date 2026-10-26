@@ -7,7 +7,7 @@ function(halftrack_patch_recording_errors source_dir)
     set(original "3547f2134733cde3032237fbac4852e217067b4dbb9642235128843738f34ac1")
     set(patched "76ca176d4107398e061a85f3db0043043badd13a9065be37c6625ac3ec7b13f7")
     # Later patches of the same file: input placement.
-    set(downstream "b7ea47bf3f5680c433197eaa3426c459ffbdf58ae6f1a513708af52d1b8feb2d")
+    set(downstream "b7ea47bf3f5680c433197eaa3426c459ffbdf58ae6f1a513708af52d1b8feb2d" "626cda1af31c966d42441f8fde2e8caa97222e2b4fa2bd9e761c816568b57ca7")
     file(SHA256 "${source}" hash)
     if(hash STREQUAL patched OR hash IN_LIST downstream)
         return()

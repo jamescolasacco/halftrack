@@ -3047,3 +3047,7 @@ UI and engine areas. After the same reading of the reference's sample display, a
 ## Inputs' Track switches — 2026-10-26
 
 Engine and UI areas. MIDI Ports now shows each input's Track, Sync, Remote and MPE switches in the reference's order. Track, on by default, switched off makes the port play no track, directly or through All MIDI Ins, and takes it from the tracks' input choices, while its mappings still act. MIDI mapping, MIDI input, Capture MIDI, MPE, Mackie, MIDI ports and UI suites pass.
+
+## Resampling — 2026-10-26
+
+Engine and UI areas. As the reference's manual describes (section 17.4), audio tracks' Audio From offers Resampling after Ext. In: the main output, recorded as it plays and placed at its own time, while the recording track plays nothing so it is not in the recording and nothing feeds back. An engine patch adds the input (`cmake/PatchResampling.cmake`). Audio From and UI suites pass.
