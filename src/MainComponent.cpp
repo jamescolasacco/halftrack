@@ -256,7 +256,14 @@ public:
     {
         return font (juce::jlimit (10.0f, 12.0f, height * 0.52f));
     }
-    juce::Font getComboBoxFont (juce::ComboBox&) override { return font (11.0f); }
+    // A narrow chooser's text a point smaller, so names such as No Action fit.
+    juce::Font getComboBoxFont (juce::ComboBox& box) override { return font (box.getWidth() < 80 ? 10.0f : 11.0f); }
+    void positionComboBoxText (juce::ComboBox& box, juce::Label& label) override
+    {
+        // The arrow (see drawComboBox) takes the last 18 pixels; the text has the rest.
+        label.setBounds (1, 1, juce::jmax (0, box.getWidth() - 18), box.getHeight() - 2);
+        label.setFont (getComboBoxFont (box));
+    }
     juce::Label* createSliderTextBox (juce::Slider& slider) override
     {
         auto* label = LookAndFeel_V4::createSliderTextBox (slider);
