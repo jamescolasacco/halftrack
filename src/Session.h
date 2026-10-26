@@ -772,6 +772,10 @@ public:
         // a serial that changes with each launch, for Select on Launch.
         struct RemoteLaunch { int serial = 0, track = -1, scene = -1; bool operator== (const RemoteLaunch&) const = default; };
         RemoteLaunch remoteLaunch;
+        // A mapped control Pick-Up is waiting for, as the reference's status bar shows it (static reading of its code):
+        // its value and the controller's, in its own units, until a move picks it up.
+        struct PickUp { juce::String target; float expected = 0, received = 0; bool operator== (const PickUp&) const = default; };
+        std::optional<PickUp> pickUp;
         float grooveAmount = 100; // Global Amount, 0-130%: scales every groove's Timing, Random and Velocity.
         LaunchQuantisation launchQuantisation = LaunchQuantisation::bar;
         MetronomeSettings metronome;
@@ -1453,6 +1457,12 @@ public:
     // clips' launch mode and grid. Kept in a versioned file beside the engine's settings, saved
     // atomically; a missing file gives the defaults, an older version gains them for new settings,
     // and an unreadable one is set aside, keeping the defaults, with the reason reported.
+    // Takeover Mode, the reference's MIDI preference (static reading of its code; None by default): what a controller
+    // mapped in an absolute mode does to a control whose value differs from the controller's position. None jumps the
+    // control to the controller. Pick-Up and Value Scaling follow a controller already in step with the control;
+    // otherwise Pick-Up waits until the controller passes the control's value, and Value Scaling moves the value toward
+    // the end the controller moves to, in proportion, so both reach it together.
+    enum class TakeoverMode { none, pickUp, valueScaling };
     struct Preferences
     {
         bool exclusiveArm = true, exclusiveSolo = true;
@@ -1530,6 +1540,7 @@ public:
         // The computer MIDI keyboard (KEYS) and Options > Scale Highlighting (K), which the reference keeps with
         // its song preference data, both off at first: they come back as they were left.
         bool computerMidiKeyboard = false, highlightScale = false;
+        TakeoverMode takeoverMode = TakeoverMode::none;
         bool operator== (const Preferences&) const = default;
     };
     // The audio device's latency as it reports it, with Driver Error Compensation. Recordings are placed
@@ -1749,9 +1760,11 @@ public:
     juce::Result setMidiLearnTarget (const juce::String& target);
     juce::Result removeMidiMapping (const juce::String& target);
     juce::Result setMidiMappingRange (const juce::String& target, float minimum, float maximum);
-    // A controller change, as it arrives from a MIDI input. Moves from one controller are one undo step
-    // until it rests for half a second.
-    juce::Result handleMidiControl (int channel, int controller, int value);
+    // A controller change, as it arrives from a MIDI input (by its name; empty for one not named). Moves from one
+    // controller are one undo step until it rests for half a second. As in the reference, each input remembers each
+    // controller's last value, which Takeover Mode compares with the control's (see TakeoverMode); a continuous
+    // control takes it over, while switches, choices and buttons always follow the controller.
+    juce::Result handleMidiControl (int channel, int controller, int value, const juce::String& port = {});
     // A note, as it arrives from a MIDI input; velocity 0 is its note-off. While learning, a note-on
     // maps the note as a controller would. As in the reference, a mapped note presses a clip slot
     // with its note-on and releases it with its note-off (following the clip's Launch Mode), presses

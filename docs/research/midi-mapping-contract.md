@@ -70,12 +70,40 @@ The UI suite checks the switch and Cmd/Ctrl+M, the overlay's targets, learning a
 - **Notes.** A note-off while learning maps nothing; C3 maps to the activator as a note, as one undo step, beside controller 60 on the same channel. Its note-on toggles the activator and its note-off does nothing; other channels and notes do nothing; malformed notes are refused. A note replaces a target's controller. A note on the volume, with a −12–0 dB range, switches it between the ends. Through the synthetic device, a note launches a Gate clip and its note-off stops it, and a controller does the same rising above 63 and falling to 63. Note mappings reopen as notes, and a note mapped twice is refused.
 - **Real input.** A virtual MIDI controller, created through the engine's device manager, is learned and then drives a fader through the real input path. A note played into it while learning maps the activator without reaching the armed MIDI track it feeds; the mapped note then switches the activator without reaching the track, while an unmapped note still does, and Capture MIDI keeps only the unmapped note.
 
+## Takeover Mode (2026-10-26)
+
+The reference's Takeover Mode preference, after a static reading of its code (Live 12.2.1, arm64 slice, sha256 b37cb738442bba7787457fe751b0e3f9fbdabc662d8d491d1d9aa46b120bd3fc; binary-assisted research, raw notes in the ignored `artifacts/reverse-engineering/takeover/`). It decides what a controller does when its position and its control's value differ.
+
+- **The setting.** `Preferences::takeoverMode` is None, Pick-Up or Value Scaling, None by default as the reference's is. It is one setting for every input and mapping, kept with the preferences, not the project. The Link, Tempo & MIDI page offers it below the control surfaces.
+- **History.** Each input remembers each controller's last value, by input name, channel and controller, before anything acts on it. This happens while learning too. It is kept while the application runs and is not reset by opening a project, as the reference's inputs keep theirs. `handleMidiControl (channel, controller, value, port)` takes the input's name.
+- **Which controls.** Continuous controls take it over: mixer and send levels, pans, the master, native device controls (whole-number ones included) and plug-in parameters. Choices, switches and buttons always follow the controller, as the reference's do.
+- **The arithmetic** is `src/MidiTakeover.cpp`, ported from the research model in single precision, built without floating-point contraction so only the reference's fused multiply-adds fuse. It works in the control's fader or knob positions, as Halftrack's mappings do:
+  - a controller value v gives `upper·t + lower·(1−t)` (fused) with `t = v/127`, or `t = (127−v)/127` for a reversed range;
+  - **None** jumps the control to the controller;
+  - **in step:** with Pick-Up or Value Scaling, a controller whose previous value lay within half a step (1/128 of the range) of the control's value follows it;
+  - **Pick-Up** otherwise takes the controller only when its move from its previous value passed the control's value, or came within two steps of it; until then the control stays;
+  - **Value Scaling** otherwise follows within two steps; a repeated value leaves the control; moving up, the control moves `(upper − value)·(new − previous)/(upper − previous)`, and moving down `(value − lower)·(previous − new)/(previous − lower)`, so it reaches the end when the controller does;
+  - with no previous value from that input, Pick-Up and Value Scaling leave the control as it is;
+  - a control outside the mapping's range is first taken to its nearer end.
+- **Waiting.** While Pick-Up waits, `Snapshot::pickUp` names the control with its value and the controller's, and the status bar shows `<control> waiting for pick-up: E  <<  R`, or `R  >>  E` when the controller is below, the lower value first, as the reference's status bar arranges them. A move that picks it up clears it. A waiting message changes nothing and makes no undo step.
+
+Differences from the reference:
+- The reference's inputs remember every controller message. Halftrack's remember only those that reach the Session: mapped controllers, and every controller while one is being learned.
+- The reference works in each parameter's own internal scale, which the reading did not identify for non-linear parameters such as Volume. Halftrack works in fader and knob positions.
+- The status bar's English wording is Halftrack's; the reference's is in an encrypted resource.
+
+Evidence (`tests/MidiMappingTests.cpp`):
+- 17 cases of the arithmetic give exactly the research model's single-precision results: None, Pick-Up waiting, crossing, within two steps and from above, no previous value, a controller in step, Value Scaling up, down, a repeated value, within two steps, a narrower range, reversed, to the top and the bottom, and a control outside the range.
+- In a Session, a mapped volume at −12 dB with Pick-Up stays when the controller moves below it, reporting the wait with no undo step; the controller passing it takes it over and ends the wait, and the fader then follows. Another input's first message of the same controller waits. Value Scaling moves the fader down in proportion, and None jumps it. A choice of an Eight-band EQ jumps even with Pick-Up.
+- `tests/PreferencesTests.cpp`: the setting is saved and read back, and a value beyond Value Scaling makes the file unreadable.
+- The UI suite: the MIDI page's chooser sets it, and the status bar shows the wait (`1-Audio / Volume waiting for pick-up: -52.12  >>  -6.00`) and clears it.
+
 ## Not implemented
 
 - Note ranges: a slot played chromatically from a range of keys, and a control given evenly spaced values across a range.
 - Pitch bend and 14-bit controllers.
 - Per-input Remote switches (every input other than the computer keyboard acts as a remote).
-- Takeover modes (Pick-Up, Value Scaling) and relative encoders.
+- Relative encoder modes and 14-bit controllers (the reading found ten map modes, chosen per mapping and detected while learning; see the ignored findings).
 - MIDI output feedback.
 - The reference's inverted switch ranges (values outside the range turn a switch on). A controller mapped to a switch control, such as a device's HP switch, takes the nearest step along the range instead.
 - The reference's confirmation when a message already mapped elsewhere is learned again; Halftrack moves the mapping without asking.

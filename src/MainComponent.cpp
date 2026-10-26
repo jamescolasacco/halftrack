@@ -16801,6 +16801,7 @@ private:
         canvas.syncRows();
         if (selectedSceneIndex() < 0) selectedSceneId = state.scenes.empty() ? juce::String() : state.scenes.front().id;
         followRemoteLaunch (previous.remoteLaunch);
+        showPickUp (previous.pickUp);
         launcher.sync();
         if (arrangementMixerLaidOut != (! showSession && state.arrangementMixerSections.shown ? arrangementMixer.preferredHeight() : -1)) resized();
         arrangementMixer.sync();
@@ -17831,6 +17832,23 @@ private:
         }
         canvas.repaint(); launcher.repaint();
         return true;
+    }
+    // Pick-Up's wait, as the reference's status bar shows it (static reading of its code): the control, then its value
+    // and the controller's, the lower first, the arrows pointing toward the control's. A move that picks it up clears it.
+    juce::String pickUpStatus;
+    void showPickUp (const std::optional<Session::Snapshot::PickUp>& before)
+    {
+        if (state.pickUp == before) return;
+        if (state.pickUp)
+        {
+            const auto& waiting = *state.pickUp;
+            const auto expected = juce::String (waiting.expected, 2), received = juce::String (waiting.received, 2);
+            status = pickUpStatus = mappingList.describe (waiting.target) + " waiting for pick-up: "
+                                  + (waiting.expected <= waiting.received ? expected + "  <<  " + received : received + "  >>  " + expected);
+            statusFrames = 24 * 7;
+        }
+        else if (status == pickUpStatus) { status.clear(); statusFrames = 0; }
+        repaint();
     }
     // A clip or scene a mapped control launched, as the reference's Select on Launch and Select Next
     // Scene on Launch follow it: the clip's slot or the scene selected, or the scene after it.
@@ -19429,8 +19447,22 @@ private:
     public:
         explicit MidiPage (Impl& o) : owner (o)
         {
-            for (auto* c : std::initializer_list<juce::Component*> { &heading, &surfaceTitle, &inputTitle, &outputTitle, &surface, &surfaceInput, &surfaceOutput, &portsHeading, &ports })
+            for (auto* c : std::initializer_list<juce::Component*> { &heading, &surfaceTitle, &inputTitle, &outputTitle, &surface, &surfaceInput, &surfaceOutput, &takeoverLabel, &takeover, &portsHeading, &ports })
                 addAndMakeVisible (c);
+            // Takeover Mode, the reference's MIDI preference, below the control surfaces as its page has it.
+            takeoverLabel.setText ("Takeover Mode", juce::dontSendNotification);
+            takeover.setName ("Takeover mode");
+            takeover.addItem ("None", 1); takeover.addItem ("Pick-Up", 2); takeover.addItem ("Value Scaling", 3);
+            takeover.setTooltip ("Takeover Mode: when a mapped controller and its control differ, None jumps the control to the controller, "
+                                 "Pick-Up waits until the controller passes the control's value, and Value Scaling moves the control toward "
+                                 "the end the controller moves to so both reach it together");
+            takeover.onChange = [this]
+            {
+                if (syncing) return;
+                auto p = owner.session.preferences();
+                p.takeoverMode = static_cast<Session::TakeoverMode> (juce::jlimit (0, 2, takeover.getSelectedId() - 1));
+                owner.report (owner.session.setPreferences (p)); sync();
+            };
             styleHeading (heading, "MIDI"); styleHeading (portsHeading, "MIDI Ports");
             surfaceTitle.setText ("Control Surface", juce::dontSendNotification); inputTitle.setText ("Input", juce::dontSendNotification); outputTitle.setText ("Output", juce::dontSendNotification);
             for (auto* title : { &surfaceTitle, &inputTitle, &outputTitle }) title->setColour (juce::Label::textColourId, muted);
@@ -19450,6 +19482,7 @@ private:
             juce::StringArray outputs; for (const auto& port : owner.session.midiOutputPorts()) outputs.add (port.name);
             const auto current = owner.session.controlSurface();
             if (current.input.isNotEmpty()) mackie = true;
+            takeover.setSelectedId ((int) owner.session.preferences().takeoverMode + 1, juce::dontSendNotification);
             surface.setSelectedId (mackie ? 2 : 1, juce::dontSendNotification);
             surfaceInput.clear (juce::dontSendNotification); surfaceOutput.clear (juce::dontSendNotification);
             surfaceInput.addItem ("None", 1); for (int i = 0; i < inputs.size(); ++i) surfaceInput.addItem (inputs[i], i + 2);
@@ -19525,6 +19558,8 @@ private:
             auto row = area.removeFromTop (24);
             surface.setBounds (row.removeFromLeft (150)); row.removeFromLeft (6); surfaceInput.setBounds (row.removeFromLeft (110)); row.removeFromLeft (6); surfaceOutput.setBounds (row);
             area.removeFromTop (8);
+            preferenceRow (area, takeoverLabel, takeover, 120);
+            area.removeFromTop (4);
             preferenceHeading (area, portsHeading);
             ports.setBounds (area);
             rows.setSize (juce::jmax (1, ports.getMaximumVisibleWidth()), rows.getHeight());
@@ -19552,8 +19587,8 @@ private:
         }
         Impl& owner;
         bool syncing = false, mackie = false;
-        juce::Label heading, surfaceTitle, inputTitle, outputTitle, portsHeading;
-        juce::ComboBox surface, surfaceInput, surfaceOutput;
+        juce::Label heading, surfaceTitle, inputTitle, outputTitle, portsHeading, takeoverLabel;
+        juce::ComboBox surface, surfaceInput, surfaceOutput, takeover;
         juce::Viewport ports;
         juce::Component rows;
         std::vector<juce::ToggleButton*> switches;
@@ -30532,6 +30567,31 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
                 check (! session.isExternalSync() && tempo.isEditable() && ! extButton.isVisible(), "turning both off hides EXT and frees the tempo");
             }
             else std::cout << "SKIP UI MIDI To ports: this system cannot make a virtual MIDI port" << std::endl;
+            {
+                // Takeover Mode on the Link, Tempo & MIDI page, and Pick-Up's wait in the status bar.
+                MidiPage page (*this); page.setSize (PreferencesView::width - PreferencesView::tabWidth, PreferencesView::height);
+                auto* takeover = dynamic_cast<juce::ComboBox*> (findNamed (page, "Takeover mode"));
+                check (takeover != nullptr && takeover->getText() == "None" && takeover->getNumItems() == 3,
+                       "the MIDI page offers Takeover Mode, None by default as in the reference");
+                takeover->setSelectedId (2, juce::sendNotificationSync);
+                check (session.preferences().takeoverMode == Session::TakeoverMode::pickUp, "choosing Pick-Up sets it");
+                const auto steps = session.undoSteps().size();
+                const auto volume = "mixer:" + state.tracks[0].id + ":volume";
+                check (session.setMidiLearnTarget (volume).wasOk() && session.handleMidiControl (1, 70, 0, "UI knobs").wasOk() && session.setMidiLearnTarget ({}).wasOk(),
+                       "map the first track's volume to CC 70");
+                check (session.setTrackGain (0, -6).wasOk(), "the fader at -6 dB"); refresh();
+                check (session.handleMidiControl (1, 70, 10, "UI knobs").wasOk(), "the controller moves to 10, below it"); refresh();
+                check (status.startsWith (state.tracks[0].name + " / Volume waiting for pick-up: ") && status.endsWith ("  >>  -6.00") && std::abs (state.tracks[0].gainDb + 6) < 1e-3,
+                       "the status bar shows Pick-Up waiting for the controller to come up to the fader's -6 dB: " + status);
+                check (session.handleMidiControl (1, 70, 120, "UI knobs").wasOk(), "the controller passes it"); refresh();
+                check (! status.contains ("pick-up") && state.tracks[0].gainDb > -6, "the fader follows and the wait leaves the status bar");
+                juce::MessageManager::getInstance()->runDispatchLoopUntil (700); // The controller's move ends as it rests.
+                while (session.undoSteps().size() > steps && session.canUndo()) session.undo();
+                takeover->setSelectedId (1, juce::sendNotificationSync); refresh();
+                check (session.preferences().takeoverMode == Session::TakeoverMode::none && takeover->getText() == "None"
+                           && std::none_of (state.midiMappings.begin(), state.midiMappings.end(), [&] (const auto& m) { return m.target == volume; }),
+                       "None again, with the mapping undone");
+            }
             chooser->setSelectedId (1, juce::sendNotificationSync); refresh();
             check (state.tracks[(size_t) lane].hasInstrument && midiTo->getText() == "Main" && midiTo->indexOfItemId (configureOutputItem) >= 0, "the built-in synth comes back, with Audio To");
             check (session.removeTrack (lane).wasOk(), "remove the MIDI To track"); refresh();

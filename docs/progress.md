@@ -3027,3 +3027,7 @@ Engine and UI areas. After a static reading of the reference's sample display: W
 ## Warp marker selection and Seg. BPM — 2026-10-26
 
 Engine and UI areas. After a static reading of the reference's sample display, warp markers select with click, Cmd-click and Shift-click, and drags and the arrow keys move the selection, each segment beside a marker that stays held within 5–999 BPM (`Session::moveWarpMarkers`). Delete deletes the selected markers, and deleting the last keeps the tempo up to it after the new last marker (`Session::deleteWarpMarkers`). Seg. BPM shows and sets the segment up to the selected marker. The audio clip view now takes the keys when clicked, and Delete there no longer reaches the Arrangement. The :2 and ×2 tooltips had their effect backwards. Warp and UI suites pass.
+
+## Takeover Mode — 2026-10-26
+
+Engine and UI areas. After a static reading of the reference's controller code, Preferences > Link, Tempo & MIDI offers Takeover Mode: None (the default), Pick-Up or Value Scaling. Each input remembers its controllers' last values, and continuous controls take a controller over as the reference's do, in arithmetic ported from the research model (`src/MidiTakeover.cpp`) that matches it exactly in 17 cases. While Pick-Up waits, the status bar says so with both values. Choices, switches and buttons still jump. MIDI mapping, preferences and UI suites pass.

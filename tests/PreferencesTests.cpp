@@ -36,6 +36,7 @@ int runPreferencesTests (const juce::File& artifacts)
         chosen.exclusiveArm = false; chosen.defaultWarpMode = Session::WarpMode::beats; chosen.autoWarpLongSamples = true;
         chosen.defaultLaunchMode = Session::LaunchMode::gate; chosen.defaultLaunchQuantisation = Session::ClipQuantisation::bar;
         chosen.startRecordingOnSceneLaunch = true; chosen.startPlaybackWithRecord = false; chosen.sessionAutomationArmedOnly = false;
+        chosen.takeoverMode = Session::TakeoverMode::pickUp;
         check (! Session::Preferences {}.startRecordingOnSceneLaunch, "Start Recording on Scene Launch is off by default, as in the reference");
         check (Session::Preferences {}.startPlaybackWithRecord, "Start Playback with Record is on by default");
         {
@@ -122,6 +123,10 @@ int runPreferencesTests (const juce::File& artifacts)
         expected = {}; expected.computerMidiKeyboard = true; expected.highlightScale = true;
         check (kept == expected && keptProblem.isEmpty() && ! Session::Preferences {}.computerMidiKeyboard && ! Session::Preferences {}.highlightScale,
                "the computer MIDI keyboard and Scale Highlighting, off by default, are read back on");
+        auto [scaling, scalingProblem] = reopen ("<HALFTRACKPREFERENCES version=\"1\" takeoverMode=\"2\"/>");
+        expected = {}; expected.takeoverMode = Session::TakeoverMode::valueScaling;
+        check (scaling == expected && scalingProblem.isEmpty() && Session::Preferences {}.takeoverMode == Session::TakeoverMode::none,
+               "Takeover Mode, None by default as in the reference, is read back as Value Scaling");
         auto [waiting, waitingProblem] = reopen ("<HALFTRACKPREFERENCES version=\"1\" startPlaybackWithRecord=\"0\"/>");
         expected = {}; expected.startPlaybackWithRecord = false;
         check (waiting == expected && waitingProblem.isEmpty(), "Start Playback with Record off is read back");
@@ -162,6 +167,9 @@ int runPreferencesTests (const juce::File& artifacts)
         aside.deleteFile();
         auto [ranged, rangedProblem] = reopen ("<HALFTRACKPREFERENCES version=\"1\" defaultLaunchMode=\"9\"/>");
         check (ranged == Session::Preferences {} && rangedProblem.isNotEmpty() && aside.existsAsFile(), "an out-of-range value is unreadable: the defaults apply");
+        aside.deleteFile();
+        auto [takeover, takeoverProblem] = reopen ("<HALFTRACKPREFERENCES version=\"1\" takeoverMode=\"3\"/>");
+        check (takeover == Session::Preferences {} && takeoverProblem.isNotEmpty() && aside.existsAsFile(), "so is a Takeover Mode beyond Value Scaling");
         auto [junk, junkProblem] = reopen ("not preferences <<<");
         check (junk == Session::Preferences {} && junkProblem.contains ("could not be read") && aside.loadFileAsString() == "not preferences <<<" && ! file.existsAsFile(),
                "an unreadable file is set aside unchanged, with the reason (" + junkProblem + ")");

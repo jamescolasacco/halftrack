@@ -1,3 +1,4 @@
+#include "MidiTakeover.h"
 #include "NativeEffects.h"
 #include "Session.h"
 #include <tracktion_engine/tracktion_engine.h>
@@ -326,6 +327,83 @@ int runMidiMappingTests (const juce::File& artifacts)
                    "the send's MIDI and key mappings reopen");
             ok (reopened.handleMidiControl (1, 12, 127), "CC 12 at 127 after reopening");
             check (near (reopened.snapshot().tracks[0].sends.at (0).gainDb, 0), "the reopened mapping moves the send");
+        }
+        {
+            // Takeover Mode, ported from the research model of the reference's arithmetic: each case gives the model's own
+            // single-precision result, from the control's value now, the controller's previous value and its value now.
+            struct Case { const char* name; takeover::Mode mode; float from, to, current; std::optional<int> prior; int value; float expected; bool pickUp; };
+            using M = takeover::Mode;
+            const Case cases[] {
+                { "None jumps", M::none, 0x0.0p+0f, 0x1.0p+0f, 0x1.333334p-2f, 10, 100, 0x1.93264cp-1f, false },
+                { "Pick-Up waits", M::pickUp, 0x0.0p+0f, 0x1.0p+0f, 0x1.0p-1f, 10, 20, 0x1.0p-1f, true },
+                { "Pick-Up takes a controller crossing the value", M::pickUp, 0x0.0p+0f, 0x1.0p+0f, 0x1.0p-1f, 60, 70, 0x1.1a3468p-1f, true },
+                { "Pick-Up takes one within two steps", M::pickUp, 0x0.0p+0f, 0x1.0p+0f, 0x1.0p-1f, 0, 63, 0x1.fbf7fp-2f, true },
+                { "Pick-Up waits for one above", M::pickUp, 0x0.0p+0f, 0x1.0p+0f, 0x1.0p-1f, 100, 66, 0x1.0p-1f, true },
+                { "Pick-Up waits with no previous value", M::pickUp, 0x0.0p+0f, 0x1.0p+0f, 0x1.0p-1f, std::nullopt, 100, 0x1.0p-1f, false },
+                { "a controller in step follows", M::pickUp, 0x0.0p+0f, 0x1.0p+0f, 0x0.0p+0f, 0, 90, 0x1.6ad5acp-1f, false },
+                { "Value Scaling moves up in proportion", M::valueScaling, 0x0.0p+0f, 0x1.0p+0f, 0x1.0p-2f, 0, 64, 0x1.418306p-1f, false },
+                { "and down", M::valueScaling, 0x0.0p+0f, 0x1.0p+0f, 0x1.8p-1f, 127, 64, 0x1.83060cp-2f, false },
+                { "Value Scaling leaves a repeated value", M::valueScaling, 0x0.0p+0f, 0x1.0p+0f, 0x1.8p-1f, 40, 40, 0x1.8p-1f, false },
+                { "Value Scaling follows within two steps", M::valueScaling, 0x0.0p+0f, 0x1.0p+0f, 0x1.0p-1f, 20, 64, 0x1.020408p-1f, false },
+                { "Value Scaling in a narrower range", M::valueScaling, 0x1.99999ap-3f, 0x1.99999ap-1f, 0x1.666666p-1f, 10, 30, 0x1.6f26f2p-1f, false },
+                { "Value Scaling reversed", M::valueScaling, 0x1.99999ap-1f, 0x1.99999ap-3f, 0x1.333334p-2f, 10, 30, 0x1.21b21cp-2f, false },
+                { "Pick-Up reversed waits", M::pickUp, 0x1.99999ap-1f, 0x1.99999ap-3f, 0x1.333334p-2f, 10, 30, 0x1.333334p-2f, true },
+                { "Pick-Up keeps a value outside the range at its end", M::pickUp, 0x1.99999ap-3f, 0x1.99999ap-1f, 0x1.e66666p-1f, 10, 30, 0x1.99999ap-1f, true },
+                { "Value Scaling reaches the top with the controller", M::valueScaling, 0x0.0p+0f, 0x1.0p+0f, 0x1.333334p-2f, 100, 127, 0x1.0p+0f, false },
+                { "and the bottom", M::valueScaling, 0x0.0p+0f, 0x1.0p+0f, 0x1.666666p-1f, 30, 0, 0x0.0p+0f, false },
+            };
+            for (const auto& c : cases)
+            {
+                const auto move = takeover::apply (c.mode, c.current, c.prior ? std::optional<float> ((float) *c.prior) : std::nullopt, (float) c.value,
+                                                   std::min (c.from, c.to), std::max (c.from, c.to), c.to < c.from);
+                check (move.value == c.expected && move.pickUp == c.pickUp, juce::String ("takeover: ") + c.name + ", " + juce::String (move.value, 7) + " as the model's");
+            }
+            // In a Session: the volume mapped to CC 7 of one input, then set to -12 dB with the mouse.
+            Session t (false);
+            const auto volumeTarget = "mixer:" + t.snapshot().tracks[0].id + ":volume";
+            const auto level = [&] { return t.snapshot().tracks[0].gainDb; };
+            const auto atValue = [] (int v) { return Session::automationProportionToValue (Target::volume, v / 127.0f); };
+            ok (t.setMidiLearnTarget (volumeTarget), "learn the volume for takeover"); ok (t.handleMidiControl (1, 7, 0, "Knobs"), "with CC 7 at 0 on Knobs");
+            ok (t.setMidiLearnTarget ({}), "end learning");
+            const auto choose = [&] (Session::TakeoverMode mode) { auto p = t.preferences(); p.takeoverMode = mode; ok (t.setPreferences (p), "choose a Takeover Mode"); };
+            choose (Session::TakeoverMode::pickUp);
+            ok (t.setTrackGain (0, -12), "the mouse sets -12 dB");
+            auto steps = t.undoSteps().size();
+            ok (t.handleMidiControl (1, 7, 10, "Knobs"), "the controller moves to 10, below the fader");
+            const auto waiting = t.snapshot().pickUp;
+            check (near (level(), -12) && t.undoSteps().size() == steps && waiting && waiting->target == volumeTarget && near (waiting->expected, -12)
+                       && near (waiting->received, atValue (10)), "Pick-Up leaves the fader and reports it waiting, with no undo step");
+            ok (t.handleMidiControl (1, 7, 100, "Knobs"), "the controller passes the fader on its way to 100");
+            check (near (level(), atValue (100)) && ! t.snapshot().pickUp, "Pick-Up takes it over and the wait ends");
+            ok (t.handleMidiControl (1, 7, 90, "Knobs"), "it moves on to 90");
+            check (near (level(), atValue (90)), "and the fader follows a controller in step");
+            rest(); ok (t.setTrackGain (0, -12), "the mouse sets -12 dB again");
+            ok (t.handleMidiControl (1, 7, 100, "Pads"), "another input's first message of CC 7");
+            check (near (level(), -12), "is not known to be in step, so it waits: each input remembers its own controllers");
+            choose (Session::TakeoverMode::valueScaling);
+            ok (t.handleMidiControl (1, 7, 20, "Knobs"), "Value Scaling: Knobs' controller from 90 down to 20");
+            const auto position = Session::automationValueToProportion (Target::volume, -12);
+            const auto scaled = takeover::apply (takeover::Mode::valueScaling, position, 90.0f, 20.0f, 0, 1, false).value;
+            check (near (level(), Session::automationProportionToValue (Target::volume, scaled)) && level() < -12,
+                   "Value Scaling moves the fader down as far toward the bottom, in proportion, as the controller went");
+            choose (Session::TakeoverMode::none);
+            ok (t.handleMidiControl (1, 7, 64, "Knobs"), "None: the controller at 64");
+            check (near (level(), atValue (64)), "None jumps the fader to the controller");
+            rest();
+            // Choices always jump: band 1's mode of an Eight-band EQ.
+            choose (Session::TakeoverMode::pickUp);
+            ok (t.addNativeEffect (0, Session::EffectKind::equalizer), "add an Eight-band EQ for takeover");
+            const int bandType = effectParameterIndex (Session::EffectKind::equalizer, "band1Type");
+            const auto typeTarget = "device:" + t.snapshot().tracks[0].plugins.back().id + ":" + juce::String (bandType);
+            ok (t.setMidiLearnTarget (typeTarget), "learn band 1's mode"); ok (t.handleMidiControl (1, 30, 0, "Knobs"), "with CC 30 at 0"); ok (t.setMidiLearnTarget ({}), "end learning");
+            const auto range = t.midiTargetRange (typeTarget);
+            auto settings = t.snapshot().tracks[0].plugins.back().effect;
+            check (range.has_value(), "the mode has a range");
+            settings.values[(size_t) bandType] = range->second;
+            ok (t.setNativeEffectSettings (t.snapshot().tracks[0].plugins.back().id, settings), "the last mode, with the mouse");
+            ok (t.handleMidiControl (1, 30, 10, "Knobs"), "CC 30 from 0 to 10, below it");
+            check (t.snapshot().tracks[0].plugins.back().effect.values[(size_t) bandType] == std::round (range->first + (range->second - range->first) * 10 / 127.0f),
+                   "with Pick-Up, a choice still jumps to the controller");
         }
         std::cout << "MIDI mapping passed: " << root.getFullPathName() << std::endl; return 0;
     }

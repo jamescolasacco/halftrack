@@ -6,6 +6,7 @@
 #include "NativeEffects.h"
 #include "Racks.h"
 #include "CaptureTempo.h"
+#include "MidiTakeover.h"
 #include "FollowActions.h"
 #include "NoteTools.h"
 #include "Grooves.h"
@@ -2982,7 +2983,7 @@ private:
 class MidiRemote final : public te::MidiInputDevice::RemoteControl, private juce::AsyncUpdater
 {
 public:
-    using Handler = std::function<void (int channel, int number, int value, bool note)>;
+    using Handler = std::function<void (int channel, int number, int value, bool note, const juce::String& port)>;
     MidiRemote (Handler handler, juce::String keyboardName) : handle (std::move (handler)), computerKeyboard (std::move (keyboardName)) {}
     ~MidiRemote() override { detach(); cancelPendingUpdate(); }
     // Message thread: serve every MIDI input of the Edit, and only those.
@@ -3012,9 +3013,9 @@ public:
         learning.store (isLearning);
     }
 private:
-    struct Message { int channel = 1, number = 0, value = 0; bool note = false; };
+    struct Message { int channel = 1, number = 0, value = 0; bool note = false; const te::MidiInputDevice* device = nullptr; };
     static size_t index (bool note, int channel, int number) { return (size_t) ((note ? 16 * 128 : 0) + (channel - 1) * 128 + number); }
-    bool takeMidiMessage (te::MidiInputDevice&, const juce::MidiMessage& m) override
+    bool takeMidiMessage (te::MidiInputDevice& device, const juce::MidiMessage& m) override
     {
         const bool note = m.isNoteOnOrOff();
         if (! note && ! m.isController()) return false;
@@ -3023,7 +3024,7 @@ private:
         if (! m.isNoteOff() && ! learning.load() && ! mapped[index (note, m.getChannel(), number)].load (std::memory_order_relaxed)) return false;
         {
             const juce::SpinLock::ScopedLockType lock (mutex);
-            if (count < ring.size()) ring[(head + count++) % ring.size()] = { m.getChannel(), number, note ? (m.isNoteOn() ? m.getVelocity() : 0) : m.getControllerValue(), note };
+            if (count < ring.size()) ring[(head + count++) % ring.size()] = { m.getChannel(), number, note ? (m.isNoteOn() ? m.getVelocity() : 0) : m.getControllerValue(), note, &device };
         }
         triggerAsyncUpdate();
         return true;
@@ -3036,7 +3037,13 @@ private:
             for (; n < count; ++n) batch[n] = ring[(head + n) % ring.size()];
             head = (head + n) % ring.size(); count = 0;
         }
-        for (size_t i = 0; i < n; ++i) handle (batch[i].channel, batch[i].number, batch[i].value, batch[i].note);
+        for (size_t i = 0; i < n; ++i)
+        {
+            // The input by its name, which outlasts the device object as it comes and goes.
+            juce::String port;
+            for (auto& weak : served) if (auto device = weak.lock(); device.get() == batch[i].device) port = device->getName();
+            handle (batch[i].channel, batch[i].number, batch[i].value, batch[i].note, port);
+        }
     }
     std::array<Message, 256> ring;
     size_t head = 0, count = 0;
@@ -5155,7 +5162,7 @@ struct Session::Impl
             && std::isfinite (p.driverErrorCompensationMs) && std::abs (p.driverErrorCompensationMs) <= 200
             && juce::isPositiveAndBelow ((int) p.metronomeSound, Session::metronomeSoundCount)
             && (p.countInBars == 0 || p.countInBars == 1 || p.countInBars == 2 || p.countInBars == 4)
-            && juce::isPositiveAndBelow (p.defaultTrackColour, paletteSize)
+            && juce::isPositiveAndBelow (p.defaultTrackColour, paletteSize) && juce::isPositiveAndBelow ((int) p.takeoverMode, 3)
             && validPaths (p.userFolders) && validPaths (p.recentProjects);
     }
     // Places and recent projects are absolute paths, each once.
@@ -5213,6 +5220,8 @@ struct Session::Impl
             const bool coloursRead = autoColours >= 0 && reducedColours >= 0 && randomClips >= 0 && defaultColour >= 0;
             read.computerMidiKeyboard = number ("computerMidiKeyboard", 0, 2) == 1; read.highlightScale = number ("highlightScale", 0, 2) == 1;
             read.selectOnLaunch = number ("selectOnLaunch", 1, 2) == 1; read.selectNextSceneOnLaunch = number ("selectNextSceneOnLaunch", 1, 2) == 1;
+            const int takeover = number ("takeoverMode", 0, 3);
+            read.takeoverMode = static_cast<TakeoverMode> (juce::jmax (0, takeover));
             read.startPlaybackWithRecord = startPlayback == 1;
             read.startPlaybackWithTapTempo = tapStart == 1;
             read.lockEnvelopes = locked == 1;
@@ -5221,7 +5230,7 @@ struct Session::Impl
             for (auto* project : xml->getChildWithTagNameIterator ("RECENTPROJECT")) read.recentProjects.add (project->getStringAttribute ("path"));
             read.createFadesOnClipEdges = edgeFades == 1;
             read.metronomeSound = static_cast<Session::MetronomeSound> (juce::jmax (0, sound));
-            valid = valid && follow >= 0 && sceneRecord >= 0 && armedAutomation >= 0 && audioUnits >= 0 && vst3System >= 0 && vst3Custom >= 0 && edgeFades >= 0 && sound >= 0 && startPlayback >= 0 && locked >= 0 && tapStart >= 0 && fullHeight >= 0 && scrubAreas >= 0 && coloursRead && validPreferences (read);
+            valid = valid && follow >= 0 && sceneRecord >= 0 && armedAutomation >= 0 && audioUnits >= 0 && vst3System >= 0 && vst3Custom >= 0 && edgeFades >= 0 && sound >= 0 && startPlayback >= 0 && locked >= 0 && tapStart >= 0 && fullHeight >= 0 && scrubAreas >= 0 && coloursRead && takeover >= 0 && validPreferences (read);
         }
         if (valid) { prefs = read; fadesOnClipEdges = prefs.createFadesOnClipEdges; return; }
         // Set an unreadable file aside rather than lose it, and keep the defaults.
@@ -5256,6 +5265,7 @@ struct Session::Impl
         xml.setAttribute ("reducedAutomaticColours", next.reducedAutomaticColours ? 1 : 0); xml.setAttribute ("randomClipColours", next.randomClipColours ? 1 : 0);
         xml.setAttribute ("computerMidiKeyboard", next.computerMidiKeyboard ? 1 : 0); xml.setAttribute ("highlightScale", next.highlightScale ? 1 : 0);
         xml.setAttribute ("selectOnLaunch", next.selectOnLaunch ? 1 : 0); xml.setAttribute ("selectNextSceneOnLaunch", next.selectNextSceneOnLaunch ? 1 : 0);
+        xml.setAttribute ("takeoverMode", (int) next.takeoverMode);
         xml.setAttribute ("preferencesTab", next.preferencesTab);
         for (const auto& folder : next.userFolders) xml.createNewChildElement ("USERFOLDER")->setAttribute ("path", folder);
         for (const auto& project : next.recentProjects) xml.createNewChildElement ("RECENTPROJECT")->setAttribute ("path", project);
@@ -6009,6 +6019,7 @@ struct Session::Impl
         std::function<AutomationLane()> read;
         std::function<Result (const AutomationLane&)> write;
         std::function<float (float)> proportion, value; // Lane units to the engine's linear curve units, and back.
+        bool takesOver = true; // A continuous control, which Takeover Mode applies to; a choice always jumps.
     };
     struct CapturePass { std::vector<AutomationPoint> original, recorded; bool touch = false; };
     std::map<String, CapturePass> captures;
@@ -6114,10 +6125,12 @@ struct Session::Impl
             {
                 const auto id = parts[1]; const int parameter = parts[2].getIntValue(); const auto kind = device->getKind();
                 if (device->control (parameter) == nullptr) return std::nullopt;
+                const auto fields = effectParameters (kind);
                 return LaneAccess { [device, parameter] { for (const auto& a : deviceAutomation (*device)) if (a.parameter == parameter) return a.lane; return AutomationLane {}; },
                                     [this, id, parameter] (const AutomationLane& lane) { return owner.setDeviceAutomation (id, parameter, lane); },
                                     [kind, parameter] (float v) { return effectValueToProportion (kind, parameter, v); },
-                                    [kind, parameter] (float p) { return effectProportionToValue (kind, parameter, p); } };
+                                    [kind, parameter] (float p) { return effectProportionToValue (kind, parameter, p); },
+                                    ! juce::isPositiveAndBelow (parameter, (int) fields.size()) || fields[(size_t) parameter].choices == nullptr };
             }
             else if (auto* external = externalPlugin (parts[1]))
             {
@@ -7043,7 +7056,7 @@ struct Session::Impl
         edit->editFileRetriever = [this] { return editLocation(); };
         grooveWatcher.watch (edit->state);
         pluginEditorWatch.sync(); // Plug-in editors' moves, from now on (it keeps up on a timer).
-        midiLearnTarget.clear(); keyLearnTarget.clear(); buttonValues.clear(); autoArmed.clear(); autoInput = false;
+        midiLearnTarget.clear(); keyLearnTarget.clear(); buttonValues.clear(); autoArmed.clear(); autoInput = false; pickUp.reset();
         attachRemote(); attachCapture();
         if (useDevices && ! remoteWatch.isTimerRunning()) { remoteWatch.tick = [this] { attachRemote(); attachCapture(); reconcileMidiMappings(); publishRemote(); }; remoteWatch.startTimer (1000); }
         flushStructuralUpdates();
@@ -7243,7 +7256,7 @@ struct Session::Impl
     te::Engine engine;
     // MIDI mappings: the learn target, the remote inputs, and the gesture that groups a controller's moves.
     String midiLearnTarget;
-    MidiRemote remote { [this] (int channel, int number, int value, bool note) { note ? owner.handleMidiNote (channel, number, value) : owner.handleMidiControl (channel, number, value); },
+    MidiRemote remote { [this] (int channel, int number, int value, bool note, const String& port) { note ? owner.handleMidiNote (channel, number, value) : owner.handleMidiControl (channel, number, value, port); },
                         Session::computerKeyboardName };
     // Capture MIDI: the notes played into each armed or In-monitored MIDI track, newest last.
     struct CapturedNote { int channel = 1, pitch = 60; float velocity = 0; double onTime = 0, offTime = -1, onBeat = 0, offBeat = 0; bool timed = false; }; // Times in stream seconds.
@@ -7677,6 +7690,10 @@ struct Session::Impl
     // Key Map Mode's learn target, and each button-mapped controller's last value (rising past 63 presses).
     String keyLearnTarget;
     std::map<String, int> buttonValues;
+    // Each input's controllers' last values, by input, channel and controller, as the reference's inputs keep them for
+    // Takeover Mode; kept while the application runs, as its are. And the control Pick-Up waits for.
+    std::map<std::tuple<String, int, int>, int> controllerHistory;
+    std::optional<Session::Snapshot::PickUp> pickUp;
     int trackIndexOf (const String& id) const
     {
         const auto tracks = te::getAudioTracks (*edit);
@@ -8331,7 +8348,7 @@ Session::Snapshot Session::snapshot() const
     s.cueMode = s.cueModeChosen && s.cueAvailable;
     s.soloInPlace = soloInPlace();
     s.loopIsSongStart = loopIsSongStart();
-    s.mixerSections = mixerSections(); s.arrangementMixerSections = arrangementMixerSections(); s.arrangementControls = arrangementControls(); s.remoteLaunch = impl->remoteLaunch; s.arrangementOverview = arrangementOverview(); s.timeRulerFormat = timeRulerFormat(); s.sceneSettingsShown = sceneSettingsShown();
+    s.mixerSections = mixerSections(); s.arrangementMixerSections = arrangementMixerSections(); s.arrangementControls = arrangementControls(); s.remoteLaunch = impl->remoteLaunch; s.pickUp = impl->pickUp; s.arrangementOverview = arrangementOverview(); s.timeRulerFormat = timeRulerFormat(); s.sceneSettingsShown = sceneSettingsShown();
     for (const auto& m : e.state.getChildWithName (midiMapType))
         if (auto mapping = readMidiMapping (m); isMappableTarget (mapping.target) && impl->mappingCurrent (m)) s.midiMappings.push_back (mapping);
     s.midiLearnTarget = impl->midiLearnTarget;
@@ -16450,10 +16467,13 @@ Result Session::setMidiMappingRange (const String& target, float minimum, float 
         }
     return Result::fail ("That control has no MIDI mapping.");
 }
-Result Session::handleMidiControl (int channel, int controller, int value)
+Result Session::handleMidiControl (int channel, int controller, int value, const String& port)
 {
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
     if (channel < 1 || channel > 16 || controller < 0 || controller > 127 || value < 0 || value > 127) return Result::fail ("Invalid MIDI controller message.");
+    // The input remembers the controller's value before anything acts on it, as the reference's does.
+    std::optional<float> prior;
+    if (const auto [entry, added] = impl->controllerHistory.try_emplace ({ port, channel, controller }, value); ! added) { prior = (float) entry->second; entry->second = value; }
     if (impl->midiLearnTarget.isNotEmpty()) return impl->learnMidi (channel, controller, false);
     std::optional<MidiMapping> mapping;
     for (const auto& m : impl->edit->state.getChildWithName (midiMapType))
@@ -16473,9 +16493,24 @@ Result Session::handleMidiControl (int channel, int controller, int value)
     }
     const auto lane = impl->laneFor (mapping->target);
     if (! lane) return Result::ok();
-    // The controller moves the fader or knob position between the mapping's ends.
+    // The controller moves the fader or knob position between the mapping's ends, as the reference maps an absolute
+    // controller, and with Pick-Up or Value Scaling a continuous control out of step with it waits or scales.
     const auto from = lane->proportion (mapping->minimum), to = lane->proportion (mapping->maximum);
-    const auto target = lane->value (from + (to - from) * (float) value / 127.0f);
+    const auto lower = std::min (from, to), upper = std::max (from, to);
+    const auto mode = lane->takesOver ? static_cast<takeover::Mode> (impl->prefs.takeoverMode) : takeover::Mode::none;
+    const auto current = impl->targetValue (mapping->target);
+    const auto position = current ? lane->proportion (*current) : lower;
+    const auto move = takeover::apply (mode, position, prior, (float) value, lower, upper, to < from);
+    if (move.pickUp)
+    {
+        // As the reference's status bar keeps it: the control's value and the controller's until a move picks it up.
+        const auto received = takeover::absolute ((float) value, lower, upper, to < from);
+        const Snapshot::PickUp waiting { mapping->target, lane->value (move.value), lane->value (received) };
+        if (move.value == received) { if (impl->pickUp && impl->pickUp->target == mapping->target) { impl->pickUp.reset(); sendChangeMessage(); } }
+        else if (impl->pickUp != waiting) { impl->pickUp = waiting; sendChangeMessage(); }
+    }
+    if (current && move.value == position) return Result::ok();
+    const auto target = lane->value (move.value);
     // A controller's moves form one gesture until it rests. A move after half a second's rest
     // starts a new one even if the rest timer has not run yet, as on a loaded machine.
     if (impl->remoteGesture && juce::Time::getMillisecondCounter() - impl->lastRemote >= 500) { impl->remoteGesture = false; endEditGesture(); }
