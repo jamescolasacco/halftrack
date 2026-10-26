@@ -97,8 +97,9 @@ int runExternalSyncTests (const juce::File&)
         check (std::abs (beats() - 8) < 1e-3, "Song Position moves it to the eighth beat while stopped (" + juce::String (beats(), 4) + ")");
         clock->sendMessageNow (juce::MidiMessage::midiContinue());
         run (90, 1);
-        // As at Start, a loaded machine starts the transport a moment after Continue (9.12 beats on the macOS runner).
-        check (s.snapshot().playing && std::abs (beats() - 9.5) < .5, "Continue plays on from there (" + juce::String (beats(), 3) + ")");
+        // As at Start, a loaded machine starts the transport a moment after Continue: the macOS runner has reached 9.12
+        // beats, and 8.83 (CI run 40247416430). What matters is that it plays on from the eighth beat, not from the start.
+        check (s.snapshot().playing && beats() > 8.2 && beats() < 10, "Continue plays on from there (" + juce::String (beats(), 3) + ")");
         clock->sendMessageNow (juce::MidiMessage::midiStop());
         run (90, .3);
         check (s.canUndo() == couldUndo, "none of it is an undo step");
