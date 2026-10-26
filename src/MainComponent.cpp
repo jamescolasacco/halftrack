@@ -19381,8 +19381,8 @@ private:
         explicit RecordPage (Impl& o) : owner (o)
         {
             for (auto* c : std::initializer_list<juce::Component*> { &recordHeading, &typeLabel, &type, &depthLabel, &depth, &countInLabel, &countIn, &exclusiveArm, &exclusiveSolo,
-                                                                    &sceneRecord, &startPlayback, &warpHeading, &autoWarp, &warpLabel, &warp, &edgeFades, &launchHeading, &modeLabel, &mode,
-                                                                    &gridLabel, &grid, &tapHeading, &tapStart })
+                                                                    &sceneRecord, &startPlayback, &sessionAutomationLabel, &sessionAutomation, &warpHeading, &autoWarp, &warpLabel, &warp,
+                                                                    &edgeFades, &launchHeading, &modeLabel, &mode, &gridLabel, &grid, &tapHeading, &tapStart })
                 addAndMakeVisible (c);
             styleHeading (recordHeading, "Record"); styleHeading (warpHeading, "Warp and Fades"); styleHeading (launchHeading, "Launch"); styleHeading (tapHeading, "Tap Tempo");
             typeLabel.setText ("File Type", juce::dontSendNotification); depthLabel.setText ("Bit Depth", juce::dontSendNotification);
@@ -19403,6 +19403,11 @@ private:
             edgeFades.setName ("Create fades on clip edges");
             edgeFades.setTooltip ("Create Fades on Clip Edges: new audio clips, and the edges a split makes, fade over 4 ms, and touching clips crossfade");
             sceneRecord.setTooltip ("Start Recording on Scene Launch: launching a scene also records into its empty slots on armed tracks");
+            // Session Automation Recording, which the reference's manual calls a switch: armed tracks only, or every playing Session clip.
+            sessionAutomationLabel.setText ("Session Automation Recording", juce::dontSendNotification);
+            sessionAutomation.setName ("Session automation recording");
+            sessionAutomation.addItem ("Armed Tracks", 1); sessionAutomation.addItem ("All Tracks", 2);
+            sessionAutomation.setTooltip ("Session Automation Recording: with Automation Arm on, Session Record writes control moves into the Session clips of armed tracks, or of every track playing one");
             tapStart.setName ("Start playback with tap tempo");
             tapStart.setTooltip ("Start Playback with Tap Tempo: a bar of taps while stopped starts playback at the tapped tempo, a beat after the last tap");
             warp.setName ("Default warp mode"); mode.setName ("Default launch mode"); grid.setName ("Default launch quantization");
@@ -19414,7 +19419,7 @@ private:
             for (const auto* name : { "Trigger", "Gate", "Toggle", "Repeat" }) mode.addItem (name, id++);
             for (const auto& [name, value] : Session::clipQuantisations()) grid.addItem (name, (int) value + 1);
             for (auto* b : { &exclusiveArm, &exclusiveSolo, &autoWarp, &edgeFades, &sceneRecord, &startPlayback, &tapStart }) b->onClick = [this] { apply(); };
-            warp.onChange = mode.onChange = grid.onChange = countIn.onChange = [this] { apply(); };
+            warp.onChange = mode.onChange = grid.onChange = countIn.onChange = sessionAutomation.onChange = [this] { apply(); };
             // Select on Launch and Select Next Scene on Launch, in the Launch section as the reference's.
             for (auto* b : { &selectOnLaunch, &selectNextScene }) { addAndMakeVisible (*b); b->onClick = [this] { apply(); }; }
             selectOnLaunch.setName ("Select on launch"); selectNextScene.setName ("Select next scene on launch");
@@ -19432,6 +19437,7 @@ private:
             exclusiveArm.setToggleState (p.exclusiveArm, juce::dontSendNotification); exclusiveSolo.setToggleState (p.exclusiveSolo, juce::dontSendNotification);
             autoWarp.setToggleState (p.autoWarpLongSamples, juce::dontSendNotification);
             sceneRecord.setToggleState (p.startRecordingOnSceneLaunch, juce::dontSendNotification);
+            sessionAutomation.setSelectedId (p.sessionAutomationArmedOnly ? 1 : 2, juce::dontSendNotification);
             startPlayback.setToggleState (p.startPlaybackWithRecord, juce::dontSendNotification);
             tapStart.setToggleState (p.startPlaybackWithTapTempo, juce::dontSendNotification);
             edgeFades.setToggleState (p.createFadesOnClipEdges, juce::dontSendNotification);
@@ -19445,6 +19451,7 @@ private:
             auto p = owner.session.preferences();
             p.exclusiveArm = exclusiveArm.getToggleState(); p.exclusiveSolo = exclusiveSolo.getToggleState(); p.autoWarpLongSamples = autoWarp.getToggleState();
             p.startRecordingOnSceneLaunch = sceneRecord.getToggleState();
+            p.sessionAutomationArmedOnly = sessionAutomation.getSelectedId() != 2;
             p.startPlaybackWithRecord = startPlayback.getToggleState();
             p.startPlaybackWithTapTempo = tapStart.getToggleState();
             p.createFadesOnClipEdges = edgeFades.getToggleState();
@@ -19461,6 +19468,7 @@ private:
             preferenceHeading (area, recordHeading);
             preferenceRow (area, typeLabel, type, 100); preferenceRow (area, depthLabel, depth, 100); preferenceRow (area, countInLabel, countIn, 100);
             for (auto* b : { &exclusiveArm, &exclusiveSolo, &sceneRecord, &startPlayback }) { b->setBounds (area.removeFromTop (22)); area.removeFromTop (3); }
+            preferenceRow (area, sessionAutomationLabel, sessionAutomation, 120);
             preferenceHeading (area, warpHeading);
             autoWarp.setBounds (area.removeFromTop (22)); area.removeFromTop (3);
             preferenceRow (area, warpLabel, warp, 160);
@@ -19475,8 +19483,8 @@ private:
         Impl& owner;
         static constexpr Session::WarpMode warpModes[] { Session::WarpMode::beats, Session::WarpMode::tones, Session::WarpMode::texture, Session::WarpMode::repitch,
                                                          Session::WarpMode::stretch, Session::WarpMode::complexPro, Session::WarpMode::efficient };
-        juce::Label recordHeading, typeLabel, depthLabel, countInLabel, warpHeading, warpLabel, launchHeading, modeLabel, gridLabel, tapHeading;
-        juce::ComboBox type, depth, countIn, warp, mode, grid;
+        juce::Label recordHeading, typeLabel, depthLabel, countInLabel, sessionAutomationLabel, warpHeading, warpLabel, launchHeading, modeLabel, gridLabel, tapHeading;
+        juce::ComboBox type, depth, countIn, sessionAutomation, warp, mode, grid;
         juce::ToggleButton exclusiveArm { "Exclusive Arm" }, exclusiveSolo { "Exclusive Solo" }, autoWarp { "Auto-Warp Long Samples" },
                            edgeFades { "Create Fades on Clip Edges" }, sceneRecord { "Start Recording on Scene Launch" }, startPlayback { "Start Playback with Record" },
                            tapStart { "Start Playback with Tap Tempo" };
@@ -25457,6 +25465,13 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
             tapToggle->setToggleState (false, juce::sendNotificationSync); refresh();
             check (! session.preferences().startPlaybackWithTapTempo && ! session.preferences().startPlaybackWithRecord, "switching it off sets it");
             tapToggle->setToggleState (true, juce::sendNotificationSync); refresh();
+            auto* sessionAutomationChooser = dynamic_cast<juce::ComboBox*> (findNamed (panel, "Session automation recording"));
+            check (sessionAutomationChooser != nullptr && sessionAutomationChooser->getText() == "Armed Tracks" && session.preferences().sessionAutomationArmedOnly,
+                   "the Record section offers Session Automation Recording, in armed tracks by default as in the reference");
+            sessionAutomationChooser->setSelectedId (2, juce::sendNotificationSync); refresh();
+            check (! session.preferences().sessionAutomationArmedOnly && session.preferences().startPlaybackWithTapTempo, "choosing All Tracks sets it, keeping the others");
+            sessionAutomationChooser->setSelectedId (1, juce::sendNotificationSync); refresh();
+            check (session.preferences().sessionAutomationArmedOnly, "and Armed Tracks sets it back");
         }
         check (session.resetPreferences().wasOk(), "reset the preferences");
         useHardClipEdges (session);

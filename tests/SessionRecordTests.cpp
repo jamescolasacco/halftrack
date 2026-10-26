@@ -2,6 +2,7 @@
 #include <tracktion_engine/tracktion_engine.h>
 #include <cmath>
 #include <iostream>
+#include <optional>
 #include <stdexcept>
 
 // Session Record, through the synthetic device and a generated controller. Pressing it records new
@@ -191,6 +192,79 @@ int runSessionRecordTests (const juce::File& artifacts)
                    "the take starts after the count-in, without the note played during it (" + juce::String ((int) take.clip.notes.size()) + " notes"
                        + (take.clip.notes.empty() ? juce::String() : ", the first at beat " + juce::String (take.clip.notes[0].startBeat, 3)) + ")");
             metronome.countInBars = 0; ok (s.setMetronome (metronome), "no count-in again");
+        }
+        // Session automation recording, after the reference's manual (read 2026-10-26): with Automation Arm on, Session
+        // Record writes a control's moves into the automation envelope of the Session clip its track overdubs, where the
+        // clip is in its loop. A drag (an edit gesture) records until release, then returns to what the clip had; a
+        // controller's move holds to the loop's end. Tracks not armed are left alone unless the preference says all tracks.
+        {
+            const auto volumeEnvelope = [&] (int track, int scene) -> std::optional<Session::ClipEnvelope>
+            {
+                for (const auto& e : slot (track, scene).clip.envelopes)
+                    if (e.mode == Session::EnvelopeMode::automation && e.target == Session::EnvelopeTarget { {}, 0 }) return e;
+                return std::nullopt;
+            };
+            const auto near = [] (double a, double b, double within) { return std::abs (a - b) < within; };
+            const auto waitFor = [&] (int track, int scene, double beat)
+            { for (int i = 0; i < 1600 && ! near (slot (track, scene).playPositionBeats, beat, .02); ++i) pumpSyntheticTestDevice (s, 1); };
+            pumpSyntheticTestDevice (s, 40);
+            check (! volumeEnvelope (keys, 0), "scene 1's MIDI clip has no volume automation");
+            ok (s.setAutomationArm (true), "switch Automation Arm on");
+            ok (s.sessionRecord (0), "Session Record overdubs scene 1's MIDI clip");
+            waitFor (keys, 0, 1);
+            check (slot (keys, 0).overdubbing && near (slot (keys, 0).playPositionBeats, 1, .05), "it overdubs, a beat in");
+            s.beginEditGesture ("Change volume");
+            ok (s.setTrackGain (keys, -12), "drag the volume down");
+            pumpSyntheticTestDevice (s, blocksPerSecond / 4);
+            ok (s.setTrackGain (keys, -6), "and up half a beat later");
+            s.endEditGesture();
+            auto envelope = volumeEnvelope (keys, 0);
+            const auto describe = [] (const std::optional<Session::ClipEnvelope>& e)
+            {
+                juce::String text;
+                if (e) for (const auto& p : e->points) text << juce::String (p.beat, 3) << ": " << juce::String (p.value, 1) << " dB; ";
+                return text;
+            };
+            check (envelope && envelope->points.size() == 5 && near (envelope->points[0].value, 0, 1e-3) && near (envelope->points[1].value, 0, 1e-3)
+                       && near (envelope->points[2].beat, 1, .1) && near (envelope->points[2].value, -12, 1e-3)
+                       && near (envelope->points[3].beat, envelope->points[2].beat + .5, .1) && near (envelope->points[3].value, -6, 1e-3)
+                       && near (envelope->points[4].value, 0, 1e-3) && envelope->points[4].beat - envelope->points[3].beat < .01,
+                   "the drag joins the clip's volume envelope where the clip is in its loop, back at 0 dB after release (" + describe (envelope) + ")");
+            waitFor (keys, 0, 2.5);
+            ok (s.setTrackGain (keys, -20), "a controller's move");
+            ok (s.sessionRecord (0), "stop Session Record");
+            envelope = volumeEnvelope (keys, 0);
+            check (envelope && envelope->points.size() == 7 && near (envelope->points[5].value, 0, 1e-3) && near (envelope->points[6].beat, 2.5, .1)
+                       && near (envelope->points[6].value, -20, 1e-3),
+                   "the controller's move holds its value to the loop's end (" + describe (envelope) + ")");
+            pumpSyntheticTestDevice (s, blocksPerSecond);
+            check (! slot (keys, 0).overdubbing && slot (keys, 0).playing && slot (keys, 0).clip.notes.size() == 2, "the clip plays on, its notes untouched");
+            s.undo();
+            check (volumeEnvelope (keys, 0) && volumeEnvelope (keys, 0)->points.size() == 5, "one undo removes the controller's move");
+            s.undo();
+            check (! volumeEnvelope (keys, 0), "another removes the drag");
+            s.redo(); s.redo();
+            check (volumeEnvelope (keys, 0) && volumeEnvelope (keys, 0)->points.size() == 7, "redo brings both back");
+
+            // A track not armed: by default its moves only set the control; with all tracks, its playing clip records them.
+            ok (s.launchSlot (0, 0), "play the audio clip on the unarmed track");
+            ok (s.sessionRecord (0), "Session Record again");
+            for (int i = 0; i < 800 && ! (slot (0, 0).playing && slot (keys, 0).overdubbing); ++i) pumpSyntheticTestDevice (s, 1);
+            check (slot (0, 0).playing && ! slot (0, 0).recording && slot (keys, 0).overdubbing, "the audio clip plays while the MIDI clip overdubs");
+            ok (s.setTrackGain (0, -9), "move the unarmed track's volume");
+            check (! volumeEnvelope (0, 0) && near (s.snapshot().tracks[0].gainDb, -9, .01), "by default it only sets the volume");
+            auto all = s.preferences(); all.sessionAutomationArmedOnly = false;
+            ok (s.setPreferences (all), "record Session automation in all tracks");
+            ok (s.setTrackGain (0, -3), "move it again");
+            envelope = volumeEnvelope (0, 0);
+            check (envelope && near (envelope->points.back().value, -3, 1e-3) && near (envelope->points.front().value, -9, 1e-3),
+                   "now its playing clip records the move, from the volume it had (" + describe (envelope) + ")");
+            ok (s.sessionRecord (0), "stop Session Record");
+            ok (s.setTrackGain (0, -1), "a move with Session Record off");
+            check (volumeEnvelope (0, 0) && near (volumeEnvelope (0, 0)->points.back().value, -3, 1e-3), "records nothing");
+            all.sessionAutomationArmedOnly = true; ok (s.setPreferences (all), "back to armed tracks");
+            ok (s.setAutomationArm (false), "switch Automation Arm off");
+            s.stop();
         }
         std::cout << "Session record passed: " << root.getFullPathName() << std::endl; return 0;
     }

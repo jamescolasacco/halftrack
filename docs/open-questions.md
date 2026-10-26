@@ -321,6 +321,7 @@ These are simplest-default choices pending reference measurement:
 - **Density.** Recorded points are at least 1/64 beat apart.
 - **Persistence.** Automation Arm is saved with the project and is not undoable.
 - **Read switch.** An override and the automation editor's Read switch are the same state.
+- **Session clips.** Session automation follows the Arrangement's point rules (1/960 and 1/64 beat). A Session clip without an envelope for the control starts its new one at the control's value before the move. Moves reach only clips that already exist; new Session takes record notes and audio only. The preference's label follows the manual's name, Session Automation Recording, with the choices Armed Tracks and All Tracks, as the reference's own text is in its encrypted language file.
 
 ### Punch defaults
 

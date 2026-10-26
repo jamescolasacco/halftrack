@@ -3235,6 +3235,7 @@ struct Session::Impl
         heldSlots.clear();
         pendingSceneChange.reset(); sceneWatch.stopTimer();
         overdubs.clear();
+        endSessionPasses();
     }
     // Sets one property on the given notes as one undo step, removing it where it takes its default.
     Result setNotesProperty (const String& clipId, const juce::StringArray& ids, const juce::Identifier& property,
@@ -4970,6 +4971,8 @@ struct Session::Impl
             const int follow = number ("followBehaviour", 0, 2), sceneRecord = number ("startRecordingOnSceneLaunch", 0, 2);
             read.scrollFollow = follow == 1;
             read.startRecordingOnSceneLaunch = sceneRecord == 1;
+            const int armedAutomation = number ("sessionAutomationArmedOnly", 1, 2);
+            read.sessionAutomationArmedOnly = armedAutomation == 1;
             const int audioUnits = number ("useAudioUnits", 1, 2), vst3System = number ("useVst3SystemFolders", 1, 2), vst3Custom = number ("useVst3CustomFolder", 0, 2);
             read.useAudioUnits = audioUnits == 1; read.useVst3SystemFolders = vst3System == 1; read.useVst3CustomFolder = vst3Custom == 1;
             read.vst3CustomFolder = xml->getStringAttribute ("vst3CustomFolder");
@@ -4996,7 +4999,7 @@ struct Session::Impl
             for (auto* project : xml->getChildWithTagNameIterator ("RECENTPROJECT")) read.recentProjects.add (project->getStringAttribute ("path"));
             read.createFadesOnClipEdges = edgeFades == 1;
             read.metronomeSound = static_cast<Session::MetronomeSound> (juce::jmax (0, sound));
-            valid = valid && follow >= 0 && sceneRecord >= 0 && audioUnits >= 0 && vst3System >= 0 && vst3Custom >= 0 && edgeFades >= 0 && sound >= 0 && startPlayback >= 0 && locked >= 0 && tapStart >= 0 && fullHeight >= 0 && scrubAreas >= 0 && coloursRead && validPreferences (read);
+            valid = valid && follow >= 0 && sceneRecord >= 0 && armedAutomation >= 0 && audioUnits >= 0 && vst3System >= 0 && vst3Custom >= 0 && edgeFades >= 0 && sound >= 0 && startPlayback >= 0 && locked >= 0 && tapStart >= 0 && fullHeight >= 0 && scrubAreas >= 0 && coloursRead && validPreferences (read);
         }
         if (valid) { prefs = read; fadesOnClipEdges = prefs.createFadesOnClipEdges; return; }
         // Set an unreadable file aside rather than lose it, and keep the defaults.
@@ -5016,6 +5019,7 @@ struct Session::Impl
         xml.setAttribute ("driverErrorCompensationMs", next.driverErrorCompensationMs);
         xml.setAttribute ("followBehaviour", next.scrollFollow ? 1 : 0);
         xml.setAttribute ("startRecordingOnSceneLaunch", next.startRecordingOnSceneLaunch ? 1 : 0);
+        xml.setAttribute ("sessionAutomationArmedOnly", next.sessionAutomationArmedOnly ? 1 : 0);
         xml.setAttribute ("useAudioUnits", next.useAudioUnits ? 1 : 0); xml.setAttribute ("useVst3SystemFolders", next.useVst3SystemFolders ? 1 : 0);
         xml.setAttribute ("useVst3CustomFolder", next.useVst3CustomFolder ? 1 : 0); xml.setAttribute ("vst3CustomFolder", next.vst3CustomFolder);
         xml.setAttribute ("createFadesOnClipEdges", next.createFadesOnClipEdges ? 1 : 0);
@@ -5633,7 +5637,7 @@ struct Session::Impl
         const auto link = [&] { if (audio != nullptr) moveLinked (*audio, Linked::send, destinationID, before, after); };
         // A send may not lead a return's sound back into it, as a track taking the return's audio would.
         if (decibels > -100.0f && send == nullptr && feeds (destination, source)) return Result::fail ("That send would lead the return's sound back into it.");
-        if (capturing()) { capture (key, decibels); link(); changed(); return Result::ok(); }
+        if (capturing (key)) { capture (key, decibels); link(); changed(); return Result::ok(); }
         if (! send && decibels == -100.0f) { link(); return Result::ok(); }
         transaction ("Send level");
         if (! send && (send = createSend (source, destination)) == nullptr) return Result::fail ("Could not create the send.");
@@ -6364,9 +6368,11 @@ struct Session::Impl
         if (punchOut()) end = std::min (end, edit->tempoSequence.toBeats (loopRange().getEnd()).inBeats());
         if (const auto lane = laneFor (key)) writePass (pass, *lane, end);
     }
-    // Writes `value` into the lane at the playhead. Moves within 1/64 beat replace the last point.
+    // Writes `value` into the lane at the playhead, or with Session automation into a Session clip (sessionCapture). Moves
+    // within 1/64 beat replace the last point.
     void capture (const String& key, float value)
     {
+        if (! capturing()) { sessionCapture (key, value); return; }
         const auto lane = laneFor (key); if (! lane) return;
         const auto beat = playheadBeat();
         auto found = captures.find (key);
@@ -6400,7 +6406,137 @@ struct Session::Impl
         for (auto it = captures.begin(); it != captures.end();)
             if (! touchOnly || it->second.touch) { finishPass (it->first, it->second); it = captures.erase (it); }
             else ++it;
+        for (auto it = sessionPasses.begin(); it != sessionPasses.end();)
+            if (! touchOnly || it->second.touch) { writeSessionPass (it->second, true); it = sessionPasses.erase (it); }
+            else ++it;
         if (! touchOnly) captureTransaction = false;
+    }
+    // Session automation recording, as the reference's manual describes it (its automation chapter, read 2026-10-26): with
+    // Automation Arm on while Session Record runs, moving a control of a track whose Session clip overdubs writes the clip's
+    // automation envelope for the control where the clip is in its loop; with Preferences::sessionAutomationArmedOnly off,
+    // a playing Session clip on any track takes it too. A move in an edit gesture (the mouse) records until release, and the
+    // envelope the clip had returns after it; others hold their value to the loop's end. The loop coming round ends a pass.
+    struct SessionPass { te::EditItemID clip; Session::EnvelopeTarget target; std::vector<AutomationPoint> original, recorded; bool touch = false; };
+    std::map<String, SessionPass> sessionPasses; // By lane key.
+    // The Session clip a control's moves go into, with the control as an envelope names it: a track's volume or pan, or a
+    // control of a device directly on the track.
+    std::optional<std::pair<te::Clip*, Session::EnvelopeTarget>> sessionCaptureTarget (const String& key) const
+    {
+        if (! automationArmed() || (overdubs.empty() && slotRecordings.empty())) return std::nullopt;
+        const auto parts = juce::StringArray::fromTokens (key, ":", "");
+        if (parts.size() != 3) return std::nullopt;
+        te::AudioTrack* host = nullptr;
+        Session::EnvelopeTarget target;
+        if (parts[0] == "mixer" && (parts[2] == "volume" || parts[2] == "pan"))
+        {
+            for (auto* t : te::getAudioTracks (*edit)) if (t->itemID.toString() == parts[1]) host = t;
+            target = { {}, parts[2] == "volume" ? 0 : 1 };
+        }
+        else if (parts[0] == "device")
+        {
+            for (auto* t : te::getAudioTracks (*edit)) for (auto* plugin : t->pluginList.getPlugins()) if (plugin->itemID.toString() == parts[1]) host = t;
+            target = { parts[1], parts[2].getIntValue() };
+        }
+        if (host == nullptr || host->isFrozen (te::Track::anyFreeze) || envelopeParameter (*host, target) == nullptr) return std::nullopt;
+        for (const auto& o : overdubs) if (o.trackId == host->itemID) if (auto* clip = te::findClipForID (*edit, o.clipId)) return std::pair { clip, target };
+        if (prefs.sessionAutomationArmedOnly) return std::nullopt;
+        for (auto* slot : host->getClipSlotList().getClipSlots())
+            if (auto* clip = slot->getClip())
+                if (auto handle = clip->getLaunchHandle(); handle && handle->getPlayingStatus() == te::LaunchHandle::PlayState::playing) return std::pair { clip, target };
+        return std::nullopt;
+    }
+    bool capturing (const String& key) const { return capturing() || sessionCaptureTarget (key).has_value(); }
+    // Session Record stopping ends every Session pass, and the stretch of recording's undo step.
+    void endSessionPasses()
+    {
+        for (const auto& [key, pass] : sessionPasses) writeSessionPass (pass, true);
+        sessionPasses.clear();
+        if (! capturing()) captureTransaction = false;
+    }
+    void writeSessionPass (const SessionPass& pass, bool ended)
+    {
+        auto* clip = te::findClipForID (*edit, pass.clip);
+        auto* host = clip != nullptr ? dynamic_cast<te::AudioTrack*> (clip->getTrack()) : nullptr;
+        if (host == nullptr || pass.recorded.empty()) return;
+        constexpr auto mode = Session::EnvelopeMode::automation;
+        te::Plugin* device = nullptr;
+        envelopeParameter (*host, pass.target, &device);
+        const auto [low, high] = envelopeRange (pass.target, mode, device);
+        constexpr double gap = 1.0 / 960;
+        const auto& o = pass.original; const auto& r = pass.recorded;
+        const auto first = r.front().beat, last = r.back().beat;
+        // The original envelope at a beat: linear in curve units, holding before its first point and after its last.
+        const auto originalAt = [&] (double beat)
+        {
+            if (beat <= o.front().beat) return o.front().value;
+            for (size_t i = 1; i < o.size(); ++i)
+                if (beat <= o[i].beat)
+                {
+                    const auto t = (beat - o[i - 1].beat) / (o[i].beat - o[i - 1].beat);
+                    const auto a = envelopeToCurve (pass.target, mode, device, o[i - 1].value), b = envelopeToCurve (pass.target, mode, device, o[i].value);
+                    return juce::jlimit (low, high, curveToEnvelope (pass.target, mode, device, (float) (a + t * (b - a))));
+                }
+            return o.back().value;
+        };
+        Session::ClipEnvelope envelope;
+        for (const auto& existing : clipEnvelopes (*clip)) if (existing.target == pass.target && existing.mode == mode) envelope = existing;
+        envelope.target = pass.target; envelope.mode = mode; envelope.points.clear();
+        for (const auto& p : o) if (p.beat < first - gap - 1e-6) envelope.points.push_back (p);
+        if (! o.empty() && first - gap >= 0) envelope.points.push_back ({ first - gap, originalAt (first - gap) });
+        envelope.points.insert (envelope.points.end(), r.begin(), r.end());
+        // A finished touch pass returns to the envelope the clip had; a latch pass holds its last value to the loop's end.
+        if (ended && pass.touch && ! o.empty())
+        {
+            envelope.points.push_back ({ last + gap, originalAt (last + gap) });
+            for (const auto& p : o) if (p.beat > last + gap + 1e-6) envelope.points.push_back (p);
+        }
+        if (envelope.points.size() > 4096) envelope.points.erase (envelope.points.begin(), envelope.points.end() - 4096);
+        const juce::ScopedValueSetter<bool> internal (internalAutomationWrite, true), one (composite, true);
+        owner.setClipEnvelope (pass.clip.toString(), envelope);
+    }
+    void sessionCapture (const String& key, float value)
+    {
+        const auto found = sessionCaptureTarget (key);
+        if (! found) return;
+        auto* clip = found->first;
+        auto handle = clip->getLaunchHandle();
+        const auto played = handle != nullptr && handle->getPlayingStatus() == te::LaunchHandle::PlayState::playing ? handle->getPlayedRange() : std::nullopt;
+        if (! played) return;
+        // Where the clip is in its loop.
+        const auto loop = clip->getLoopRangeBeats();
+        const bool looped = loop.getLength().inBeats() > 0;
+        const auto length = looped ? loop.getLength().inBeats() : clip->getLengthInBeats().inBeats(), start = looped ? loop.getStart().inBeats() : 0.0;
+        if (length <= 0) return;
+        const auto elapsed = std::max (0.0, played->getLength().inBeats());
+        auto beat = start + std::fmod (elapsed, length);
+        // An unlinked envelope loops on its own length from the clip's launch.
+        for (const auto& existing : clipEnvelopes (*clip))
+            if (existing.target == found->second && existing.mode == Session::EnvelopeMode::automation && existing.unlinked) beat = std::fmod (elapsed, existing.loopBeats);
+        te::Plugin* device = nullptr;
+        auto* host = dynamic_cast<te::AudioTrack*> (clip->getTrack());
+        auto* parameter = host != nullptr ? envelopeParameter (*host, found->second, &device) : nullptr;
+        if (parameter == nullptr) return;
+        const auto [low, high] = envelopeRange (found->second, Session::EnvelopeMode::automation, device);
+        value = juce::jlimit (low, high, value);
+        auto pass = sessionPasses.find (key);
+        if (pass != sessionPasses.end() && (pass->second.clip != clip->itemID || beat < pass->second.recorded.back().beat - 1e-9))
+        { writeSessionPass (pass->second, true); sessionPasses.erase (pass); pass = sessionPasses.end(); }
+        if (pass == sessionPasses.end())
+        {
+            SessionPass fresh { clip->itemID, found->second, {}, {}, gesture != nullptr };
+            for (const auto& existing : clipEnvelopes (*clip)) if (existing.target == found->second && existing.mode == Session::EnvelopeMode::automation) fresh.original = existing.points;
+            // Without an envelope the clip had the control's value before the move, which a pass returns to.
+            if (fresh.original.empty())
+                fresh.original.push_back ({ 0.0, juce::jlimit (low, high, curveToEnvelope (found->second, Session::EnvelopeMode::automation, device, parameter->getCurrentValue())) });
+            pass = sessionPasses.emplace (key, fresh).first;
+        }
+        // Moves inside an edit gesture join its transaction; others share one per stretch of recording.
+        if (! gesture && ! captureTransaction) { transaction ("Record automation"); captureTransaction = true; }
+        auto& recorded = pass->second.recorded;
+        if (! recorded.empty() && beat - recorded.back().beat < 1.0 / 64) recorded.back().value = value;
+        else if (recorded.size() < 4000) recorded.push_back ({ beat, value });
+        else recorded.back() = { beat, value };
+        writeSessionPass (pass->second, false);
     }
     void refreshParameterValues()
     {
@@ -7563,7 +7699,7 @@ struct Session::Impl
             auto* external = impl.externalPlugin (w.pluginId);
             if (external == nullptr || impl.exporting) return;
             const auto key = deviceKey (w.pluginId, w.index);
-            if (impl.capturing()) impl.capture (key, value);
+            if (impl.capturing (key)) impl.capture (key, value);
             else
             {
                 impl.overrideLane (key);
@@ -10789,6 +10925,7 @@ Result Session::sessionRecord (int sceneIndex)
             for (auto& r : impl->slotRecordings) if (r.slotId == slotId) { impl->finishSlotRecording (r, true, false); break; }
         for (auto& tap : impl->captureTaps) tap->flush(); // A note released just before is kept.
         impl->overdubs.clear();
+        impl->endSessionPasses();
         sendChangeMessage(); return Result::ok();
     }
     if (! audioDeviceManager().getCurrentAudioDevice()) return Result::fail (impl->noDeviceMessage());
@@ -15126,7 +15263,7 @@ Result Session::setTrackGain (int index, float value)
     value = juce::jlimit (-100.0f, 6.0f, value);
     const auto key = Impl::mixerKey (*t, AutomationTarget::volume);
     const auto before = volume->volParam->getCurrentValue(), after = te::decibelsToVolumeFaderPosition (value);
-    if (impl->capturing()) { impl->capture (key, value); impl->moveLinked (*t, Impl::Linked::volume, {}, before, after); impl->changed(); return Result::ok(); }
+    if (impl->capturing (key)) { impl->capture (key, value); impl->moveLinked (*t, Impl::Linked::volume, {}, before, after); impl->changed(); return Result::ok(); }
     if (! volume->state.hasProperty (manualVolumeProperty))
         volume->state.setProperty (manualVolumeProperty, volume->volParam->getCurrentExplicitValue(), nullptr);
     impl->transaction ("Track gain"); impl->overrideLane (key); volume->setVolumeDb (value);
@@ -15143,7 +15280,7 @@ Result Session::setTrackPan (int index, float value)
     value = juce::jlimit (-1.0f, 1.0f, value);
     const auto key = Impl::mixerKey (*t, AutomationTarget::pan);
     const auto before = (volume->getPan() + 1) / 2, after = (value + 1) / 2;
-    if (impl->capturing()) { impl->capture (key, value); impl->moveLinked (*t, Impl::Linked::pan, {}, before, after); impl->changed(); return Result::ok(); }
+    if (impl->capturing (key)) { impl->capture (key, value); impl->moveLinked (*t, Impl::Linked::pan, {}, before, after); impl->changed(); return Result::ok(); }
     if (! volume->state.hasProperty (manualPanProperty))
         volume->state.setProperty (manualPanProperty, volume->panParam->getCurrentExplicitValue(), nullptr);
     impl->transaction ("Track pan"); impl->overrideLane (key); volume->setPan (value);
@@ -15307,7 +15444,7 @@ float Session::deviceAutomationValueToProportion (EffectKind kind, int parameter
 float Session::deviceAutomationProportionToValue (EffectKind kind, int parameter, float proportion) { return effectProportionToValue (kind, parameter, proportion); }
 Result Session::setClipEnvelope (const String& clipId, const ClipEnvelope& envelope)
 {
-    if (impl->exporting || impl->anyRecording()) return Result::fail ("Stop recording or finish exporting before editing clip envelopes.");
+    if (impl->exporting || (impl->anyRecording() && ! impl->internalAutomationWrite)) return Result::fail ("Stop recording or finish exporting before editing clip envelopes.");
     te::Clip* clip = nullptr;
     for (auto* t : te::getAudioTracks (*impl->edit)) for (auto* c : allTrackClips (*t)) if (c->itemID.toString() == clipId) clip = c;
     auto* track = clip != nullptr ? dynamic_cast<te::AudioTrack*> (clip->getTrack()) : nullptr;
@@ -15500,12 +15637,12 @@ Result Session::setPluginParameterValue (const String& pluginId, int parameter, 
     auto* target = parameters[(size_t) parameter];
     if (target->getCurrentNormalisedValue() == value) return Result::ok();
     const auto key = Impl::deviceKey (pluginId, parameter);
-    if (impl->capturing()) impl->capture (key, value); else impl->overrideLane (key);
+    if (impl->capturing (key)) impl->capture (key, value); else impl->overrideLane (key);
     {
         const juce::ScopedValueSetter<bool> own (impl->settingPluginParameter, true);
         target->setNormalisedParameter (value, juce::sendNotificationSync);
     }
-    if (! impl->capturing()) external->state.setProperty (Impl::manualParameterProperty (parameter), value, nullptr);
+    if (! impl->capturing (key)) external->state.setProperty (Impl::manualParameterProperty (parameter), value, nullptr);
     impl->changed(); return Result::ok();
 }
 std::optional<std::pair<float, float>> Session::midiTargetRange (const String& target) const
@@ -17317,7 +17454,9 @@ Result Session::setNativeEffectSettings (const String& id, const EffectSettings&
     if (previous.kind != settings.kind) return Result::fail ("Effect type cannot change during an edit.");
     if (previous.values == settings.values) return Result::ok();
     const auto controls = effectParameters (settings.kind).size();
-    if (impl->capturing())
+    size_t firstChanged = 0;
+    while (firstChanged < controls && previous.values[firstChanged] == settings.values[firstChanged]) ++firstChanged;
+    if (impl->capturing (Impl::deviceKey (id, (int) firstChanged)))
     {
         for (size_t i = 0; i < controls; ++i)
             if (previous.values[i] != settings.values[i]) impl->capture (Impl::deviceKey (id, (int) i), settings.values[i]);

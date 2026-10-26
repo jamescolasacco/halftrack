@@ -33,6 +33,20 @@ How a pass ends depends on how the control was moved:
 
 The playhead is the transport position on the message thread.
 
+## Session clips (2026-10-26)
+
+As the reference's manual describes (its automation chapter, read 2026-10-26), Automation Arm also records into Session clips while Session Record runs:
+
+- **Which clips.** Moving a track's volume or pan, or a control of a device directly on the track, writes the automation envelope of the Session clip the track overdubs (an armed MIDI track whose slot held a clip). With Preferences' Session Automation Recording at All Tracks, the playing Session clip of any track takes the moves too. Armed Tracks is the default, as the reference's (static reading: `mpSessionAutomationRecordingInArmedTracksOnly`, on).
+- **Where.** At the clip's place in its loop, from the beats its launch has played; an unlinked envelope at its own loop's place.
+- **Touch.** A move inside an edit gesture (the mouse) records until release. The envelope the clip had resumes 1/960 beat later.
+- **Latch.** Other moves (a controller) hold their last value to the loop's end.
+- **Loop wrap.** The loop coming round ends a pass, and the next move starts another over what the clip now has.
+- **A control without an envelope.** The clip's new envelope starts at the control's value before the move, so the parts of the loop no pass reached keep it.
+- **Points.** As in Arrangement passes, moves less than 1/64 beat apart replace the last point.
+- **Undo.** A gesture's pass joins the gesture's undo step. Other moves share one "Record automation" step until Session Record stops.
+- Without Session Record, moves override as before. Arrangement recording still writes lanes.
+
 ## Interface
 
 - `setAutomationArm(bool)` and `reEnableAutomation()`.
@@ -66,10 +80,22 @@ With the synthetic audio device and Automation Arm on, it checks:
 - **No take.** No clip is created.
 - **Undo.** Undo restores every lane.
 
+The session-record suite overdubs a MIDI clip with Automation Arm on and checks:
+
+- **Touch.** A drag from −12 to −6 dB lands at the clip's beats 1 and 1.5, with 0 dB, the volume it had, before and after.
+- **Latch.** A controller's move to −20 dB holds to the loop's end.
+- **Undo.** Each pass is one undo step; redo brings them back. The clip's notes are untouched.
+- **Tracks not armed.** A playing audio clip on an unarmed track records nothing by default. With All Tracks it records the move from the volume the track had. With Session Record off, nothing is recorded.
+
+The preferences suite reads All Tracks back, and the UI suite finds Session Automation Recording on the Record page, at Armed Tracks, and switches it.
+
 The capture suite also re-enables an overridden volume lane alone while a device lane stays overridden, leaves a playing lane alone without an undo step, and undoes both. It deletes a volume lane together with a Session clip's volume automation envelope in one undo step, checks that deleting again changes nothing, and undoes it. The UI suite checks the live faders, their thumb colours, the override, Re-Enable Automation, the fader's menu offering Delete and Re-Enable Automation and re-enabling its lane (and no menu on the pan without automation), Cmd+Backspace deleting the fader's automation, undo and the Automation Arm button. The automation suite's earlier "locked fader" checks now assert overrides.
 
 ## Not implemented
 
-- Recording into Session clips (the reference records Session automation as clip envelopes).
+- Recording automation into the new clips Session Record makes. Only clips that already exist (overdubbing, or playing with All Tracks) take Session automation.
+- Relaunching a Session clip with automation re-enabling its overridden automation, as the manual describes.
+- Session automation of sends and of controls inside racks, which clip envelopes do not take yet.
+- A hosted plug-in's own editor reports its move after the parameter has changed, so a Session clip without an envelope for it starts at the moved value.
 - Utility controls. (Third-party plug-ins' parameters are captured and overridden from their own editors as well as Halftrack's controls; see the [plug-in automation contract](plugin-automation-contract.md).)
 - Measured comparison with the reference's recorded point density.

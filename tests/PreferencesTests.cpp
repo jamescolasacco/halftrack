@@ -35,7 +35,7 @@ int runPreferencesTests (const juce::File& artifacts)
         Session::Preferences chosen;
         chosen.exclusiveArm = false; chosen.defaultWarpMode = Session::WarpMode::beats; chosen.autoWarpLongSamples = true;
         chosen.defaultLaunchMode = Session::LaunchMode::gate; chosen.defaultLaunchQuantisation = Session::ClipQuantisation::bar;
-        chosen.startRecordingOnSceneLaunch = true; chosen.startPlaybackWithRecord = false;
+        chosen.startRecordingOnSceneLaunch = true; chosen.startPlaybackWithRecord = false; chosen.sessionAutomationArmedOnly = false;
         check (! Session::Preferences {}.startRecordingOnSceneLaunch, "Start Recording on Scene Launch is off by default, as in the reference");
         check (Session::Preferences {}.startPlaybackWithRecord, "Start Playback with Record is on by default");
         {
@@ -98,6 +98,10 @@ int runPreferencesTests (const juce::File& artifacts)
         auto [sceneRecording, sceneRecordingProblem] = reopen ("<HALFTRACKPREFERENCES version=\"1\" startRecordingOnSceneLaunch=\"1\"/>");
         expected = {}; expected.startRecordingOnSceneLaunch = true;
         check (sceneRecording == expected && sceneRecordingProblem.isEmpty(), "Start Recording on Scene Launch is read back");
+        auto [allTracks, allTracksProblem] = reopen ("<HALFTRACKPREFERENCES version=\"1\" sessionAutomationArmedOnly=\"0\"/>");
+        expected = {}; expected.sessionAutomationArmedOnly = false;
+        check (allTracks == expected && allTracksProblem.isEmpty() && Session::Preferences {}.sessionAutomationArmedOnly,
+               "Session Automation Recording, in armed tracks by default as in the reference, is read back in all tracks");
         auto [untapped, untappedProblem] = reopen ("<HALFTRACKPREFERENCES version=\"1\" startPlaybackWithTapTempo=\"0\"/>");
         expected = {}; expected.startPlaybackWithTapTempo = false;
         check (untapped == expected && untappedProblem.isEmpty() && Session::Preferences {}.startPlaybackWithTapTempo, "Start Playback with Tap Tempo, on by default, is read back off");

@@ -1428,6 +1428,9 @@ public:
         // Start Recording on Scene Launch, after the reference's (off by default): launching a scene
         // also records into its empty slots on armed tracks.
         bool startRecordingOnSceneLaunch = false;
+        // Session Automation Recording in armed tracks only, as the reference's preference (on by default, static reading):
+        // off, Session automation is recorded into the playing Session clip of any track (see setAutomationArm).
+        bool sessionAutomationArmedOnly = true;
         // Plug-In Sources, after the reference's Plug-Ins settings: Audio Units (macOS), the VST3
         // system folders, and a custom VST3 folder when its switch is on.
         bool useAudioUnits = true, useVst3SystemFolders = true, useVst3CustomFolder = false;
@@ -1663,7 +1666,10 @@ public:
     juce::AudioProcessorParameter* hostedPluginParameter (const juce::String& pluginId, int parameter);
     // Sets a clip's envelope for its target and mode as one undo step; no points removes it.
     juce::Result setClipEnvelope (const juce::String& clipId, const ClipEnvelope&);
-    // Automation Arm, after the reference. While it is on and the transport records, moving a track's
+    // Automation Arm, after the reference. While it is on and Session Record runs, moving a track's volume or pan, or a
+    // control of a device directly on it, writes the automation envelope of the Session clip the track overdubs (with
+    // sessionAutomationArmedOnly off, of any Session clip it plays) where the clip is in its loop: a mouse move until
+    // release, others holding their value to the loop's end. While it is on and the transport records, moving a track's
     // volume or pan, the master volume or a native device control writes that lane at the playhead:
     // while an edit gesture holds the control (then the earlier automation resumes), or until recording
     // stops. Otherwise, moving a control whose lane plays automation overrides the lane: it stops

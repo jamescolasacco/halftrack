@@ -15,7 +15,7 @@ A research agent read the reference's Preferences window statically (Live 12.2.1
   - Audio, in the reference's order: Driver Type, the input and output devices (one Audio Device for a driver without separate ones), Channel Configuration (Input Config and Output Config), In/Out Sample Rate, then Latency: Buffer Size, Input Latency, Output Latency, Driver Error Compensation and Overall Latency. The reference's sample rate conversion quality and test tone are left out.
   - Link, Tempo & MIDI: its MIDI section. A control surface, with its input and output; the reference's table has six, Halftrack one (Mackie Control). Then the ports: each input's Sync and MPE, each output's Track and Sync, as the reference's columns. Link, the tempo follower, takeover and the Remote switches are left out.
   - Plug-Ins: the plug-in sources and Rescan.
-  - Record, Warp & Launch, in the reference's sections: Record (File Type, Bit Depth, Count-In, Exclusive Arm and Solo, Start Recording on Scene Launch, Start Playback with Record), Warp and Fades (Auto-Warp Long Samples, Default Warp Mode, Create Fades on Clip Edges) and Launch (Default Launch Mode and Quantization). Which page each of these sits on in the reference is inferred from its settings' names.
+  - Record, Warp & Launch, in the reference's sections: Record (File Type, Bit Depth, Count-In, Exclusive Arm and Solo, Start Recording on Scene Launch, Start Playback with Record, Session Automation Recording), Warp and Fades (Auto-Warp Long Samples, Default Warp Mode, Create Fades on Clip Edges) and Launch (Default Launch Mode and Quantization). Which page each of these sits on in the reference is inferred from its settings' names.
   - Reset to Defaults, Halftrack's own, sits under the tabs.
 - **While Preferences has the focus**, the reference greys its transport commands; Halftrack does not yet.
 
@@ -30,6 +30,7 @@ A research agent read the reference's Preferences window statically (Live 12.2.1
 | Create Fades on Clip Edges | on | New audio clips, and the edges a split makes, get 4 ms default fades, and touching default edges crossfade ([clip fades contract](clip-fades-contract.md)). |
 | Start Playback with Record | on | Record pressed while stopped starts playback too; off, it waits for Play or a Session launch, and Shift reverses it ([transport contract](transport-contract.md)). |
 | Start Recording on Scene Launch | off | Launching a scene also records into its empty slots on armed tracks, as Session Record does ([Session recording contract](session-recording-contract.md#start-recording-on-scene-launch)). |
+| Session Automation Recording | Armed Tracks | With Automation Arm on, Session Record writes control moves into the Session clips of armed tracks; All Tracks adds the playing Session clip of every track ([automation capture contract](automation-capture-contract.md#session-clips-2026-10-26)). The manual calls it a switch in the Record, Warp & Launch Settings. The reference's default is armed tracks only (static reading: `mpSessionAutomationRecordingInArmedTracksOnly`, on). Its choices' English text is in the encrypted language file, so Halftrack names them plainly. |
 | Plug-In Sources | Audio Units and the VST3 system folders on, the custom VST3 folder off | What Rescan scans, set in Plug-Ins Settings ([plug-in sources contract](plugin-sources-contract.md)). |
 | Count-In | None | Bars recording waits for: None, 1, 2 or 4 ([metronome contract](metronome-contract.md#count-in)). |
 | Metronome Sound | Classic | The metronome's ticks: Classic, Click or Wood ([metronome contract](metronome-contract.md)). |
@@ -68,11 +69,11 @@ An import that the preferences warp is still one undo step.
 - **Reset** persists.
 - **Other files:**
   - an older file keeps its one setting and gains the defaults;
-  - Follow Behavior Scroll, Start Recording on Scene Launch and Start Playback with Record off are read back;
+  - Follow Behavior Scroll, Start Recording on Scene Launch, Start Playback with Record off and Session Automation Recording at All Tracks are read back;
   - a newer file's unknown setting is ignored;
   - an out-of-range value, and a file of junk, are set aside with the defaults kept and the reason given.
 
-The UI suite opens the window: a normal window, not modal, with the tabs in the reference's order; a link opening the Audio tab, which it remembers; one window when opened again; Escape closing it; and the tab chosen last when reopened. On the Audio page it finds the driver type, device, sample rate and buffer size, their rows in the reference's order, and sets the buffer size; on Link, Tempo & MIDI the control surface, and on a virtual port the ports' switches. Every preference fits on its page. It switches Exclusive Solo off and sees a plain click add a second soloed track. It also finds Start Recording on Scene Launch off and switches it on, and Start Playback with Record on and switches it off, each keeping the other settings, and then resets.
+The UI suite opens the window: a normal window, not modal, with the tabs in the reference's order; a link opening the Audio tab, which it remembers; one window when opened again; Escape closing it; and the tab chosen last when reopened. On the Audio page it finds the driver type, device, sample rate and buffer size, their rows in the reference's order, and sets the buffer size; on Link, Tempo & MIDI the control surface, and on a virtual port the ports' switches. Every preference fits on its page. It switches Exclusive Solo off and sees a plain click add a second soloed track. It also finds Start Recording on Scene Launch off and switches it on, and Start Playback with Record on and switches it off, each keeping the other settings, and Session Automation Recording at Armed Tracks, chooses All Tracks and back, and then resets.
 
 ## Not yet covered
 

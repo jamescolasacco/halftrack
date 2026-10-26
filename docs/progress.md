@@ -2987,3 +2987,7 @@ Engine and UI areas. Duplicate Loop doubles a MIDI clip's loop: its notes, whole
 ## Per-control Re-Enable Automation — 2026-10-26
 
 Engine and UI areas. While a control's automation is overridden, its context menu offers Re-Enable Automation for that lane alone, as the reference's control menus do: the track header's volume and pan, and native device controls. `Session::overriddenAutomation` lists the overridden lanes by key and `reEnableAutomation (key)` re-enables one, one undo step. Delete Automation, in the same menus and on Cmd+Backspace, removes a control's Arrangement lane and its clips' automation envelopes in one undo step (`Session::deleteAutomation`).
+
+## Session automation recording — 2026-10-26
+
+Engine and UI areas. As the reference's manual describes, Automation Arm now records into Session clips while Session Record runs. A track's volume, pan and the controls of devices on it write the automation envelope of the clip the track overdubs, where the clip is in its loop. A drag records until release and the clip's earlier envelope resumes; a controller's move holds to the loop's end. Preferences' new Session Automation Recording (Record, Warp & Launch) is at Armed Tracks by default, as the reference's; All Tracks records into the playing Session clip of any track. New Session takes do not take automation yet.
