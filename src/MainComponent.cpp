@@ -16601,13 +16601,23 @@ private:
         repaint();
     }
     void togglePlay() { if (state.playing) session.stopPressed(); else report (session.play()); refresh(); }
-    // Capture MIDI into the Session's empty slots in Session View, otherwise into the Arrangement.
+    // Capture MIDI into the Session in Session View, from the selected scene, otherwise into the Arrangement. As the
+    // reference's capture does, a scene other than the selected one becomes selected, and with Select on Launch the new
+    // clip's slot too.
     void captureFromUI()
     {
         juce::StringArray created;
-        const auto result = session.captureMidi (showSession ? Session::CaptureDestination::session : Session::CaptureDestination::arrangement, created);
+        const int highlighted = std::max (0, selectedSceneIndex());
+        int scene = -1;
+        const auto result = session.captureMidi (showSession ? Session::CaptureDestination::session : Session::CaptureDestination::arrangement, created, highlighted, &scene);
         report (result, "Captured MIDI into " + juce::String (created.size()) + (created.size() == 1 ? " clip." : " clips."));
         refresh();
+        if (! juce::isPositiveAndBelow (scene, (int) state.scenes.size())) return;
+        if (session.preferences().selectOnLaunch)
+            for (int t = 0; t < (int) state.tracks.size(); ++t)
+                if (const auto& slots = state.tracks[(size_t) t].slots; scene < (int) slots.size() && slots[(size_t) scene].hasClip && created.contains (slots[(size_t) scene].clip.id))
+                { selectLauncherSlot (t, scene); return; }
+        if (scene != highlighted) { selectedSceneId = state.scenes[(size_t) scene].id; launcher.repaint(); }
     }
     // After opening a project, names the plug-ins kept as placeholders because they could not load.
     juce::String missingPluginSummary() const

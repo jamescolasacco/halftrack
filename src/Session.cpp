@@ -5,6 +5,7 @@
 #include "LevelScale.h"
 #include "NativeEffects.h"
 #include "Racks.h"
+#include "CaptureTempo.h"
 #include "FollowActions.h"
 #include "NoteTools.h"
 #include "Grooves.h"
@@ -6821,7 +6822,10 @@ struct Session::Impl
     std::optional<te::TimePosition> takesStart;
     std::unique_ptr<PluginSourceScan> pluginScan; // The latest plug-in rescan, running or finished.
     std::vector<std::unique_ptr<MidiCaptureTap>> captureTaps;
-    static constexpr size_t maximumCapturedNotes = 4096;
+    static constexpr size_t maximumCapturedNotes = 16384; // As the reference's buffer, which drops its oldest 1024 when full.
+    // The tempo before and after the last capture that set it, as the reference's transport keeps them: while that
+    // capture's tempo stands, the next capture finds the tempo as if from the one before.
+    double captureTempoBefore = -1, captureTempoAfter = -1;
     void attachCapture()
     {
         std::vector<te::InputDeviceInstance*> wanted;
@@ -6857,7 +6861,9 @@ struct Session::Impl
             auto& notes = captured[target];
             if (m.isNoteOn())
             {
-                if (notes.size() >= maximumCapturedNotes) notes.erase (notes.begin());
+                // As the reference's buffer does, a note after the transport started or stopped starts the history anew.
+                if (! notes.empty() && notes.back().timed != beat.has_value()) notes.clear();
+                if (notes.size() >= maximumCapturedNotes) notes.erase (notes.begin(), notes.begin() + 1024);
                 notes.push_back ({ m.getChannel(), m.getNoteNumber(), m.getFloatVelocity(), received, -1, beat.value_or (0), 0, beat.has_value() });
             }
             else
@@ -10015,87 +10021,161 @@ Result Session::cycleTake (const String& trackId, double startSeconds, double en
 }
 bool Session::hasCapturedMidi() const
 { return std::any_of (impl->captured.begin(), impl->captured.end(), [] (const auto& entry) { return ! entry.second.empty(); }); }
-Result Session::captureMidi (CaptureDestination destination, juce::StringArray& createdClipIds)
+Result Session::captureMidi (CaptureDestination destination, juce::StringArray& createdClipIds, int highlightedScene, int* capturedScene)
 {
     createdClipIds.clear();
+    if (capturedScene != nullptr) *capturedScene = -1;
     if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
     if (impl->anyRecording()) return Result::fail ("Stop recording before capturing MIDI.");
     for (auto& tap : impl->captureTaps) tap->flush(); // Notes played just before are included.
     if (! hasCapturedMidi()) return Result::fail ("Play some notes into an armed or In-monitored MIDI track first.");
     const auto now = impl->engine.getDeviceManager().getCurrentStreamTime();
     const auto nowBeat = impl->arrivalBeat (now);
-    const auto meter = snapshot().timeSignature;
-    const double bar = std::max (1.0, meter.beatsPerBar());
-    const double bpm = std::clamp (snapshot().tempo, 20.0, 999.0);
     auto captured = std::move (impl->captured); impl->captured.clear();
+    // The tracks played last, as the reference's capture takes them: unfrozen tracks whose latest note started within
+    // 5 ms of the latest of all, in track order. Each keeps its notes after its last silence of over 20 seconds.
+    double latest = -1.0e300;
+    for (const auto& [id, notes] : captured) for (const auto& n : notes) latest = std::max (latest, n.onTime);
+    struct Take { te::AudioTrack* track; std::vector<capturetempo::Note> notes; bool timed; };
+    std::vector<Take> takes;
+    for (auto* t : te::getAudioTracks (*impl->edit))
+    {
+        const auto found = captured.find (t->itemID);
+        if (found == captured.end() || found->second.empty() || t->isFrozen (te::Track::anyFreeze)) continue;
+        double last = -1.0e300;
+        bool timed = true;
+        std::vector<capturetempo::Note> notes;
+        for (const auto& n : found->second)
+        {
+            last = std::max (last, n.onTime);
+            timed = timed && n.timed;
+            capturetempo::Note note { n.pitch, n.velocity * 127.0, n.onTime * 1000.0, ((n.offTime < 0 ? now : n.offTime) - n.onTime) * 1000.0 };
+            note.beat = n.onBeat;
+            note.durationBeats = (n.offTime < 0 ? nowBeat.value_or (n.onBeat) : n.offBeat) - n.onBeat;
+            notes.push_back (note);
+        }
+        if (! (last > latest - 0.005)) continue;
+        if (notes = capturetempo::trimHistory (std::move (notes)); ! notes.empty()) takes.push_back ({ t, std::move (notes), timed });
+    }
+    if (takes.empty()) return Result::fail ("No MIDI track could take the captured notes.");
+    const auto capturing = [&] (const te::AudioTrack* t) { return std::any_of (takes.begin(), takes.end(), [t] (const Take& take) { return take.track == t; }); };
+    // What the project tells the analysis, as the reference's capture context: with no other track holding clips and
+    // the tempo neither automated nor following a clock, the tempo is found freely at 120 BPM (or at the tempo before
+    // the last capture, while that capture's tempo stands) and around any other tempo; otherwise the project's tempo
+    // is weighed against what was played.
+    const double tempoNow = impl->edit->tempoSequence.getTempo (0)->getBpm();
+    std::optional<capturetempo::Context> context;
+    {
+        bool otherClips = false;
+        for (auto* t : te::getAudioTracks (*impl->edit)) if (! capturing (t) && ! allTrackClips (*t).isEmpty()) otherClips = true;
+        if (otherClips || impl->externalSync || impl->edit->tempoSequence.getNumTempos() > 1) context = capturetempo::Context { tempoNow, capturetempo::Mode::setHasClips };
+        else if (const double before = impl->captureTempoBefore >= 0 && impl->captureTempoAfter == tempoNow ? impl->captureTempoBefore : tempoNow; before != 120.0)
+            context = capturetempo::Context { before, capturetempo::Mode::hint };
+    }
+    // The Session scene, as the reference's: the highlighted one when every captured track has an empty slot there, else
+    // the one after the lowest clip of those tracks, added when there is none.
+    int scene = -1;
+    if (destination == CaptureDestination::session)
+    {
+        const int scenes = impl->edit->getSceneList().getNumScenes();
+        const int highlighted = juce::jlimit (0, std::max (0, scenes - 1), highlightedScene);
+        const auto emptyAt = [] (te::AudioTrack& t, int row) { const auto slots = t.getClipSlotList().getClipSlots(); return juce::isPositiveAndBelow (row, slots.size()) && slots[row]->getClip() == nullptr; };
+        if (scenes > 0 && std::all_of (takes.begin(), takes.end(), [&] (const Take& take) { return emptyAt (*take.track, highlighted); })) scene = highlighted;
+        else
+        {
+            for (const auto& take : takes)
+            {
+                const auto slots = take.track->getClipSlotList().getClipSlots();
+                for (int i = 0; i < slots.size(); ++i) if (slots[i]->getClip() != nullptr) scene = std::max (scene, i);
+            }
+            ++scene;
+        }
+    }
+    // A bar's beats: the scene's own meter when it has one, else the project's.
+    const auto current = snapshot();
+    double bar = current.timeSignature.beatsPerBar();
+    if (scene >= 0 && scene < (int) current.scenes.size())
+        if (const auto& own = current.scenes[(size_t) scene].timeSignature) bar = own->beatsPerBar();
+    bar = std::max (.25, bar);
+    const double insertBeat = beatsAt (current.insertMarker);
     beginEditGesture ("Capture MIDI");
     Result result = Result::ok();
-    for (auto& [trackId, notes] : captured)
+    if (scene >= impl->edit->getSceneList().getNumScenes()) result = addScene();
+    std::optional<double> detected;
+    std::vector<te::AudioTrack*> launched;
+    for (auto& take : takes)
     {
-        auto* track = dynamic_cast<te::AudioTrack*> (te::findTrackForID (*impl->edit, trackId));
-        if (track == nullptr || notes.empty()) continue;
-        // The material since the last pause of more than ten seconds.
-        size_t first = 0;
-        double latestEnd = notes[0].offTime < 0 ? now : notes[0].offTime;
-        for (size_t i = 1; i < notes.size(); ++i)
-        {
-            if (notes[i].onTime - latestEnd > 10) first = i;
-            latestEnd = std::max (latestEnd, notes[i].offTime < 0 ? now : notes[i].offTime);
-        }
-        std::vector<Impl::CapturedNote> phrase (notes.begin() + (std::ptrdiff_t) first, notes.end());
-        for (auto& n : phrase) if (n.offTime < 0) { n.offTime = now; n.offBeat = nowBeat.value_or (n.onBeat); }
-        // Notes played with the transport running keep their beats; otherwise they are timed at the tempo.
-        const bool timed = std::all_of (phrase.begin(), phrase.end(), [] (const auto& n) { return n.timed; });
+        if (result.failed()) break;
+        auto* track = take.track;
+        const auto id = track->itemID.toString();
         std::vector<MidiNoteInfo> written;
-        double startBeat = 0, length = bar;
-        if (timed)
+        double clipStart = insertBeat, length = bar, contentEnd = bar;
+        std::optional<ClipLoop> loop;
+        if (take.timed)
         {
-            double low = phrase[0].onBeat, high = phrase[0].offBeat;
-            for (const auto& n : phrase) { low = std::min (low, n.onBeat); high = std::max (high, n.offBeat); }
-            startBeat = std::floor (std::max (0.0, low) / bar) * bar;
-            length = std::max (bar, std::ceil ((high - startBeat) / bar - 1e-9) * bar);
-            for (const auto& n : phrase)
-                written.push_back ({ {}, n.pitch, std::max (0.0, n.onBeat - startBeat), std::max (1.0 / 960, n.offBeat - n.onBeat), n.velocity });
+            // Played while the transport ran: the notes keep their beats, in a clip from the bar the first fell in.
+            double low = take.notes[0].beat, high = low;
+            for (const auto& n : take.notes) { low = std::min (low, n.beat); high = std::max (high, n.beat + n.durationBeats); }
+            clipStart = std::floor (std::max (0.0, low) / bar) * bar;
+            length = contentEnd = std::max (bar, std::ceil ((high - clipStart) / bar - 1e-9) * bar);
+            for (const auto& n : take.notes)
+                written.push_back ({ {}, n.pitch, std::max (0.0, n.beat - clipStart), std::max (1.0 / 960, n.durationBeats), (float) (n.velocity / 127.0) });
         }
         else
         {
-            const auto origin = phrase[0].onTime;
-            double high = 0;
-            for (const auto& n : phrase)
+            // Played with it stopped: placed by the analysis, the clip looping their last phrase from its start marker.
+            const auto analysed = capturetempo::capture (take.notes, bar, context);
+            detected = analysed.tempo;
+            contentEnd = analysed.loopEnd;
+            for (const auto& n : analysed.notes)
             {
-                const auto on = (n.onTime - origin) / 60.0 * bpm, off = (n.offTime - origin) / 60.0 * bpm;
-                written.push_back ({ {}, n.pitch, on, std::max (1.0 / 960, off - on), n.velocity });
-                high = std::max (high, off);
+                written.push_back ({ {}, n.pitch, n.beat, std::max (1.0 / 960, n.durationBeats), (float) (n.velocity / 127.0) });
+                contentEnd = std::max (contentEnd, n.beat + written.back().lengthBeats);
             }
-            length = std::max (bar, std::ceil (high / bar - 1e-9) * bar);
-            startBeat = beatsAt (snapshot().insertMarker);
+            loop = ClipLoop { true, analysed.loopStart, analysed.loopEnd - analysed.loopStart };
+            length = loop->length;
         }
-        const auto id = track->itemID.toString();
         String clipId;
         if (destination == CaptureDestination::session)
         {
-            int scene = -1;
-            const auto slots = track->getClipSlotList().getClipSlots();
-            for (int i = 0; i < slots.size() && scene < 0; ++i) if (slots[i]->getClip() == nullptr) scene = i;
-            if (scene < 0) { result = Result::fail ("\"" + shownName (*track) + "\" has no empty slot to capture into."); continue; }
-            if (result = addMidiClipToSlot (id, scene, length); result.failed()) continue;
+            if (result = addMidiClipToSlot (id, scene, contentEnd); result.failed()) break;
             clipId = track->getClipSlotList().getClipSlots()[scene]->getClip()->itemID.toString();
+            clipStart = 0;
         }
         else
         {
-            const auto before = snapshot();
-            if (result = addMidiClip (id, startBeat, length); result.failed()) continue;
-            for (const auto& t : snapshot().tracks)
-                if (t.id == id) for (const auto& c : t.clips)
-                    if (std::none_of (before.tracks.begin(), before.tracks.end(), [&] (const auto& b) { return std::any_of (b.clips.begin(), b.clips.end(), [&] (const auto& old) { return old.id == c.id; }); }))
-                        clipId = c.id;
+            std::set<te::EditItemID> before;
+            for (auto* c : track->getClips()) before.insert (c->itemID);
+            if (result = addMidiClip (id, clipStart, contentEnd); result.failed()) break;
+            for (auto* c : track->getClips()) if (! before.contains (c->itemID)) clipId = c->itemID.toString();
         }
         juce::StringArray inserted;
-        if (clipId.isNotEmpty()) { if (result = addMidiNotes (clipId, written, inserted); result.wasOk()) createdClipIds.add (clipId); }
+        if (result = addMidiNotes (clipId, written, inserted); result.failed()) break;
+        if (loop && (result = setClipLoop (clipId, *loop, loop->start)).wasOk()) result = setClipBeats (clipId, clipStart, length, loop->start);
+        if (result.failed()) break;
+        createdClipIds.add (clipId);
+        launched.push_back (track);
+    }
+    // The tempo found becomes the project's, the last track's when several were captured. Weighed against other clips,
+    // its change is an undo step of its own, after the clips'.
+    if (detected && result.wasOk())
+    {
+        if (context && context->mode == capturetempo::Mode::setHasClips) { endEditGesture(); beginEditGesture ("Capture Change Song Tempo"); }
+        const double before = impl->captureTempoBefore >= 0 && impl->captureTempoAfter == tempoNow ? impl->captureTempoBefore : tempoNow;
+        setTempo (*detected);
+        impl->captureTempoBefore = before; impl->captureTempoAfter = *detected;
     }
     endEditGesture();
-    if (createdClipIds.isEmpty() && result.wasOk()) return Result::fail ("No MIDI track could take the captured notes.");
-    return result;
+    if (result.failed()) return result;
+    if (createdClipIds.isEmpty()) return Result::fail ("No MIDI track could take the captured notes.");
+    // In the Session the new clips play, as clicks on their launch buttons would start them.
+    if (destination == CaptureDestination::session)
+    {
+        const auto tracks = te::getAudioTracks (*impl->edit);
+        for (auto* t : launched) launchSlot (tracks.indexOf (t), scene);
+        if (capturedScene != nullptr) *capturedScene = scene;
+    }
+    return Result::ok();
 }
 Result Session::addMidiClip (const String& trackId, double start, double length)
 {

@@ -2991,3 +2991,7 @@ Engine and UI areas. While a control's automation is overridden, its context men
 ## Session automation recording — 2026-10-26
 
 Engine and UI areas. As the reference's manual describes, Automation Arm now records into Session clips while Session Record runs. A track's volume, pan and the controls of devices on it write the automation envelope of the clip the track overdubs, where the clip is in its loop. A drag records until release and the clip's earlier envelope resumes; a controller's move holds to the loop's end. Preferences' new Session Automation Recording (Record, Warp & Launch) is at Armed Tracks by default, as the reference's; All Tracks records into the playing Session clip of any track. New Session takes do not take automation yet.
+
+## Capture MIDI tempo detection — 2026-10-26
+
+Engine and UI areas. Capture MIDI now follows the reference's capture code (static reading). Notes played with the transport stopped are analysed as the reference does, ported from the research model and checked against its outputs (`src/CaptureTempo.cpp`). The tempo played becomes the project's, found freely from 78 to 164 BPM when no other track has clips at 120 BPM, and weighed against the project's tempo otherwise, in an undo step of its own. The clip loops the last phrase, one to eight bars, unquantised, from the insert marker. In Session View it goes into the reference's scene and plays. Capture takes the tracks played last, each history after its last silence of over 20 seconds, starting anew when the transport starts or stops.

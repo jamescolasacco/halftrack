@@ -974,12 +974,18 @@ public:
     // redone, recorded, saved or exported. The swap keeps no undo history.
     juce::Result auditionTakeLane (const juce::String& laneId);
     void stopAuditioning();
-    // Capture MIDI: the notes played into armed or In-monitored MIDI tracks are kept. Capturing turns
-    // each track's latest phrase (since its last pause of over ten seconds) into a clip, bar-aligned:
-    // in the Arrangement at the beats it was played while the transport ran, otherwise from the
-    // insert marker at the current tempo; or into the track's first empty Session slot. One undo step.
+    // Capture MIDI, after the reference's: the notes played into armed or In-monitored MIDI tracks are kept from the
+    // last time the transport started or stopped. Capturing takes the tracks played last (whose latest note started
+    // within 5 ms of the latest), each one's notes after its last silence of over 20 seconds. Played while the
+    // transport ran, they keep their beats in a bar-aligned clip. Played with it stopped, the reference's analysis
+    // places them (see CaptureTempo.h): the tempo they were played at becomes the project's (found freely when no other
+    // track has clips and the tempo is 120, or what it was before the last capture set it; weighed against the
+    // project's otherwise), and the clip loops their last phrase, one to eight bars, from the start marker. In the
+    // Arrangement the clip starts at the insert marker. In the Session it goes into the highlighted scene when every
+    // captured track has an empty slot there, else into the scene after those tracks' lowest clip (added if needed,
+    // and given in capturedScene), and plays. One undo step; a tempo weighed against other clips changes in a second.
     enum class CaptureDestination { arrangement, session };
-    juce::Result captureMidi (CaptureDestination, juce::StringArray& createdClipIds);
+    juce::Result captureMidi (CaptureDestination, juce::StringArray& createdClipIds, int highlightedScene = 0, int* capturedScene = nullptr);
     bool hasCapturedMidi() const;
     juce::Result addScene (juce::String name = {});
     juce::Result removeScene (int sceneIndex);

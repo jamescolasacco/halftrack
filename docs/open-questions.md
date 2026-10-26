@@ -529,11 +529,13 @@ Replaced Arrangement material is split at the recorded range when it can be. A c
 
 ### Capture MIDI boundaries
 
-These are simplest defaults pending a comparison with the reference:
+Capture follows the reference's code (static reading, [contract](research/capture-midi-contract.md)). Defaults where it was not read:
 
-- **The phrase** is everything since the last pause of over ten seconds, up to 4096 notes per track.
-- **Tempo.** With the transport stopped, the current tempo is kept rather than detected from the playing.
-- **Placement.** Clips start on the bar the first note fell in and last whole bars. In Session View they go into the first empty slot.
+- **A new history.** The reference marks its buffer at a transport start or stop and clears it at the next note. Halftrack starts a track's history anew when a note arrives with the transport's running state changed since its last kept note, so a stop and a start with no note between keep the history.
+- **Controlled tempo.** A tempo map with changes, or following an external MIDI clock, counts as the reference's automated or controlled tempo; Link was not checked.
+- **A new scene.** When every scene below the captured tracks' lowest clip is taken, the reference adds a scene, but where its clip then goes was not traced. Halftrack captures into the new scene.
+- **Running transport.** A capture of notes played while the transport ran keeps Halftrack's earlier layout, whole bars from the first note's bar.
+- **Text.** The undo steps are named Capture MIDI and Capture Change Song Tempo, after the reference's keys; its English text is in its encrypted language file.
 
 ### Warp marker grid
 
