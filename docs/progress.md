@@ -3035,3 +3035,7 @@ Engine and UI areas. After a static reading of the reference's controller code, 
 ## Map modes — 2026-10-26
 
 Engine and UI areas. After the same reading, controller mappings take the reference's ten map modes: Absolute, the four relative encodings that speed up through its tables, Absolute (14bit) pairs, and the four linear relative encodings. Learning detects them from repeated values and a controller 32 from the mapped one, and MIDI Map Mode's status bar chooses them. Relative turns move a 256th of the range a step, or one step of a stepped control, and switch buttons as the reference's table says. The arithmetic matches the research model exactly. MIDI mapping and UI suites pass.
+
+## Inputs' Remote switches — 2026-10-26
+
+Engine and UI areas. As the reference's MIDI Ports do, each input port has a Remote switch, between Sync and MPE and off by default (static reading of its preferences): only inputs with Remote on learn and drive MIDI mappings, and the others stay track input. Existing setups need their controller's Remote switched on. MIDI mapping, MIDI input, Capture MIDI, MPE and UI suites pass.

@@ -19533,12 +19533,13 @@ private:
                     for (int c = 0; c < columns.size(); ++c) addLabel (columns[c], true)->setBounds (170 + c * 60, y, 60, 20);
                     y += 22;
                 };
-                header ("Input Ports", { "Sync", "MPE" });
+                header ("Input Ports", { "Sync", "Remote", "MPE" });
                 for (const auto& name : inputs)
                 {
                     addLabel (name, false)->setBounds (0, y, 170, 22);
                     addSwitch ("Input sync " + name, [this, name] (bool on) { owner.report (owner.session.setMidiInputSync (name, on)); owner.refresh(); owner.resized(); })->setBounds (178, y, 40, 22);
-                    addSwitch ("Input MPE " + name, [this, name] (bool on) { owner.report (owner.session.setMidiInputMpe (name, on)); })->setBounds (238, y, 40, 22);
+                    addSwitch ("Input remote " + name, [this, name] (bool on) { owner.report (owner.session.setMidiInputRemote (name, on)); })->setBounds (238, y, 40, 22);
+                    addSwitch ("Input MPE " + name, [this, name] (bool on) { owner.report (owner.session.setMidiInputMpe (name, on)); })->setBounds (298, y, 40, 22);
                     y += 24;
                 }
                 if (inputs.isEmpty()) { addLabel ("No MIDI inputs", false)->setBounds (0, y, 300, 22); y += 24; }
@@ -19560,6 +19561,7 @@ private:
                 const auto name = button->getName();
                 bool on = false;
                 if (name.startsWith ("Input sync ")) on = owner.session.isMidiInputSync (name.fromFirstOccurrenceOf ("Input sync ", false, false));
+                else if (name.startsWith ("Input remote ")) on = owner.session.isMidiInputRemote (name.fromFirstOccurrenceOf ("Input remote ", false, false));
                 else if (name.startsWith ("Input MPE ")) on = owner.session.isMidiInputMpe (name.fromFirstOccurrenceOf ("Input MPE ", false, false));
                 else for (const auto& port : outputPorts)
                 {
@@ -30588,6 +30590,17 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
                 check (! extButton.isVisible(), "EXT is hidden while no input sends clock");
                 setup.sync(); flip ("Input sync " + inputs[0]);
                 check (session.isMidiInputSync (inputs[0]) && extButton.isVisible() && extButton.getX() < tapButton.getX(), "switching on an input's Sync in MIDI Ports shows EXT before TAP");
+                {
+                    auto* sync = findNamed (setup, "Input sync " + inputs[0]);
+                    auto* remote = findNamed (setup, "Input remote " + inputs[0]);
+                    auto* mpe = findNamed (setup, "Input MPE " + inputs[0]);
+                    check (sync != nullptr && remote != nullptr && mpe != nullptr && sync->getX() < remote->getX() && remote->getX() < mpe->getX() && ! session.isMidiInputRemote (inputs[0]),
+                           "an input's Remote switch sits between Sync and MPE, off, as the reference's");
+                    setup.sync(); flip ("Input remote " + inputs[0]);
+                    check (session.isMidiInputRemote (inputs[0]), "switching it on makes the input a remote control");
+                    setup.sync(); flip ("Input remote " + inputs[0]);
+                    check (! session.isMidiInputRemote (inputs[0]), "and off again");
+                }
                 extButton.setToggleState (true, juce::dontSendNotification); extButton.onClick(); refresh();
                 check (session.isExternalSync() && ! tempo.isEditable() && ! tapButton.isEnabled(), "EXT turns on External Sync and the tempo steps aside");
                 extButton.setToggleState (false, juce::dontSendNotification); extButton.onClick(); refresh();

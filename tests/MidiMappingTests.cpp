@@ -10,8 +10,8 @@
 // move track volume and pan, the master and device controls along their fader or knob taper between
 // each mapping's ends, in one undo step per burst. Mapped notes press and release clip slots with
 // their note-on and note-off, toggle switches and switch controls between their ends. Mappings
-// reopen with the project, damaged ones are rejected, and a virtual MIDI controller drives them
-// through the real input path, where mapped notes stop acting as track input.
+// reopen with the project, damaged ones are rejected, and a virtual MIDI controller, its Remote switch on,
+// drives them through the real input path, where mapped notes stop acting as track input.
 namespace halftrack
 {
 namespace te = tracktion::engine;
@@ -262,9 +262,14 @@ int runMidiMappingTests (const juce::File& artifacts)
             pumpSyntheticTestDevice (live, 8);
             juce::MessageManager::getInstance()->runDispatchLoopUntil (1200); // The remote attaches to new inputs within a second.
             const auto liveVolume = "mixer:" + live.snapshot().tracks[0].id + ":volume";
+            check (! live.isMidiInputRemote (name), "a new input's Remote switch is off, as the reference's is");
             ok (live.setMidiLearnTarget (liveVolume), "learn the live track's volume");
+            send (4);
+            check (live.snapshot().midiMappings.empty(), "with Remote off, the controller maps nothing");
+            ok (live.setMidiInputRemote (name, true), "switch its Remote on");
+            check (live.isMidiInputRemote (name) && live.setMidiInputRemote ("No such input", true).failed(), "it is on, and an unknown input has none");
             send (5);
-            check (live.snapshot().midiMappings.size() == 1 && live.snapshot().midiMappings[0].controller == 7, "the controller's first move maps it");
+            check (live.snapshot().midiMappings.size() == 1 && live.snapshot().midiMappings[0].controller == 7, "the controller's first move with Remote on maps it");
             ok (live.setMidiLearnTarget ({}), "end learning");
             send (127);
             check (near (live.snapshot().tracks[0].gainDb, 6), "its moves drive the fader");
