@@ -114,8 +114,8 @@ The reference's Record, Warp & Launch option of this name is off by default. Its
 
 ## Not implemented
 
-- Audio overdub, and recording into the next empty slot when the scene's slot is full.
-- Fixed-length recording.
+- Recording into the next empty slot when the scene's slot is full. The manual does not say where the reference records then.
+- Audio overdub and fixed-length recording are not desktop gaps (read 2026-10-26). The manual describes overdubbing for MIDI only, and Fixed Length recording only in its Push chapters (sections 35.3.7 and 36.3.7).
 - A count-in for Session Record's overdubs and for the clips a recording scene launch starts with its takes: these start with the count-in rather than after it.
 - Recording while the transport loops.
 - Recording quantization of slot takes.
