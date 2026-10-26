@@ -1045,6 +1045,11 @@ public:
     // launches nothing, so launching it or its scene leaves its track playing. One undo step.
     juce::Result setSlotStopButtons (const std::vector<SlotRef>&, bool stopButton);
     juce::Result copySlotClips (const std::vector<SlotRef>&, bool cut = false);
+    // Create Follow Action Chain, as the reference's (static reading; see the follow actions contract): each track's clips in
+    // the slots play round in scene order. Every one's Follow Action is reset to the defaults and switched on, its action A
+    // Next to a clip in the next row, else Jump to the next clip's row; the last jumps back to the first, and a track's lone
+    // clip gets Play Again. Empty slots are passed over. One undo step.
+    juce::Result createFollowActionChain (const std::vector<SlotRef>&);
     juce::Result launchSlot (int trackIndex, int sceneIndex);
     // A launch button press/release applying the slot clip's launch mode. velocity is a pressing
     // note's velocity over 127, which the clip's Velocity amount applies; any other press is 1.

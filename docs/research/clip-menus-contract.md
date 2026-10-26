@@ -83,8 +83,8 @@ A right-click on a slot that is not selected selects it alone, its track and sce
 | Crop Clip(s) (always shown) | a clip that can be cropped | the same (`cropSessionClips`), greyed on an empty slot: each clip keeps only what it plays, its loop or its span from its start, which then begins it. A MIDI clip loses the notes outside, cut at the edges; a warped audio clip gets a new sample in the project's Assets holding that audio. Audio clips with warp markers stay greyed |
 | Slice to New MIDI Track and the conversions | one audio clip | left out: Halftrack slices Arrangement clips only |
 | Add / Remove Stop Button | any slot selected; Remove while one has a stop button | the same (`setSlotStopButtons`, one undo step): an empty slot without one shows no button, and launching it or its scene leaves its track playing, as a group slot's launch does |
-| Create Follow Action Chain | a clip | left out: not implemented |
 | Insert MIDI Clip(s) | selected empty slots on MIDI tracks | the same, a four-beat clip in each |
+| Create Follow Action Chain | a clip | the same (`createFollowActionChain`, one undo step), also on Cmd+Shift+Return; see the [follow actions contract](follow-actions-contract.md#create-follow-action-chain-2026-10-26). It comes after Insert MIDI Clip(s), as the menu builder adds it (0x103a39240, read 2026-10-26); this table had it before |
 | Record on Launch | group slots only | left out: Halftrack's group slots have no menu yet |
 | Select on Launch, the clip colour grid | a clip | the colour grid, colouring the clips in one undo step. Halftrack has no Select on Launch preference yet |
 | Copy LOM Path | one slot | left out |

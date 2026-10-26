@@ -14783,6 +14783,31 @@ Result Session::setSceneFollowAction (const String& id, const FollowSettings& se
     writeFollow (scene->state, settings, &impl->edit->getUndoManager());
     impl->changed(); return Result::ok();
 }
+Result Session::createFollowActionChain (const std::vector<SlotRef>& slots)
+{
+    if (impl->exporting) return Result::fail ("Finish or cancel the current export first.");
+    std::map<int, std::set<int>> rows; // Each track's chained rows.
+    for (const auto& ref : slots)
+        if (auto* slot = impl->slot (ref.track, ref.scene); slot != nullptr && slot->getClip() != nullptr) rows[ref.track].insert (ref.scene);
+    if (rows.empty()) return Result::fail ("Select Session clips to chain.");
+    impl->transaction ("Create follow action chain");
+    const int last = impl->edit->getSceneList().getNumScenes() - 1;
+    for (const auto& [track, chained] : rows)
+    {
+        const std::vector<int> order (chained.begin(), chained.end());
+        for (size_t i = 0; i < order.size(); ++i)
+        {
+            FollowSettings settings;
+            settings.enabled = true;
+            settings.jumpA = settings.jumpB = std::clamp (settings.jumpA, -1, last); // As the jump fields keep to the scenes.
+            if (order.size() == 1) settings.actionA = FollowAction::again;
+            else if (i + 1 < order.size() && order[i + 1] == order[i] + 1) settings.actionA = FollowAction::next;
+            else { settings.actionA = FollowAction::jump; settings.jumpA = order[(i + 1) % order.size()]; }
+            writeFollow (impl->slot (track, order[i])->getClip()->state, settings, &impl->edit->getUndoManager());
+        }
+    }
+    impl->changed(); return Result::ok();
+}
 void Session::setFollowActionsEnabled (bool on)
 {
     if (impl->followActionsEnabled == on) return;

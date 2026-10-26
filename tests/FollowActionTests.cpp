@@ -317,6 +317,34 @@ void scenes (const juce::File& root)
     level (output, 0, 25000, 22000, 0, "Stop All ends the scene's Follow Action too");
     f.session.stop();
 }
+// Create Follow Action Chain, as the reference's (static reading): each track's selected clips in scene order, Next to a
+// clip in the next row, else Jump, the last back to the first, a lone clip Play Again.
+void followActionChain (const juce::File& root)
+{
+    Fixture f (root);
+    const auto chained = [&] (size_t index) { return f.settings (index); };
+    auto expected = [] (Action a, int jump = 1) { Settings s; s.enabled = true; s.actionA = a; if (a == Action::jump) s.jumpA = jump; return s; };
+    ok (f.session.createFollowActionChain ({ { 0, 0 }, { 0, 1 }, { 0, 3 }, { 0, 5 }, { 0, 4 } }), "chain the clips at rows 0, 1, 3 and 5, and an empty slot");
+    check (chained (0) == expected (Action::next) && chained (1) == expected (Action::jump, 3) && chained (3) == expected (Action::jump, 5)
+               && chained (4) == expected (Action::jump, 0) && chained (2) == Settings {},
+           "Next to the next row, Jump past a gap, and the last jumps back to the first; the rest stays as it was");
+    check (f.session.undoDescription().containsIgnoreCase ("chain"), "as one undo step");
+    f.session.undo();
+    check (chained (0) == Settings {} && chained (4) == Settings {}, "which undo takes back");
+    ok (f.session.importAudioToSlot (f.session.snapshot().tracks[0].slots[0].clip.file, 1, 4), "a clip on another track");
+    ok (f.session.createFollowActionChain ({ { 0, 1 }, { 0, 2 }, { 1, 4 } }), "chain clips on two tracks");
+    check (chained (1) == expected (Action::next) && chained (2) == expected (Action::jump, 1) && f.session.snapshot().tracks[1].slots[4].clip.follow == expected (Action::again),
+           "each track chains its own clips, and a track's lone clip plays again");
+    check (f.session.createFollowActionChain ({ { 0, 4 } }).failed(), "a selection without clips is refused");
+    f.session.undo(); f.session.undo();
+    ok (f.session.createFollowActionChain ({ { 0, 0 }, { 0, 1 }, { 0, 3 } }), "chain rows 0, 1 and 3");
+    ok (f.session.launchSlot (0, 0), "launch the first");
+    std::vector<int> played;
+    f.run (6000);
+    for (int step = 0; step < 4; ++step) { f.run (12000); played.push_back (f.playing()); }
+    check (played == std::vector<int> { 1, 3, 0, 1 }, "linked, each plays its loop once and the chain goes round");
+    f.session.stop();
+}
 void historyAndPersistence (const juce::File& root)
 {
     Fixture f (root);
@@ -432,7 +460,7 @@ int runFollowActionTests (const juce::File& artifacts)
     try
     {
         const auto root = artifacts.getChildFile ("follow-actions-" + juce::Uuid().toString()); ok (root.createDirectory(), "create isolated fixtures");
-        model(); transitions (root); chains (root); scenes (root); historyAndPersistence (root);
+        model(); transitions (root); chains (root); followActionChain (root); scenes (root); historyAndPersistence (root);
         for (double tempo : { 60.0, 120.0, 240.0 }) midiTransition (tempo);
         std::cout << "Follow actions passed." << std::endl; return 0;
     }

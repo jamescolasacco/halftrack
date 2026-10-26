@@ -2975,3 +2975,7 @@ Engine and UI areas. Follow Actions now follow the reference's model, from a sta
 ## Session multi-clip editing — 2026-10-26
 
 UI area. As the reference's manual describes (section 10.8), selecting several Session slots with looped MIDI clips shows up to eight in the note editor, ordered by track then scene. They loop together over the passes their loops take to come round together (the least common multiple of their loop lengths); the other clips' notes show at each pass, and the edited clip's later passes show dimmed. Clicking another clip's note edits that clip, keeping the selection; Focus works as in the Arrangement. Loop bars are still missing.
+
+## Create Follow Action Chain — 2026-10-26
+
+Engine and UI areas. As the reference's command does (static reading), Create Follow Action Chain in the Session slot menu and on Cmd+Shift+Return chains each track's selected clips in scene order: each is reset to the default Follow Action and switched on, Next to a clip in the next row or Jump to the next clip's row, the last jumping back to the first, and a lone clip on its track playing again. One undo step.

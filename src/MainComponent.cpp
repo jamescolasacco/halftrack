@@ -6755,6 +6755,12 @@ private:
             // scene when its column was clicked; Page Up and Down move eight scenes; Home and End go to the
             // first and last track, and End from the last track to the scene itself (its manual, section
             // 42.15); Cmd with Left and Right moves the selected track, with Up and Down the selected scene.
+            if (code == juce::KeyPress::returnKey && mods.isCommandDown() && mods.isShiftDown())
+            {
+                // Create Follow Action Chain, as the reference's key.
+                if (! owner.menuSlotClips().empty()) owner.report (owner.session.createFollowActionChain (owner.menuSlots()));
+                owner.refresh(); return true;
+            }
             if (code == juce::KeyPress::returnKey && mods.isCommandDown())
             {
                 if (const auto* track = owner.currentTrack(); track != nullptr && ! track->isReturn) owner.report (owner.session.stopLauncherTrack (owner.selectedTrack));
@@ -15877,7 +15883,8 @@ private:
         return slots;
     }
     enum SlotItem { slotCut = 500, slotCopy, slotPaste, slotDuplicate, slotDelete, slotClearEnvelopes, slotRename, slotGroove, slotActivate, slotExportMidi,
-                    slotReveal, slotSimilar, slotFreeze, slotBounceInPlace, slotBounceNew, slotInsertMidi, slotColour, slotInfo, slotStopButton, slotCrop, slotShowInBrowser };
+                    slotReveal, slotSimilar, slotFreeze, slotBounceInPlace, slotBounceNew, slotInsertMidi, slotColour, slotInfo, slotStopButton, slotCrop, slotShowInBrowser,
+                    slotFollowChain };
     // A Session slot's menu, in the reference's order (LSlotManager 0x103a38ce4): commands that cannot act
     // are left out, while Freeze and the bounces stay, greyed when they cannot act.
     juce::PopupMenu slotContextMenu (std::shared_ptr<int> colour) const
@@ -15929,6 +15936,7 @@ private:
             item (slotStopButton, std::any_of (slots.begin(), slots.end(), [this] (const Session::SlotRef& r) { return state.tracks[(size_t) r.track].slots[(size_t) r.scene].stopButton; })
                                       ? "Remove Stop Button" : "Add Stop Button");
         if (const auto empty = emptyMidiSlots(); ! empty.empty()) item (slotInsertMidi, empty.size() > 1 ? "Insert MIDI Clips" : "Insert MIDI Clip");
+        if (hasClip) item (slotFollowChain, "Create Follow Action Chain"); // As the reference adds it, after those two.
         if (hasClip)
         {
             std::vector<juce::Colour> used;
@@ -15951,6 +15959,7 @@ private:
             case slotPaste: slotCommand (86); return;
             case slotDuplicate: slotCommand (87); return;
             case slotDelete: clearSelectedSlot(); return;
+            case slotFollowChain: report (session.createFollowActionChain (menuSlots())); refresh(); return;
             case slotClearEnvelopes:
                 session.beginEditGesture ("Clear all envelopes");
                 for (const auto* c : clips) for (auto envelope : c->envelopes) { envelope.points.clear(); report (session.setClipEnvelope (c->id, envelope)); }
@@ -22809,7 +22818,7 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         selectedSlots.clear(); selectLauncherSlot (t, 0);
         const juce::String paste = session.hasSlotClipboard() ? "Paste|" : "";
         const auto filled = listed (slotContextMenu (colour));
-        check (filled == "Cut|Copy|" + paste + "Duplicate|Delete|-|Rename|Edit Info Text|Extract Groove|Deactivate Clip|Export MIDI Clip...|-|Freeze Track (off)|Bounce Track in Place|Bounce to New Track|-|Crop Clip|-|Remove Stop Button|-|[Clip Colours]",
+        check (filled == "Cut|Copy|" + paste + "Duplicate|Delete|-|Rename|Edit Info Text|Extract Groove|Deactivate Clip|Export MIDI Clip...|-|Freeze Track (off)|Bounce Track in Place|Bounce to New Track|-|Crop Clip|-|Remove Stop Button|Create Follow Action Chain|-|[Clip Colours]",
                "a filled slot's menu lists the reference's commands in its order: " + filled);
         chooseSlotItem (slotColour, 7);
         check (state.tracks[(size_t) t].slots[0].clip.colour == paletteColour (7), "a swatch colours the slot's clip");
@@ -29785,6 +29794,16 @@ void MainComponent::Impl::runInteractionChecks (const juce::File& audioFixture)
         launcher.keyPressed (juce::KeyPress (juce::KeyPress::returnKey, juce::ModifierKeys (juce::ModifierKeys::shiftModifier), 0)); refresh();
         check (selectedSlot()->clip.follow.enabled == was, "Shift+Return again switches it back");
         session.undo(); session.undo(); refresh();
+        // Create Follow Action Chain: in the slot's menu, after the stop button, and on Cmd+Shift+Return.
+        auto colour = std::make_shared<int> (-1);
+        const auto menu = slotContextMenu (colour);
+        bool listed = false;
+        for (juce::PopupMenu::MenuItemIterator i (menu); i.next();) listed = listed || i.getItem().text == "Create Follow Action Chain";
+        check (listed, "the slot's menu offers Create Follow Action Chain");
+        launcher.keyPressed (juce::KeyPress (juce::KeyPress::returnKey, juce::ModifierKeys (juce::ModifierKeys::commandModifier | juce::ModifierKeys::shiftModifier), 0)); refresh();
+        check (selectedSlot()->clip.follow.enabled && selectedSlot()->clip.follow.actionA == Session::FollowAction::again && ! selectedSlot()->playing,
+               "Cmd+Shift+Return chains the selected clip, alone on its track so playing again, and stops nothing");
+        session.undo(); refresh();
     }
     check (session.newProject().wasOk(), "prepare pending device menu"); refresh(); selectTrack (0);
     const auto pendingDeviceTrackId = state.tracks[0].id;

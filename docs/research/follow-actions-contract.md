@@ -73,6 +73,14 @@ Sources:
   - Invalid values reject the load and keep the open project.
 - **Seeds.** The reference's seeds were not determined. Each track's draws start from a value derived from the track's identity, and the scenes' from a random value. `Session::seedFollowActions` sets them all for tests.
 
+## Create Follow Action Chain (2026-10-26)
+
+As the reference's command does (static reading of its code on 2026-10-26; raw notes in the ignored `artifacts/` folder). It is in the Session slot menu while a selected slot holds a clip, after Insert MIDI Clip(s), and on Cmd+Shift+Return.
+- **Which clips.** The clips in the selected slots, by track; empty slots are passed over. Each track's clips form a loop of their own, in scene order whatever the selection order.
+- **What it sets.** Every chained clip's Follow Action is reset to the defaults and switched on. Action A is Next when the next clip is in the next row, else Jump to the next clip's row. The last clip always jumps back to the first. A track with one chained clip gets Play Again.
+- **Jump targets.** The default jump targets keep within the scenes.
+- **Undo.** One undo step for the whole command.
+
 ## Evidence
 
 The follow-actions suite checks:
@@ -93,13 +101,13 @@ With rendered audio, the same suite checks:
 - the global switch, off from the start and switched off after a plan was made;
 - a scene's Follow Action launching the next scene over a clip's own plan, linked to three times its longest clip, and ended by Stop All;
 - undo, invalid settings, scene settings, a duplicated scene's clips, saving and reopening, chances loading as percentages, invalid values rejecting loads, older projects converting, Arrangement clips refused, and export protection;
-- a held MIDI note releasing at a follow launch at 60, 120 and 240 BPM.
+- a held MIDI note releasing at a follow launch at 60, 120 and 240 BPM;
+- Create Follow Action Chain: rows 0, 1, 3 and 5 (with an empty slot passed over) giving Next, Jump 3, Jump 5 and Jump 0 in one undo step; two tracks chained apart, a lone clip playing again; a selection without clips refused; and a chained loop played round in rendered audio.
 
-The UI suite edits a Session clip's Follow Action through the Launch box: the switch, Linked, the time, action B, both chances (rounding and the 100 % limit), Jump's scene and undo. It also checks Shift+Return and the global switch, and drags the time's marker in the note editor a beat on.
+The UI suite edits a Session clip's Follow Action through the Launch box: the switch, Linked, the time, action B, both chances (rounding and the 100 % limit), Jump's scene and undo. It also checks Shift+Return and the global switch, finds Create Follow Action Chain in the slot's menu, chains a clip with Cmd+Shift+Return, and drags the time's marker in the note editor a beat on.
 
 ## Not yet covered
 
-- Create Follow Action Chain (Cmd+Shift+Return, and the clip's context menu) is missing. What it sets was not read.
 - How the reference displays the multiplier and the time was not read. Neither was the base of Jump's display; the reference's internal default, row 1, shows as scene 2.
 - Planning differences from the reference:
   - A scene's Follow Action launch replaces the tracks' clip plans when it is queued, a quarter second early, rather than when it plays.
